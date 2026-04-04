@@ -5,6 +5,7 @@
 // ============================================================
 
 #include "gps.h"
+#include "config.h"
 #include "pins.h"
 #include "types.h"
 
@@ -16,15 +17,23 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include <sys/time.h>
+#include <time.h>
 
 // ---- Constants ------------------------------------------------
 
 static constexpr int    NMEA_MAX_LEN       = 120;   // max NMEA sentence length
-static constexpr int    GPS_FIX_RATE_HZ    = 25;
 static constexpr int    PPS_STALE_US       = 1100000; // 1100 ms — PPS considered stale
 static constexpr int    UART_READ_TIMEOUT  = 10;      // ms, per-character timeout
 static constexpr int    WDT_TIMEOUT_SEC    = 5;
-static constexpr int    FIX_INTERVAL_US    = 40000;   // 1e6 / 25 Hz
+
+static constexpr uint32_t GPS_BAUD_FACTORY = 9600;
+static constexpr uint32_t GPS_BAUD_TARGET  = 115200;
+static constexpr int      UBX_DETECT_TIMEOUT_MS = 2000;
+
+// Derived at runtime from app_config.gps_rate_hz.
+static int     GPS_FIX_RATE_HZ = 25;
+static int64_t FIX_INTERVAL_US = 40000;  // 1e6 / GPS_FIX_RATE_HZ
 
 // ---- Shared state ---------------------------------------------
 
@@ -61,6 +70,7 @@ struct RmcData {
 
 static GgaData  s_gga          = {};
 static RmcData  s_rmc          = {};
+static bool     s_rtc_synced   = false;  // true after first GPS->RTC sync
 static int      s_fix_idx      = 0;   // 0..24 within the current PPS second
 static int64_t  s_last_pps_seen = 0;  // tracks when we last noticed a PPS change
 
@@ -185,12 +195,46 @@ static GgaData parse_gga(char* body) {
 //   0=time, 1=status, 2=lat, 3=N/S, 4=lon, 5=E/W, 6=speed_kn,
 //   7=heading, 8=date
 
+/// Sync ESP32 RTC from RMC time (field 0) and date (field 8).
+/// Called once per boot on the first valid RMC with a date field.
+static void sync_rtc_from_rmc(const char* time_str, const char* date_str) {
+    if (s_rtc_synced) {
+        return;
+    }
+    // time_str: "hhmmss.sss", date_str: "ddmmyy"
+    if (strlen(time_str) < 6 || strlen(date_str) < 6) {
+        return;
+    }
+
+    int hour   = (time_str[0] - '0') * 10 + (time_str[1] - '0');
+    int minute = (time_str[2] - '0') * 10 + (time_str[3] - '0');
+    int second = (time_str[4] - '0') * 10 + (time_str[5] - '0');
+    int day    = (date_str[0] - '0') * 10 + (date_str[1] - '0');
+    int month  = (date_str[2] - '0') * 10 + (date_str[3] - '0');
+    int year   = (date_str[4] - '0') * 10 + (date_str[5] - '0') + 2000;
+
+    struct tm t = {};
+    t.tm_year = year - 1900;
+    t.tm_mon  = month - 1;
+    t.tm_mday = day;
+    t.tm_hour = hour;
+    t.tm_min  = minute;
+    t.tm_sec  = second;
+
+    time_t epoch = mktime(&t);
+    struct timeval tv = { .tv_sec = epoch, .tv_usec = 0 };
+    settimeofday(&tv, NULL);
+
+    s_rtc_synced = true;
+    Serial.println("[gps] RTC synced from GPS");
+}
+
 static RmcData parse_rmc(char* body) {
     RmcData result = {};
     char* fields[MAX_FIELDS] = {};
     int count = nmea_split_fields(body, fields, MAX_FIELDS);
 
-    if (count < 8) {
+    if (count < 9) {
         return result;
     }
 
@@ -202,6 +246,10 @@ static RmcData parse_rmc(char* body) {
     result.speed_kmh   = static_cast<float>(speed_knots * 1.852);
     result.heading_deg = (fields[7][0] != '\0') ? static_cast<float>(atof(fields[7])) : 0.0f;
     result.valid       = true;
+
+    // Sync ESP32 RTC once from GPS date/time
+    sync_rtc_from_rmc(fields[0], fields[8]);
+
     return result;
 }
 
@@ -377,11 +425,183 @@ static void feed_char(char c) {
     }
 }
 
-// ---- UART setup -----------------------------------------------
+// ---- UBX protocol helpers -------------------------------------
+
+// Fletcher-8 checksum over class + id + length + payload bytes.
+static void ubx_checksum(const uint8_t* data, int len,
+                         uint8_t* ck_a, uint8_t* ck_b) {
+    uint8_t a = 0;
+    uint8_t b = 0;
+    for (int i = 0; i < len; i++) {
+        a += data[i];
+        b += a;
+    }
+    *ck_a = a;
+    *ck_b = b;
+}
+
+// Build and send a complete UBX frame on Serial2.
+static void ubx_send(uint8_t cls, uint8_t id,
+                     const uint8_t* payload, uint16_t len) {
+    uint8_t header[4] = {
+        cls, id,
+        static_cast<uint8_t>(len & 0xFF),
+        static_cast<uint8_t>((len >> 8) & 0xFF)
+    };
+
+    uint8_t ck_a = 0;
+    uint8_t ck_b = 0;
+    ubx_checksum(header, 4, &ck_a, &ck_b);
+
+    for (uint16_t i = 0; i < len; i++) {
+        ck_a += payload[i];
+        ck_b += ck_a;
+    }
+
+    Serial2.write(0xB5);
+    Serial2.write(0x62);
+    Serial2.write(header, 4);
+    if (len > 0 && payload != nullptr) {
+        Serial2.write(payload, len);
+    }
+    Serial2.write(ck_a);
+    Serial2.write(ck_b);
+    Serial2.flush();
+}
+
+// ---- UBX configuration commands -------------------------------
+
+// UBX-CFG-PRT: set UART1 baud rate.
+static void ubx_cfg_prt(uint32_t baud) {
+    uint8_t payload[20] = {};
+    payload[0] = 0x01;  // portID = UART1
+
+    // mode: 8N1 = 0x000008D0
+    payload[4] = 0xD0;
+    payload[5] = 0x08;
+
+    // baudRate (little-endian)
+    payload[8]  = static_cast<uint8_t>(baud);
+    payload[9]  = static_cast<uint8_t>(baud >> 8);
+    payload[10] = static_cast<uint8_t>(baud >> 16);
+    payload[11] = static_cast<uint8_t>(baud >> 24);
+
+    // inProtoMask = 0x0007 (UBX + NMEA + RTCM)
+    payload[12] = 0x07;
+    payload[13] = 0x00;
+
+    // outProtoMask = 0x0003 (UBX + NMEA)
+    payload[14] = 0x03;
+    payload[15] = 0x00;
+
+    ubx_send(0x06, 0x00, payload, sizeof(payload));
+}
+
+// UBX-CFG-RATE: set measurement rate from Hz.
+static void ubx_cfg_rate(uint8_t rate_hz) {
+    uint16_t meas_ms = 1000 / rate_hz;
+    uint8_t payload[6] = {};
+
+    payload[0] = static_cast<uint8_t>(meas_ms & 0xFF);
+    payload[1] = static_cast<uint8_t>((meas_ms >> 8) & 0xFF);
+    payload[2] = 0x01;  // navRate = 1
+    payload[3] = 0x00;
+    payload[4] = 0x01;  // timeRef = GPS time
+    payload[5] = 0x00;
+
+    ubx_send(0x06, 0x08, payload, sizeof(payload));
+}
+
+// UBX-CFG-MSG: set output rate for one NMEA sentence.
+static void ubx_cfg_msg(uint8_t nmea_cls, uint8_t nmea_id,
+                        uint8_t rate) {
+    uint8_t payload[3] = { nmea_cls, nmea_id, rate };
+    ubx_send(0x06, 0x01, payload, sizeof(payload));
+}
+
+// Enable GGA + RMC; disable GSV, GSA, GLL, VTG, ZDA.
+static void ubx_configure_nmea_sentences() {
+    static constexpr uint8_t CLS = 0xF0;
+
+    ubx_cfg_msg(CLS, 0x00, 1);  // GGA on
+    ubx_cfg_msg(CLS, 0x04, 1);  // RMC on
+
+    ubx_cfg_msg(CLS, 0x03, 0);  // GSV off
+    ubx_cfg_msg(CLS, 0x02, 0);  // GSA off
+    ubx_cfg_msg(CLS, 0x01, 0);  // GLL off
+    ubx_cfg_msg(CLS, 0x05, 0);  // VTG off
+    ubx_cfg_msg(CLS, 0x08, 0);  // ZDA off
+}
+
+// UBX-CFG-CFG: save all to BBR + Flash + EEPROM.
+static void ubx_cfg_save() {
+    uint8_t payload[13] = {};
+    // saveMask = 0x0000FFFF
+    payload[4] = 0xFF;
+    payload[5] = 0xFF;
+    // deviceMask = 0x07
+    payload[12] = 0x07;
+
+    ubx_send(0x06, 0x09, payload, sizeof(payload));
+}
+
+// Return true if NMEA data ('$') arrives within timeout_ms.
+static bool uart_detect_nmea(int timeout_ms) {
+    unsigned long start = millis();
+    while ((millis() - start) < static_cast<unsigned long>(timeout_ms)) {
+        if (Serial2.available() > 0) {
+            if (Serial2.read() == '$') {
+                return true;
+            }
+        }
+        delay(1);
+    }
+    return false;
+}
+
+// ---- UART + UBX configuration ---------------------------------
 
 static void uart_init() {
     Serial2.setRxBufferSize(512);
-    Serial2.begin(115200, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
+
+    // Derive rate from runtime config.
+    uint8_t rate_hz = app_config.gps_rate_hz;
+    if (rate_hz == 0 || rate_hz > 25) {
+        rate_hz = 25;
+    }
+    GPS_FIX_RATE_HZ = rate_hz;
+    FIX_INTERVAL_US = 1000000 / GPS_FIX_RATE_HZ;
+
+    // Step 1: open at factory 9600 and request baud change.
+    Serial2.begin(GPS_BAUD_FACTORY, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
+    delay(50);
+    ubx_cfg_prt(GPS_BAUD_TARGET);
+    delay(200);
+
+    // Step 2: reconnect at target baud.
+    Serial2.end();
+    delay(100);
+    Serial2.begin(GPS_BAUD_TARGET, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
+    delay(100);
+
+    // Step 3: verify data arrives. If not, module was already at
+    // target baud (config saved from previous boot).
+    if (!uart_detect_nmea(UBX_DETECT_TIMEOUT_MS)) {
+        Serial2.end();
+        delay(50);
+        Serial2.begin(GPS_BAUD_TARGET, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
+        delay(100);
+    }
+
+    // Step 4: configure rate and NMEA sentences.
+    ubx_cfg_rate(rate_hz);
+    delay(50);
+    ubx_configure_nmea_sentences();
+    delay(50);
+
+    // Step 5: persist to non-volatile memory.
+    ubx_cfg_save();
+    delay(100);
 }
 
 // ---- PPS interrupt setup --------------------------------------

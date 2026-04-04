@@ -10,6 +10,7 @@
 
 #include "lap_timer.h"
 #include "delta.h"
+#include "track.h"
 
 #include <Arduino.h>
 #include <esp_task_wdt.h>
@@ -571,12 +572,31 @@ void lap_timer_task(void* param) {
     GpsPoint curr;
     GpsPoint prev;
     bool has_prev = false;
+    bool auto_detected = false;
 
     for (;;) {
         // Block until GPS data arrives (max wait = 200ms for WDT safety)
         if (xQueueReceive(s_gps_queue, &curr, pdMS_TO_TICKS(200)) != pdTRUE) {
             esp_task_wdt_reset();
             continue;
+        }
+
+        // One-time track auto-detect after first 3D fix
+        if (!auto_detected && curr.fix_3d) {
+            const TrackDefinition* detected =
+                track_auto_detect(curr.lat_deg, curr.lon_deg);
+            if (detected != nullptr) {
+                s_track = detected;
+                Serial.printf("[lap_timer] Auto-detected: %s\n", detected->name);
+                if (xSemaphoreTake(s_session_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                    extern SessionState session_state;
+                    strncpy(session_state.track_name, detected->name,
+                            sizeof(session_state.track_name) - 1);
+                    session_state.track_name[sizeof(session_state.track_name) - 1] = '\0';
+                    xSemaphoreGive(s_session_mutex);
+                }
+            }
+            auto_detected = true;
         }
 
         // Push into history for spline interpolation

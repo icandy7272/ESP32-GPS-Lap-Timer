@@ -576,12 +576,7 @@ void display_task(void* param) {
         first_frame = false;
 
         // 3. Update screen lock based on GPS speed
-        // Speed comes from the session state indirectly.
-        // In v1.0, we infer from delta/gps state.
-        // For proper speed, session.cpp should expose current_speed_kmh.
-        // Placeholder: use 0 when not moving (unlock immediately).
-        // TODO: Add speed_kmh to SessionState in types.h
-        float speed_kmh = 0.0f;
+        float speed_kmh = s_cached_state.speed_kmh;
         update_screen_lock(speed_kmh, millis());
 
         // 4. Render the active screen

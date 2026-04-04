@@ -20,6 +20,8 @@ static SessionPhase   s_phase = SESSION_READY;
 static QueueHandle_t  s_lap_event_q   = nullptr;
 static QueueHandle_t  s_btn_session_q = nullptr;
 static int64_t        s_lap_start_us  = 0;   // crossing timestamp of current lap start
+static int64_t        s_sector_start_us[MAX_SECTORS] = {};
+static int            s_current_sector = 0;
 
 // --- Constants ---
 
@@ -149,6 +151,8 @@ static void handle_lap_finish(const LapEvent* ev)
     // First crossing sets the start reference
     if (s_lap_start_us == 0) {
         s_lap_start_us = ev->crossing_us;
+        s_sector_start_us[0] = ev->crossing_us;
+        s_current_sector = 0;
         xSemaphoreTake(session_mutex, portMAX_DELAY);
         session_state.current_lap = 1;
         xSemaphoreGive(session_mutex);
@@ -181,6 +185,11 @@ static void handle_lap_finish(const LapEvent* ev)
         lap->sector_times_ms[i] = -1;
     }
 
+    // Compute final sector time (from last sector start to finish line)
+    lap->sector_times_ms[s_current_sector] =
+        (int32_t)((ev->crossing_us - s_sector_start_us[s_current_sector]) / 1000);
+    lap->sector_count = s_current_sector + 1;
+
     session_state.lap_count++;
     session_state.current_lap++;
 
@@ -198,16 +207,38 @@ static void handle_lap_finish(const LapEvent* ev)
     // Persist lap to SD (outside mutex)
     storage_write_lap_timing(lap);
 
-    // Advance lap start to this crossing
+    // Advance lap start to this crossing; reset sector tracking
     s_lap_start_us = ev->crossing_us;
+    s_sector_start_us[0] = ev->crossing_us;
+    s_current_sector = 0;
 }
 
 static void handle_lap_sector(const LapEvent* ev)
 {
-    (void)ev;
-    // Sector timing will be implemented with per-sector start
-    // timestamps. For now, acknowledge the event.
-    // TODO: track sector_start_us[] and compute sector_times_ms.
+    int completed = ev->sector_index - 1;
+    if (completed < 0 || completed >= MAX_SECTORS) {
+        return;  // invalid sector index
+    }
+
+    int64_t crossing_us = ev->crossing_us;
+
+    // Compute time for the sector that just ended
+    int32_t sector_ms =
+        (int32_t)((crossing_us - s_sector_start_us[completed]) / 1000);
+
+    // Start timing the next sector
+    if (ev->sector_index < MAX_SECTORS) {
+        s_sector_start_us[ev->sector_index] = crossing_us;
+    }
+    s_current_sector = ev->sector_index;
+
+    // Write sector time into the current in-progress lap record
+    xSemaphoreTake(session_mutex, portMAX_DELAY);
+    int idx = session_state.lap_count;  // current lap being built
+    if (idx >= 0 && idx < MAX_LAPS_PER_SESSION) {
+        session_state.laps[idx].sector_times_ms[completed] = sector_ms;
+    }
+    xSemaphoreGive(session_mutex);
 }
 
 static void handle_button_press(const ButtonEvent* ev)
