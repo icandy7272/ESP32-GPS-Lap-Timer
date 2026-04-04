@@ -21,6 +21,7 @@
 #include "button.h"
 #include "wifi_server.h"
 #include "config.h"
+#include "track.h"
 
 // --- Shared FreeRTOS primitives (created once here) ----------
 
@@ -94,10 +95,16 @@ void setup() {
     // --- Session state machine ---
     session_init(lap_event_queue, btn_session_queue);
 
+    // --- Track loading ---
+    track_init();
+    if (track_count() > 0) {
+        track_load_first(&active_track);
+        Serial.printf("[BOOT] Track loaded: %s\n", active_track.name);
+    } else {
+        Serial.println("[BOOT] No tracks on SD — crossing detection disabled");
+    }
+
     // --- Lap timer (Core 0 task created inside) ---
-    // Load first track from SD if available
-    // TODO: implement track_load_first(&active_track) from track.cpp
-    // For now, active_track is zeroed (no detection lines = no crossing detection)
     lap_timer_init(gps_queue, vbo_write_queue, lap_event_queue,
                    session_mutex, &active_track);
     xTaskCreatePinnedToCore(lap_timer_task, "lap_timer", 8192,

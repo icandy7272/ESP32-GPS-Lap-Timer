@@ -34,7 +34,7 @@ static const char* TMP_FILENAME  = "_recording.vbo.tmp";
 
 // ---- Module state -------------------------------------------
 
-static SdFat    sd;
+SdFat    sd;  // non-static: shared with track.cpp via extern
 static FsFile   vbo_file;
 static bool     session_active    = false;
 static uint32_t bytes_written     = 0;

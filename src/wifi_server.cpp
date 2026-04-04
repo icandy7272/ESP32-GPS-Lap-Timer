@@ -9,6 +9,7 @@
 
 #include "wifi_server.h"
 #include "config.h"
+#include "track.h"
 #include "types.h"
 #include "pins.h"
 
@@ -320,6 +321,9 @@ static void handle_api_tracks_post() {
 
     bool ok = write_track_file(filename, body);
     if (ok) {
+        // Refresh in-memory track list so new track is available immediately
+        track_init();
+
         char resp[96];
         snprintf(resp, sizeof(resp),
                  "{\"ok\":true,\"id\":\"track_%03d\"}", next_id);

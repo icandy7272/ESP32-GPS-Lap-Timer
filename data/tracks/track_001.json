@@ -1,0 +1,30 @@
+{
+  "id": "track_001",
+  "name": "Sample Kart Track",
+  "center_lat": 31.2304,
+  "center_lon": 121.4737,
+  "approx_length_m": 800,
+  "start_finish": {
+    "lat1": 31.23000,
+    "lon1": 121.47300,
+    "lat2": 31.23010,
+    "lon2": 121.47310,
+    "heading": 90.0
+  },
+  "sectors": [
+    {
+      "lat1": 31.23100,
+      "lon1": 121.47400,
+      "lat2": 31.23110,
+      "lon2": 121.47410,
+      "heading": 180.0
+    },
+    {
+      "lat1": 31.23050,
+      "lon1": 121.47500,
+      "lat2": 31.23060,
+      "lon2": 121.47510,
+      "heading": 270.0
+    }
+  ]
+}
