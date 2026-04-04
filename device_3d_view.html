@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kart GPS Device - 3D Layout</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    overflow-x: hidden;
+    min-height: 100vh;
+  }
+
+  .header {
+    text-align: center;
+    padding: 24px 16px 8px;
+  }
+  .header h1 {
+    font-size: 22px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 6px;
+  }
+  .header p {
+    font-size: 13px;
+    color: #888;
+  }
+
+  .main-container {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 20px;
+    padding: 16px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  /* 3D Scene */
+  .scene-wrapper {
+    flex: 1 1 500px;
+    max-width: 600px;
+    min-height: 520px;
+    background: #16213e;
+    border-radius: 16px;
+    border: 1px solid #2a2a4a;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .scene-label {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 8px;
+    text-align: center;
+  }
+
+  .scene {
+    flex: 1;
+    perspective: 900px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    user-select: none;
+    position: relative;
+  }
+  .scene:active { cursor: grabbing; }
+
+  .device {
+    transform-style: preserve-3d;
+    transition: transform 0.05s linear;
+    position: relative;
+  }
+
+  .layer {
+    position: absolute;
+    width: 200px;
+    height: 130px;
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    backface-visibility: visible;
+    border: 2px solid rgba(255,255,255,0.15);
+    transition: transform 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                opacity 0.4s ease;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  }
+
+  .layer-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+    opacity: 0.7;
+  }
+
+  .layer-content {
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    line-height: 1.4;
+  }
+
+  .layer-detail {
+    font-size: 10px;
+    opacity: 0.6;
+    margin-top: 3px;
+  }
+
+  /* Layer 1: Screen */
+  .layer-screen {
+    background: linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 100%);
+    border-color: #444;
+    transform: translateZ(60px);
+  }
+  .screen-display {
+    width: 170px;
+    height: 90px;
+    background: #000;
+    border-radius: 4px;
+    border: 2px solid #333;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .screen-delta {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    font-weight: 900;
+    color: #00e676;
+    font-family: 'Courier New', monospace;
+    background: linear-gradient(180deg, #001a09 0%, #000 100%);
+  }
+  .screen-sectors {
+    display: flex;
+    height: 24px;
+    border-top: 1px solid #222;
+  }
+  .screen-sector {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 700;
+    font-family: 'Courier New', monospace;
+  }
+  .screen-sector.fast { color: #00e676; background: #001a09; }
+  .screen-sector.slow { color: #ff5252; background: #1a0000; }
+  .screen-sector:not(:last-child) { border-right: 1px solid #222; }
+
+  /* Layer 2: GPS */
+  .layer-gps {
+    background: linear-gradient(135deg, #1b5e20 0%, #2e7d32 100%);
+    border-color: #4caf50;
+    transform: translateZ(20px);
+  }
+  .gps-chip {
+    width: 50px;
+    height: 50px;
+    background: linear-gradient(135deg, #333 0%, #555 100%);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    color: #aaa;
+    border: 1px solid #666;
+    margin: 4px 0;
+    position: relative;
+  }
+  .gps-chip::after {
+    content: '↑ 信号';
+    position: absolute;
+    top: -16px;
+    font-size: 9px;
+    color: #81c784;
+  }
+  .antenna-icon {
+    width: 36px;
+    height: 36px;
+    border: 2px solid #81c784;
+    border-radius: 50%;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .antenna-icon::before {
+    content: '';
+    width: 20px;
+    height: 20px;
+    border: 2px solid #a5d6a7;
+    border-radius: 50%;
+  }
+  .antenna-icon::after {
+    content: '';
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    background: #4caf50;
+    border-radius: 50%;
+  }
+
+  /* Layer 3: ESP32 + SD */
+  .layer-mcu {
+    background: linear-gradient(135deg, #0d47a1 0%, #1565c0 100%);
+    border-color: #42a5f5;
+    transform: translateZ(-20px);
+  }
+  .mcu-chips {
+    display: flex;
+    gap: 16px;
+    margin-top: 4px;
+  }
+  .chip {
+    padding: 6px 10px;
+    background: rgba(0,0,0,0.3);
+    border-radius: 4px;
+    font-size: 10px;
+    border: 1px solid rgba(255,255,255,0.2);
+    text-align: center;
+    line-height: 1.4;
+  }
+  .chip-label {
+    font-size: 8px;
+    opacity: 0.6;
+  }
+
+  /* Layer 4: Battery */
+  .layer-battery {
+    background: linear-gradient(135deg, #e65100 0%, #f57c00 100%);
+    border-color: #ffb74d;
+    transform: translateZ(-60px);
+  }
+  .battery-cells {
+    display: flex;
+    gap: 12px;
+    margin-top: 4px;
+  }
+  .battery-cell {
+    width: 55px;
+    height: 22px;
+    background: linear-gradient(90deg, #333 0%, #555 90%, #888 90%, #888 100%);
+    border-radius: 3px 5px 5px 3px;
+    border: 1px solid #666;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    color: #ccc;
+  }
+
+  /* Layer 5: Mount */
+  .layer-mount {
+    background: linear-gradient(135deg, #4a148c 0%, #6a1b9a 100%);
+    border-color: #ab47bc;
+    transform: translateZ(-100px);
+    height: 50px;
+    border-radius: 8px;
+  }
+
+  /* Buttons on side */
+  .side-buttons {
+    position: absolute;
+    right: -20px;
+    top: 50%;
+    transform: translateY(-50%) translateZ(0px);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .side-btn {
+    width: 14px;
+    height: 22px;
+    background: #555;
+    border-radius: 0 4px 4px 0;
+    border: 1px solid #777;
+  }
+
+  /* Controls */
+  .controls {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+  .ctrl-btn {
+    padding: 6px 14px;
+    border: 1px solid #444;
+    background: #2a2a4a;
+    color: #ccc;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s;
+  }
+  .ctrl-btn:hover { background: #3a3a5a; border-color: #666; }
+  .ctrl-btn.active { background: #4a4aff; border-color: #6a6aff; color: #fff; }
+
+  /* Right panel */
+  .info-panel {
+    flex: 1 1 320px;
+    max-width: 460px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .layer-card {
+    background: #16213e;
+    border-radius: 12px;
+    border: 1px solid #2a2a4a;
+    padding: 14px 16px;
+    transition: all 0.3s;
+    cursor: pointer;
+  }
+  .layer-card:hover {
+    border-color: #4a4a6a;
+    background: #1a2548;
+  }
+  .layer-card.highlighted {
+    border-color: var(--highlight-color, #4a4aff);
+    background: #1a2548;
+    box-shadow: 0 0 20px rgba(74, 74, 255, 0.15);
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .card-num {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .card-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+  }
+  .card-subtitle {
+    font-size: 11px;
+    color: #888;
+    margin-left: auto;
+  }
+  .card-body {
+    font-size: 12px;
+    color: #aaa;
+    line-height: 1.6;
+    padding-left: 36px;
+  }
+  .card-body strong { color: #ddd; }
+
+  /* Side view */
+  .side-view-wrapper {
+    background: #16213e;
+    border-radius: 12px;
+    border: 1px solid #2a2a4a;
+    padding: 16px;
+  }
+  .side-view-label {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 12px;
+    text-align: center;
+  }
+
+  .side-view {
+    position: relative;
+    height: 280px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .sv-device {
+    width: 140px;
+    height: 240px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .sv-layer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 600;
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.15);
+    position: relative;
+  }
+
+  .sv-screen {
+    height: 36px;
+    background: linear-gradient(135deg, #111 0%, #222 100%);
+    border-radius: 8px 8px 0 0;
+    border-bottom: none;
+  }
+  .sv-gps {
+    height: 48px;
+    background: linear-gradient(135deg, #1b5e20 0%, #2e7d32 100%);
+    border-bottom: none;
+  }
+  .sv-mcu {
+    height: 56px;
+    background: linear-gradient(135deg, #0d47a1 0%, #1565c0 100%);
+    border-bottom: none;
+  }
+  .sv-battery {
+    height: 52px;
+    background: linear-gradient(135deg, #e65100 0%, #f57c00 100%);
+    border-bottom: none;
+  }
+  .sv-mount {
+    height: 28px;
+    background: linear-gradient(135deg, #4a148c 0%, #6a1b9a 100%);
+    border-radius: 0 0 8px 8px;
+  }
+
+  .sv-bracket {
+    position: absolute;
+    right: -80px;
+    font-size: 10px;
+    color: #888;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+  }
+  .sv-bracket::before {
+    content: '';
+    width: 20px;
+    border-top: 1px dashed #555;
+  }
+
+  .sv-arrow {
+    position: absolute;
+    font-size: 20px;
+  }
+  .sv-arrow-sky {
+    top: -30px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #81c784;
+  }
+  .sv-arrow-sky::after {
+    content: ' 天空 / GPS信号';
+    font-size: 10px;
+    vertical-align: middle;
+  }
+  .sv-arrow-you {
+    bottom: -34px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #90caf9;
+  }
+  .sv-arrow-you::after {
+    content: ' 方向盘';
+    font-size: 10px;
+    vertical-align: middle;
+  }
+
+  .sv-signal-lines {
+    position: absolute;
+    top: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    opacity: 0.4;
+    pointer-events: none;
+  }
+  .sv-signal-line {
+    height: 1px;
+    background: #81c784;
+  }
+
+  /* Exploded toggle */
+  .exploded .layer-screen  { transform: translateZ(120px); }
+  .exploded .layer-gps     { transform: translateZ(50px); }
+  .exploded .layer-mcu     { transform: translateZ(-20px); }
+  .exploded .layer-battery { transform: translateZ(-90px); }
+  .exploded .layer-mount   { transform: translateZ(-160px); }
+
+  @media (max-width: 768px) {
+    .main-container { flex-direction: column; align-items: center; }
+    .info-panel { max-width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🏎️ Kart GPS Device — 内部结构</h1>
+  <p>拖拽旋转 3D 模型 · 点击右侧卡片高亮对应层</p>
+</div>
+
+<div class="main-container">
+  <!-- Left: 3D Scene -->
+  <div class="scene-wrapper">
+    <div class="scene-label">3D 爆炸视图 — 拖拽旋转</div>
+    <div class="scene" id="scene">
+      <div class="device" id="device">
+
+        <!-- Layer 1: Screen (top, faces driver) -->
+        <div class="layer layer-screen" data-layer="screen">
+          <div class="screen-display">
+            <div class="screen-delta">-0.23s</div>
+            <div class="screen-sectors">
+              <div class="screen-sector fast">S1 -0.08</div>
+              <div class="screen-sector slow">S2 +0.12</div>
+              <div class="screen-sector fast">S3 -0.27</div>
+            </div>
+          </div>
+          <div class="side-buttons">
+            <div class="side-btn"></div>
+            <div class="side-btn"></div>
+            <div class="side-btn"></div>
+          </div>
+        </div>
+
+        <!-- Layer 2: GPS module -->
+        <div class="layer layer-gps" data-layer="gps">
+          <div class="layer-label">GPS 模块</div>
+          <div style="display:flex;align-items:center;gap:16px;">
+            <div class="gps-chip">
+              <div class="antenna-icon"></div>
+            </div>
+            <div style="text-align:left;">
+              <div class="layer-content">BK880</div>
+              <div class="layer-detail">u-blox M10 · 25Hz</div>
+              <div class="layer-detail">天线朝上 ↑</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Layer 3: ESP32 + SD -->
+        <div class="layer layer-mcu" data-layer="mcu">
+          <div class="layer-label">主控板</div>
+          <div class="mcu-chips">
+            <div class="chip">
+              ESP32-S3
+              <div class="chip-label">WiFi + BLE</div>
+            </div>
+            <div class="chip">
+              MicroSD
+              <div class="chip-label">VBO 数据</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Layer 4: Battery -->
+        <div class="layer layer-battery" data-layer="battery">
+          <div class="layer-label">电源</div>
+          <div class="battery-cells">
+            <div class="battery-cell">18650</div>
+            <div class="battery-cell">18650</div>
+          </div>
+          <div class="layer-detail" style="margin-top:4px;">BMS 充电保护板 · USB-C 充电</div>
+        </div>
+
+        <!-- Layer 5: Mount -->
+        <div class="layer layer-mount" data-layer="mount">
+          <div class="layer-content">方向盘夹具</div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="ctrl-btn active" id="btn-exploded" onclick="toggleExploded()">爆炸视图</button>
+      <button class="ctrl-btn" id="btn-assembled" onclick="toggleAssembled()">组装视图</button>
+      <button class="ctrl-btn" onclick="resetRotation()">重置角度</button>
+    </div>
+  </div>
+
+  <!-- Right: Info Panel -->
+  <div class="info-panel">
+    <!-- Side Cross-Section -->
+    <div class="side-view-wrapper">
+      <div class="side-view-label">截面图 — 安装方向</div>
+      <div class="side-view">
+        <div class="sv-device">
+          <div class="sv-arrow sv-arrow-sky">↑</div>
+          <div class="sv-signal-lines">
+            <div class="sv-signal-line" style="width:60px"></div>
+            <div class="sv-signal-line" style="width:40px"></div>
+            <div class="sv-signal-line" style="width:20px"></div>
+          </div>
+
+          <div class="sv-layer sv-gps">
+            GPS 天线 ↑ 朝天
+            <span class="sv-bracket">← 塑料壳 (信号穿透)</span>
+          </div>
+          <div class="sv-layer sv-screen">
+            ← 屏幕面
+            <span class="sv-bracket">← 朝向驾驶员</span>
+          </div>
+          <div class="sv-layer sv-mcu">
+            ESP32 + SD
+            <span class="sv-bracket">← 中间层</span>
+          </div>
+          <div class="sv-layer sv-battery">
+            18650 电池 x2
+            <span class="sv-bracket">← 重心最低</span>
+          </div>
+          <div class="sv-layer sv-mount">
+            夹具
+            <span class="sv-bracket">← 固定到方向盘</span>
+          </div>
+
+          <div class="sv-arrow sv-arrow-you">↓</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Layer Cards -->
+    <div class="layer-card" data-target="screen" onclick="highlightLayer('screen')"
+         style="--highlight-color: #666">
+      <div class="card-header">
+        <div class="card-num" style="background:#333">1</div>
+        <div class="card-title">3.5" IPS TFT 屏幕</div>
+        <div class="card-subtitle">480×320 · ILI9488</div>
+      </div>
+      <div class="card-body">
+        <strong>朝向驾驶员</strong>，略微倾斜。大字体显示 Delta 时间，红/绿色编码。
+        余光一瞥就能看到快慢。阳光下需要 >500nit 亮度。
+      </div>
+    </div>
+
+    <div class="layer-card" data-target="gps" onclick="highlightLayer('gps')"
+         style="--highlight-color: #4caf50">
+      <div class="card-header">
+        <div class="card-num" style="background:#2e7d32">2</div>
+        <div class="card-title">BK880 GPS 模块</div>
+        <div class="card-subtitle">u-blox M10 · 25Hz · 有源天线</div>
+      </div>
+      <div class="card-body">
+        <strong>天线面朝天</strong>，贴在塑料壳内侧。GPS 信号轻松穿透塑料，
+        不需要裸露。上方不能有金属遮挡。
+      </div>
+    </div>
+
+    <div class="layer-card" data-target="mcu" onclick="highlightLayer('mcu')"
+         style="--highlight-color: #42a5f5">
+      <div class="card-header">
+        <div class="card-num" style="background:#1565c0">3</div>
+        <div class="card-title">ESP32-S3 + MicroSD</div>
+        <div class="card-subtitle">主控 · WiFi · BLE</div>
+      </div>
+      <div class="card-body">
+        主控板居中，SPI 总线同时连接屏幕和 SD 卡。
+        <strong>BLE 连手机配置</strong>，WiFi 用于 OTA 固件更新。
+        SD 卡记录 VBO 格式轨迹数据。
+      </div>
+    </div>
+
+    <div class="layer-card" data-target="battery" onclick="highlightLayer('battery')"
+         style="--highlight-color: #ffb74d">
+      <div class="card-header">
+        <div class="card-num" style="background:#e65100">4</div>
+        <div class="card-title">18650 电池 × 2</div>
+        <div class="card-subtitle">~6000mAh · 3+ 小时续航</div>
+      </div>
+      <div class="card-body">
+        <strong>放最底层</strong>——最重的部件在下方，降低重心，
+        减少方向盘上的振动。BMS 保护板防过充过放。USB-C 充电。
+      </div>
+    </div>
+
+    <div class="layer-card" data-target="mount" onclick="highlightLayer('mount')"
+         style="--highlight-color: #ab47bc">
+      <div class="card-header">
+        <div class="card-num" style="background:#6a1b9a">5</div>
+        <div class="card-title">方向盘夹具</div>
+        <div class="card-subtitle">3D 打印 · 快拆设计</div>
+      </div>
+      <div class="card-body">
+        卡扣式设计，租赁卡丁车方向盘管径通常 <strong>28-30mm</strong>。
+        无需工具，几秒钟安装拆卸。建议用 PETG 材质打印（比 PLA 更耐热耐撞）。
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const device = document.getElementById('device');
+  const scene = document.getElementById('scene');
+  let rotX = -20, rotY = -30;
+  let dragging = false, lastX = 0, lastY = 0;
+  let isExploded = true;
+
+  function updateTransform() {
+    device.style.transform = `rotateX(${rotX}deg) rotateY(${rotY}deg)`;
+  }
+  updateTransform();
+
+  scene.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    scene.setPointerCapture(e.pointerId);
+  });
+
+  scene.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    rotY += dx * 0.5;
+    rotX -= dy * 0.5;
+    rotX = Math.max(-80, Math.min(80, rotX));
+    lastX = e.clientX;
+    lastY = e.clientY;
+    updateTransform();
+  });
+
+  scene.addEventListener('pointerup', () => { dragging = false; });
+
+  function toggleExploded() {
+    isExploded = true;
+    device.classList.add('exploded');
+    document.getElementById('btn-exploded').classList.add('active');
+    document.getElementById('btn-assembled').classList.remove('active');
+  }
+
+  function toggleAssembled() {
+    isExploded = false;
+    device.classList.remove('exploded');
+    document.getElementById('btn-assembled').classList.add('active');
+    document.getElementById('btn-exploded').classList.remove('active');
+  }
+
+  function resetRotation() {
+    rotX = -20;
+    rotY = -30;
+    updateTransform();
+  }
+
+  // Start in exploded view
+  device.classList.add('exploded');
+
+  // Highlight layer
+  function highlightLayer(name) {
+    // Cards
+    document.querySelectorAll('.layer-card').forEach(c => c.classList.remove('highlighted'));
+    const card = document.querySelector(`.layer-card[data-target="${name}"]`);
+    if (card) card.classList.add('highlighted');
+
+    // 3D layers
+    document.querySelectorAll('.layer').forEach(l => {
+      l.style.opacity = l.dataset.layer === name ? '1' : '0.3';
+    });
+
+    // Reset after 2s
+    clearTimeout(window._hlTimeout);
+    window._hlTimeout = setTimeout(() => {
+      document.querySelectorAll('.layer').forEach(l => l.style.opacity = '1');
+      document.querySelectorAll('.layer-card').forEach(c => c.classList.remove('highlighted'));
+    }, 3000);
+  }
+
+  // Slow auto-rotate when not dragging
+  let autoRotate = true;
+  scene.addEventListener('pointerdown', () => { autoRotate = false; });
+  scene.addEventListener('pointerup', () => {
+    setTimeout(() => { autoRotate = true; }, 3000);
+  });
+
+  function animate() {
+    if (autoRotate && !dragging) {
+      rotY += 0.15;
+      updateTransform();
+    }
+    requestAnimationFrame(animate);
+  }
+  animate();
+</script>
+
+</body>
+</html>
