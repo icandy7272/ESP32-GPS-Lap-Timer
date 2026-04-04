@@ -24,3 +24,12 @@ void display_init(QueueHandle_t     btn_display_q,
 // FreeRTOS task entry point (Core 1, priority 10, stack 8192).
 // param is unused — dependencies injected via display_init().
 void display_task(void* param);
+
+// --- Boot sequence screens (called from setup() before display_task starts) ---
+// These draw directly to the TFT. No mutex needed since display_task
+// hasn't started yet. TFT must be initialised first via display_init().
+
+void display_show_splash();                     // "GPS Lap Timer v1.0"
+void display_show_gps_search(int sats);         // "GPS Searching... X sats"
+void display_show_track_found(const char* name); // "Track: XX"
+void display_show_ready();                       // "READY" in big green text

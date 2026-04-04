@@ -62,6 +62,33 @@ static void print_boot_info() {
 
 // --- Arduino entry points ------------------------------------
 
+// --- GPS boot polling: wait for fix, update screen each second ---
+
+static void boot_wait_for_gps(uint32_t timeout_ms) {
+    uint32_t start = millis();
+    int best_sats = 0;
+    GpsPoint pt;
+
+    while ((millis() - start) < timeout_ms) {
+        if (xQueueReceive(gps_queue, &pt, pdMS_TO_TICKS(200)) == pdTRUE) {
+            if (pt.satellites > best_sats) {
+                best_sats = pt.satellites;
+            }
+            if (pt.fix_3d) {
+                display_show_gps_search(pt.satellites);
+                Serial.printf("[BOOT] GPS fix acquired: %d sats\n",
+                              pt.satellites);
+                return;
+            }
+        }
+        // Update screen roughly once per second (200ms queue poll x5)
+        display_show_gps_search(best_sats);
+    }
+
+    Serial.println("[BOOT] GPS timeout — proceeding without fix");
+    display_show_gps_search(best_sats);
+}
+
 void setup() {
     Serial.begin(115200);
     delay(200);
@@ -110,8 +137,29 @@ void setup() {
     xTaskCreatePinnedToCore(lap_timer_task, "lap_timer", 8192,
                             nullptr, 20, nullptr, 0);
 
-    // --- GPS (Core 0 task created inside gps_init) ---
+    // --- Display init (TFT hardware) — must happen before boot screens ---
+    display_init(btn_display_queue, spi_mutex, session_mutex);
+
+    // --- Boot screen 1: Splash ---
+    display_show_splash();
+    delay(1000);
+
+    // --- GPS (Core 0 task creates gps_task internally) ---
     gps_init(gps_queue);
+
+    // --- Boot screen 2: GPS searching (poll up to 30s) ---
+    boot_wait_for_gps(30000);
+    delay(500);
+
+    // --- Boot screen 3: Track found ---
+    if (active_track.name[0] != '\0') {
+        display_show_track_found(active_track.name);
+        delay(1500);
+    }
+
+    // --- Boot screen 4: Ready ---
+    display_show_ready();
+    delay(500);
 
     // --- Storage task (Core 1) ---
     xTaskCreatePinnedToCore(storage_task, "storage", 6144,
@@ -121,8 +169,7 @@ void setup() {
     xTaskCreatePinnedToCore(session_task, "session", 4096,
                             nullptr, 16, nullptr, 1);
 
-    // --- Display (Core 1) ---
-    display_init(btn_display_queue, spi_mutex, session_mutex);
+    // --- Display task (Core 1) — starts rendering loop ---
     xTaskCreatePinnedToCore(display_task, "display", 8192,
                             nullptr, 10, nullptr, 1);
 

@@ -247,7 +247,7 @@ static void draw_driving_current_time(const SessionState& st) {
 
     // Real elapsed time from lap start (not synthetic best+delta)
     char time_buf[12];
-    int32_t elapsed_ms = -1;
+    int32_t elapsed_ms = 0;  // show "0:00.00" before first lap starts
     if (st.current_lap_start_us > 0) {
         elapsed_ms = (int32_t)((esp_timer_get_time() - st.current_lap_start_us) / 1000);
     }
@@ -554,6 +554,52 @@ void display_init(QueueHandle_t     btn_display_q,
 
     s_dirty.full_redraw = true;
 }
+
+// ============================================================
+// Boot sequence screens (called before display_task starts)
+// Draw directly to TFT — no sprite, no mutex needed.
+// ============================================================
+
+void display_show_splash() {
+    s_tft.fillScreen(TFT_BLACK);
+    s_tft.setTextDatum(MC_DATUM);
+    s_tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    s_tft.drawString("GPS Lap Timer", SCREEN_W / 2, SCREEN_H / 2 - 20, 4);
+    s_tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    s_tft.drawString(FW_VERSION, SCREEN_W / 2, SCREEN_H / 2 + 20, 2);
+}
+
+void display_show_gps_search(int sats) {
+    s_tft.fillScreen(TFT_BLACK);
+    s_tft.setTextDatum(MC_DATUM);
+    s_tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+    s_tft.drawString("GPS Searching...", SCREEN_W / 2, SCREEN_H / 2 - 20, 4);
+
+    char sat_buf[24];
+    snprintf(sat_buf, sizeof(sat_buf), "%d satellites", sats);
+    s_tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    s_tft.drawString(sat_buf, SCREEN_W / 2, SCREEN_H / 2 + 20, 2);
+}
+
+void display_show_track_found(const char* name) {
+    s_tft.fillScreen(TFT_BLACK);
+    s_tft.setTextDatum(MC_DATUM);
+    s_tft.setTextColor(TFT_CYAN, TFT_BLACK);
+    s_tft.drawString("Track:", SCREEN_W / 2, SCREEN_H / 2 - 20, 2);
+    s_tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    s_tft.drawString(name, SCREEN_W / 2, SCREEN_H / 2 + 10, 4);
+}
+
+void display_show_ready() {
+    s_tft.fillScreen(TFT_BLACK);
+    s_tft.setTextDatum(MC_DATUM);
+    s_tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    s_tft.drawString("READY", SCREEN_W / 2, SCREEN_H / 2, 7);
+}
+
+// ============================================================
+// Display task (FreeRTOS)
+// ============================================================
 
 void display_task(void* param) {
     (void)param;

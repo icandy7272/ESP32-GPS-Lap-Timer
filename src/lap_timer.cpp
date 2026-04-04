@@ -11,6 +11,7 @@
 #include "lap_timer.h"
 #include "delta.h"
 #include "track.h"
+#include "session.h"
 
 #include <Arduino.h>
 #include <esp_task_wdt.h>
@@ -432,6 +433,15 @@ static void handle_finish_crossing(int64_t crossing_us) {
         s_current_sector  = 0;
         delta_set_lap_start(crossing_us);
         delta_reset_elapsed();
+
+        // Auto-start recording if not already recording
+        if (!session_state.is_recording) {
+            const char* track = session_state.track_name[0] != '\0'
+                                ? session_state.track_name
+                                : "Unknown Track";
+            session_start_recording(track);
+        }
+
         emit_lap_event(LAP_EVENT_FINISH, 0, crossing_us);
         return;
     }

@@ -11,6 +11,7 @@
 
 #include <Arduino.h>
 #include <SD.h>
+#include <WiFi.h>
 
 // --- Extern references (created in main.cpp) ---
 extern SemaphoreHandle_t spi_mutex;
@@ -33,7 +34,13 @@ static const uint8_t DEFAULT_GPS_RATE_HZ = 25;
 
 void config_set_defaults() {
     memset(&app_config, 0, sizeof(app_config));
-    strlcpy(app_config.wifi_ssid, DEFAULT_SSID, sizeof(app_config.wifi_ssid));
+
+    // Default SSID includes last 4 hex digits of MAC: "KartGPS-XXXX"
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    snprintf(app_config.wifi_ssid, sizeof(app_config.wifi_ssid),
+             "KartGPS-%02X%02X", mac[4], mac[5]);
+
     strlcpy(app_config.wifi_pass, DEFAULT_PASS, sizeof(app_config.wifi_pass));
     app_config.brightness  = DEFAULT_BRIGHTNESS;
     app_config.gps_rate_hz = DEFAULT_GPS_RATE_HZ;

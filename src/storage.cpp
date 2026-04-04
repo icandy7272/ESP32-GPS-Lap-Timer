@@ -8,6 +8,7 @@
 #include "storage.h"
 #include "types.h"
 #include "pins.h"
+#include "track.h"
 
 #include <Arduino.h>
 #include <SdFat.h>
@@ -20,6 +21,7 @@
 
 extern SemaphoreHandle_t spi_mutex;
 extern QueueHandle_t     vbo_write_queue;
+extern TrackDefinition   active_track;
 
 // ---- Constants ----------------------------------------------
 
@@ -39,7 +41,7 @@ static FsFile   vbo_file;
 static bool     session_active    = false;
 static uint32_t bytes_written     = 0;
 static uint32_t last_fsync_ms     = 0;
-static char     active_track[64]  = {0};
+static char     active_track_name[64]  = {0};
 static char     session_start_ts[20] = {0};  // "YYYYMMDD_HHMMSS"
 
 // ---- Forward declarations -----------------------------------
@@ -56,11 +58,9 @@ static void     flush_and_sync();
 static void     sync_directory(const char* dir_path);
 static void     build_final_path(char* path, int path_len);
 static double   timestamp_us_to_secs_since_midnight(int64_t timestamp_us);
+static double   secs_to_hhmmss(double total_secs);
 static void     set_session_epoch(int64_t first_timestamp_us);
-
-// In-memory lap timing buffer — written into VBO on session end.
-static char lap_timing_lines[MAX_LAPS_PER_SESSION][32];
-static int  lap_timing_count = 0;
+static void     write_laptiming_lines();
 
 // Session-start epoch for monotonic VBO timestamps.
 static int64_t  session_epoch_us  = 0;
@@ -145,8 +145,8 @@ bool storage_start_session(const char* track_name) {
                  "00000000_000000");
     }
 
-    strncpy(active_track, track_name, sizeof(active_track) - 1);
-    active_track[sizeof(active_track) - 1] = '\0';
+    strncpy(active_track_name, track_name, sizeof(active_track_name) - 1);
+    active_track_name[sizeof(active_track_name) - 1] = '\0';
 
     xSemaphoreTake(spi_mutex, portMAX_DELAY);
     bool ok = vbo_file.open(TMP_FILENAME, O_RDWR | O_CREAT | O_TRUNC);
@@ -176,20 +176,17 @@ void storage_end_session() {
     }
     session_active = false;
 
-    // Write [laptiming] section after [data] (VBO parsers accept this)
+    // Write [laptiming] section — detection line coordinates in angle-minutes
     xSemaphoreTake(spi_mutex, portMAX_DELAY);
     vbo_file.write("\r\n[laptiming]\r\n", 15);
-    for (int i = 0; i < lap_timing_count; i++) {
-        vbo_file.write(lap_timing_lines[i], strlen(lap_timing_lines[i]));
-    }
+
+    write_laptiming_lines();
 
     // Final flush + sync
     vbo_file.flush();
     vbo_file.sync();
     vbo_file.close();
     xSemaphoreGive(spi_mutex);
-
-    lap_timing_count = 0;
 
     sync_directory("/");
 
@@ -224,26 +221,11 @@ void storage_end_session() {
 // ------------------------------------------------------------
 
 void storage_write_lap_timing(const LapRecord* lap) {
-    if (!session_active || !lap) {
-        return;
-    }
-    if (lap_timing_count >= MAX_LAPS_PER_SESSION) {
-        return;
-    }
-
-    int32_t ms   = lap->lap_time_ms;
-    int     mins = ms / 60000;
-    int     secs = (ms % 60000) / 1000;
-    int     rem  = ms % 1000;
-
-    snprintf(lap_timing_lines[lap_timing_count],
-             sizeof(lap_timing_lines[0]),
-             "%02d:%02d.%03d %d\r\n",
-             mins, secs, rem, lap->lap_number);
-    lap_timing_count++;
-    // Lap timing is buffered in memory and flushed to the VBO file
-    // header during storage_end_session() to maintain correct [laptiming]
-    // section position before [data].
+    // No-op: VBO [laptiming] section contains detection line coordinates,
+    // not lap times. Lap times are computed by analysis software from
+    // GPS data and detection lines. Coordinates are written in
+    // storage_end_session().
+    (void)lap;
 }
 
 // ------------------------------------------------------------
@@ -483,6 +465,7 @@ static void write_vbo_header(const char* track_name) {
 
 static void format_vbo_line(const VboEntry* entry, char* buf, int buf_len) {
     double secs = timestamp_us_to_secs_since_midnight(entry->timestamp_us);
+    double hhmmss = secs_to_hhmmss(secs);
 
     // VBO coordinate convention:
     //   latitude  = decimal_degrees * 60  (angle-minutes), south negative
@@ -491,9 +474,9 @@ static void format_vbo_line(const VboEntry* entry, char* buf, int buf_len) {
     double lon_amin = entry->lon_deg * -60.0;
 
     snprintf(buf, buf_len,
-             "%03d %09.3f %+012.5f %+012.5f %07.3f %06.2f %+09.2f\r\n",
+             "%03d %09.2f %+012.5f %+012.5f %07.3f %06.2f %+09.2f\r\n",
              entry->satellites,
-             secs,
+             hhmmss,
              lat_amin,
              lon_amin,
              (double)entry->speed_kmh,
@@ -522,6 +505,47 @@ static double timestamp_us_to_secs_since_midnight(int64_t timestamp_us) {
     if (tod >= 86400.0) tod -= 86400.0;
     if (tod < 0.0) tod += 86400.0;
     return tod;
+}
+
+// Convert seconds-since-midnight to HHMMSS.SS format for VBO.
+// Example: 52382.04s -> 143302.04 (14:33:02.04)
+static double secs_to_hhmmss(double total_secs) {
+    int total_int = (int)total_secs;
+    int hh = total_int / 3600;
+    int mm = (total_int % 3600) / 60;
+    int ss = total_int % 60;
+    double frac = total_secs - (double)total_int;
+    return (double)(hh * 10000 + mm * 100 + ss) + frac;
+}
+
+// Write VBO [laptiming] detection lines in angle-minutes format.
+// Called inside spi_mutex with vbo_file open.
+static void write_laptiming_lines() {
+    char line[128];
+
+    // Start/finish line
+    double lat1 = active_track.start_finish.lat1_deg * 60.0;
+    double lon1 = active_track.start_finish.lon1_deg * -60.0;
+    double lat2 = active_track.start_finish.lat2_deg * 60.0;
+    double lon2 = active_track.start_finish.lon2_deg * -60.0;
+    snprintf(line, sizeof(line),
+             "Start  %+012.5f %+012.5f %+012.5f %+012.5f Start / Finish\r\n",
+             lat1, lon1, lat2, lon2);
+    vbo_file.write(line, strlen(line));
+
+    // Sector split lines
+    for (int i = 0; i < active_track.sector_count - 1; i++) {
+        lat1 = active_track.sectors[i].lat1_deg * 60.0;
+        lon1 = active_track.sectors[i].lon1_deg * -60.0;
+        lat2 = active_track.sectors[i].lat2_deg * 60.0;
+        lon2 = active_track.sectors[i].lon2_deg * -60.0;
+        snprintf(line, sizeof(line),
+                 "Split  %+012.5f %+012.5f %+012.5f %+012.5f Split %d\r\n",
+                 lat1, lon1, lat2, lon2, i + 1);
+        vbo_file.write(line, strlen(line));
+    }
+
+    vbo_file.write("\r\n", 2);
 }
 
 // ------------------------------------------------------------
@@ -555,7 +579,7 @@ static void build_final_path(char* path, int path_len) {
     xSemaphoreTake(spi_mutex, portMAX_DELAY);
     for (; seq <= 999; seq++) {
         snprintf(probe, sizeof(probe), "%s/%s_%s_%03d.vbo",
-                 SESSIONS_DIR, session_start_ts, active_track, seq);
+                 SESSIONS_DIR, session_start_ts, active_track_name, seq);
         if (!sd.exists(probe)) {
             break;
         }
@@ -570,5 +594,5 @@ static void build_final_path(char* path, int path_len) {
     strncpy(time_part, session_start_ts + 9, 6);
 
     snprintf(path, path_len, "%s/%s_%s_%s_%03d.vbo",
-             SESSIONS_DIR, date_part, active_track, time_part, seq);
+             SESSIONS_DIR, date_part, active_track_name, time_part, seq);
 }

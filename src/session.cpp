@@ -26,6 +26,7 @@ static int            s_current_sector = 0;
 // --- Constants ---
 
 static constexpr int32_t  LAP_SHORT_THRESHOLD_MS   = 15000;   // < 15 s
+static constexpr int32_t  SECTOR_MIN_TIME_MS       = 5000;    // < 5 s = GPS jitter
 static constexpr int32_t  LAP_SLOW_MULTIPLIER_150  = 150;     // > best * 1.5
 static constexpr TickType_t QUEUE_POLL_TICKS = pdMS_TO_TICKS(50);
 
@@ -225,6 +226,11 @@ static void handle_lap_sector(const LapEvent* ev)
     // Compute time for the sector that just ended
     int32_t sector_ms =
         (int32_t)((crossing_us - s_sector_start_us[completed]) / 1000);
+
+    // Ignore sector crossing if time is below minimum (GPS jitter)
+    if (sector_ms < SECTOR_MIN_TIME_MS) {
+        return;
+    }
 
     // Start timing the next sector
     if (ev->sector_index < MAX_SECTORS) {
