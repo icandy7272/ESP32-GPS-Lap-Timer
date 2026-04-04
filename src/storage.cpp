@@ -42,6 +42,7 @@ static bool     session_active    = false;
 static uint32_t bytes_written     = 0;
 static uint32_t last_fsync_ms     = 0;
 static char     active_track_name[64]  = {0};
+static TrackDefinition session_track = {};  // snapshot at session start
 static char     session_start_ts[20] = {0};  // "YYYYMMDD_HHMMSS"
 
 // ---- Forward declarations -----------------------------------
@@ -156,6 +157,9 @@ bool storage_start_session(const char* track_name) {
         Serial.println("[storage] failed to create .tmp file");
         return false;
     }
+
+    // Snapshot the current track for [laptiming] export
+    session_track = active_track;
 
     write_vbo_header(track_name);
 
@@ -524,21 +528,21 @@ static void write_laptiming_lines() {
     char line[128];
 
     // Start/finish line
-    double lat1 = active_track.start_finish.lat1_deg * 60.0;
-    double lon1 = active_track.start_finish.lon1_deg * -60.0;
-    double lat2 = active_track.start_finish.lat2_deg * 60.0;
-    double lon2 = active_track.start_finish.lon2_deg * -60.0;
+    double lat1 = session_track.start_finish.lat1_deg * 60.0;
+    double lon1 = session_track.start_finish.lon1_deg * -60.0;
+    double lat2 = session_track.start_finish.lat2_deg * 60.0;
+    double lon2 = session_track.start_finish.lon2_deg * -60.0;
     snprintf(line, sizeof(line),
              "Start  %+012.5f %+012.5f %+012.5f %+012.5f Start / Finish\r\n",
              lat1, lon1, lat2, lon2);
     vbo_file.write(line, strlen(line));
 
     // Sector split lines
-    for (int i = 0; i < active_track.sector_count - 1; i++) {
-        lat1 = active_track.sectors[i].lat1_deg * 60.0;
-        lon1 = active_track.sectors[i].lon1_deg * -60.0;
-        lat2 = active_track.sectors[i].lat2_deg * 60.0;
-        lon2 = active_track.sectors[i].lon2_deg * -60.0;
+    for (int i = 0; i < session_track.sector_count - 1; i++) {
+        lat1 = session_track.sectors[i].lat1_deg * 60.0;
+        lon1 = session_track.sectors[i].lon1_deg * -60.0;
+        lat2 = session_track.sectors[i].lat2_deg * 60.0;
+        lon2 = session_track.sectors[i].lon2_deg * -60.0;
         snprintf(line, sizeof(line),
                  "Split  %+012.5f %+012.5f %+012.5f %+012.5f Split %d\r\n",
                  lat1, lon1, lat2, lon2, i + 1);

@@ -131,11 +131,9 @@ void setup() {
         Serial.println("[BOOT] No tracks on SD — crossing detection disabled");
     }
 
-    // --- Lap timer (Core 0 task created inside) ---
+    // --- Lap timer init (task started AFTER boot GPS wait to avoid queue race) ---
     lap_timer_init(gps_queue, vbo_write_queue, lap_event_queue,
                    session_mutex, &active_track);
-    xTaskCreatePinnedToCore(lap_timer_task, "lap_timer", 8192,
-                            nullptr, 20, nullptr, 0);
 
     // --- Display init (TFT hardware) — must happen before boot screens ---
     display_init(btn_display_queue, spi_mutex, session_mutex);
@@ -148,8 +146,13 @@ void setup() {
     gps_init(gps_queue);
 
     // --- Boot screen 2: GPS searching (poll up to 30s) ---
+    // lap_timer_task not yet started, so we're the sole queue consumer
     boot_wait_for_gps(30000);
     delay(500);
+
+    // --- NOW start lap_timer_task (after boot GPS wait is done) ---
+    xTaskCreatePinnedToCore(lap_timer_task, "lap_timer", 8192,
+                            nullptr, 20, nullptr, 0);
 
     // --- Boot screen 3: Track found ---
     if (active_track.name[0] != '\0') {

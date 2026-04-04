@@ -12,6 +12,7 @@
 #include "delta.h"
 #include "track.h"
 #include "session.h"
+#include "storage.h"
 
 #include <Arduino.h>
 #include <esp_task_wdt.h>
@@ -434,12 +435,17 @@ static void handle_finish_crossing(int64_t crossing_us) {
         delta_set_lap_start(crossing_us);
         delta_reset_elapsed();
 
-        // Auto-start recording if not already recording
+        // Auto-start recording if not already recording.
+        // Call storage directly instead of session_start_recording() to avoid
+        // lap_timer_reset() clearing the crossing state we just set above.
         if (!session_state.is_recording) {
-            const char* track = session_state.track_name[0] != '\0'
+            const char* tname = session_state.track_name[0] != '\0'
                                 ? session_state.track_name
                                 : "Unknown Track";
-            session_start_recording(track);
+            xSemaphoreTake(s_session_mutex, portMAX_DELAY);
+            session_state.is_recording = true;
+            xSemaphoreGive(s_session_mutex);
+            storage_start_session(tname);
         }
 
         emit_lap_event(LAP_EVENT_FINISH, 0, crossing_us);
