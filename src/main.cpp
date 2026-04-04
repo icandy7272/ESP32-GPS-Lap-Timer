@@ -36,7 +36,7 @@ QueueHandle_t btn_display_queue  = nullptr;
 
 // --- Default track (loaded from SD or hard-coded fallback) ---
 
-static TrackDefinition active_track = {};
+TrackDefinition active_track = {};
 
 // --- Boot splash (shown while subsystems init) ---------------
 

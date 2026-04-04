@@ -10,6 +10,8 @@
 #include "wifi_server.h"
 #include "config.h"
 #include "track.h"
+#include "session.h"
+#include "lap_timer.h"
 #include "types.h"
 #include "pins.h"
 
@@ -43,6 +45,9 @@ static void handle_api_status();
 static void handle_api_sessions();
 static void handle_api_tracks();
 static void handle_api_tracks_post();
+static void handle_api_tracks_select();
+static void handle_api_tracks_delete();
+static void handle_api_recording();
 static void handle_files();
 static void handle_api_settings_get();
 static void handle_api_settings_post();
@@ -89,10 +94,13 @@ void wifi_init() {
     server.on("/",               HTTP_GET,  handle_root);
     server.on("/api/status",     HTTP_GET,  handle_api_status);
     server.on("/api/sessions",   HTTP_GET,  handle_api_sessions);
-    server.on("/api/tracks",     HTTP_GET,  handle_api_tracks);
-    server.on("/api/tracks",     HTTP_POST, handle_api_tracks_post);
-    server.on("/api/settings",   HTTP_GET,  handle_api_settings_get);
-    server.on("/api/settings",   HTTP_POST, handle_api_settings_post);
+    server.on("/api/tracks",        HTTP_GET,  handle_api_tracks);
+    server.on("/api/tracks",        HTTP_POST, handle_api_tracks_post);
+    server.on("/api/tracks/select", HTTP_POST, handle_api_tracks_select);
+    server.on("/api/tracks/delete", HTTP_POST, handle_api_tracks_delete);
+    server.on("/api/recording",     HTTP_POST, handle_api_recording);
+    server.on("/api/settings",      HTTP_GET,  handle_api_settings_get);
+    server.on("/api/settings",      HTTP_POST, handle_api_settings_post);
     server.onNotFound(handle_not_found);
 
     server.begin();
@@ -379,6 +387,103 @@ static void handle_api_tracks_post() {
     }
 }
 
+// ============================================================
+// POST /api/tracks/select — set active track
+// ============================================================
+
+static void handle_api_tracks_select() {
+    if (!server.hasArg("plain")) {
+        server.send(400, "application/json", "{\"error\":\"no body\"}");
+        return;
+    }
+
+    String body = server.arg("plain");
+    const char* json = body.c_str();
+    char id[32] = {};
+    if (!json_extract_str(json, "id", id, sizeof(id))) {
+        server.send(400, "application/json", "{\"error\":\"missing id\"}");
+        return;
+    }
+
+    const TrackDefinition* track = track_get_by_id(id);
+    if (!track) {
+        server.send(404, "application/json", "{\"error\":\"track not found\"}");
+        return;
+    }
+
+    // Update lap timer with new track (copies data, resets state)
+    lap_timer_set_track(track);
+
+    // Update session state track name
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        strlcpy(session_state.track_name, track->name,
+                sizeof(session_state.track_name));
+        xSemaphoreGive(session_mutex);
+    }
+
+    char buf[128];
+    snprintf(buf, sizeof(buf), "{\"ok\":true,\"name\":\"%s\"}", track->name);
+    server.send(200, "application/json", buf);
+}
+
+// ============================================================
+// POST /api/tracks/delete — delete a track
+// ============================================================
+
+static void handle_api_tracks_delete() {
+    if (!server.hasArg("plain")) {
+        server.send(400, "application/json", "{\"error\":\"no body\"}");
+        return;
+    }
+
+    String body = server.arg("plain");
+    const char* json = body.c_str();
+    char id[32] = {};
+    if (!json_extract_str(json, "id", id, sizeof(id))) {
+        server.send(400, "application/json", "{\"error\":\"missing id\"}");
+        return;
+    }
+
+    if (track_delete(id)) {
+        server.send(200, "application/json", "{\"ok\":true}");
+    } else {
+        server.send(404, "application/json", "{\"error\":\"track not found\"}");
+    }
+}
+
+// ============================================================
+// POST /api/recording — start/stop recording
+// ============================================================
+
+static void handle_api_recording() {
+    if (!server.hasArg("plain")) {
+        server.send(400, "application/json", "{\"error\":\"no body\"}");
+        return;
+    }
+
+    String body = server.arg("plain");
+    const char* json = body.c_str();
+    char action[16] = {};
+    if (!json_extract_str(json, "action", action, sizeof(action))) {
+        server.send(400, "application/json", "{\"error\":\"missing action\"}");
+        return;
+    }
+
+    if (strcmp(action, "start") == 0) {
+        SessionState ss = read_session_state();
+        session_start_recording(ss.track_name);
+        server.send(200, "application/json",
+                    "{\"ok\":true,\"recording\":true}");
+    } else if (strcmp(action, "stop") == 0) {
+        session_stop_recording();
+        server.send(200, "application/json",
+                    "{\"ok\":true,\"recording\":false}");
+    } else {
+        server.send(400, "application/json",
+                    "{\"error\":\"action must be start or stop\"}");
+    }
+}
+
 static int find_next_track_id() {
     int max_id = 0;
 
@@ -546,6 +651,9 @@ static void handle_api_settings_post() {
 
     apply_settings_from_json(json);
 
+    // Apply brightness immediately (LEDC channel 0 = TFT backlight)
+    ledcWrite(0, app_config.brightness);
+
     bool ok = config_save();
     if (ok) {
         server.send(200, "application/json", "{\"ok\":true}");
@@ -683,6 +791,9 @@ static String build_body_section() {
              "<span class=\"val\" id=\"best\">--</span></div>"
            "<div class=\"row\"><span class=\"label\">Track</span>"
              "<span class=\"val\" id=\"track\">--</span></div>"
+           "<button id=\"rec-btn\" onclick=\"toggleRecording()\" "
+             "style=\"width:100%;padding:12px;font-size:1.1em;margin-top:8px\">"
+             "Loading...</button>"
            "</div>"
 
            // Sessions card
@@ -718,6 +829,14 @@ static String build_body_section() {
              "<input id=\"s-rate\" type=\"number\" min=\"1\" max=\"25\"></div>"
            "<button onclick=\"saveSettings()\">Save Settings</button>"
            "<div id=\"msg\">Saved!</div>"
+           "<p style=\"color:#aaa;font-size:12px;margin-top:8px\">"
+             "WiFi\xe5\x90\x8d\xe7\xa7\xb0\xe5\x92\x8c\xe5\xaf\x86\xe7\xa0\x81"
+             "\xe4\xbf\xae\xe6\x94\xb9\xe5\x90\x8e\xe9\x9c\x80\xe9\x87\x8d\xe5\x90\xaf"
+             "\xe7\x94\x9f\xe6\x95\x88\xe3\x80\x82"
+             "\xe4\xba\xae\xe5\xba\xa6\xe7\xab\x8b\xe5\x8d\xb3\xe7\x94\x9f\xe6\x95\x88\xe3\x80\x82"
+             "GPS\xe9\x87\x87\xe6\xa0\xb7\xe7\x8e\x87\xe4\xbf\xae\xe6\x94\xb9\xe5\x90\x8e"
+             "\xe9\x9c\x80\xe9\x87\x8d\xe5\x90\xaf\xe7\x94\x9f\xe6\x95\x88\xe3\x80\x82"
+           "</p>"
            "</div>"
 
            "</body>";
@@ -739,6 +858,7 @@ static String build_script_section() {
                "$('best').textContent=d.best_lap_ms>0?"
                  "(d.best_lap_ms/1000).toFixed(3)+'s':'--';"
                "$('track').textContent=d.track||'None';"
+               "_isRec=d.recording;updateRecBtn();"
              "}).catch(()=>{})}"
 
            // Load sessions
@@ -761,7 +881,21 @@ static String build_script_section() {
                  "ul.innerHTML='<li>No tracks</li>';return}"
                "d.tracks.forEach(t=>{"
                  "let li=document.createElement('li');"
-                 "li.textContent=t.name+' ('+t.id+')';"
+                 "li.style.display='flex';li.style.justifyContent='space-between';"
+                 "li.style.alignItems='center';"
+                 "let sp=document.createElement('span');"
+                 "sp.textContent=t.name+' ('+t.id+')';"
+                 "let bx=document.createElement('span');"
+                 "let sb=document.createElement('button');"
+                 "sb.textContent='\\u9009\\u4e3a\\u5f53\\u524d';"
+                 "sb.style.cssText='padding:4px 8px;margin:0 4px;font-size:0.8em';"
+                 "sb.onclick=function(){selectTrack(t.id)};"
+                 "let db=document.createElement('button');"
+                 "db.textContent='\\u5220\\u9664';"
+                 "db.style.cssText='padding:4px 8px;font-size:0.8em;background:#f44';"
+                 "db.onclick=function(){deleteTrack(t.id,t.name)};"
+                 "bx.appendChild(sb);bx.appendChild(db);"
+                 "li.appendChild(sp);li.appendChild(bx);"
                  "ul.appendChild(li)})"
              "}).catch(()=>{})}"
 
@@ -799,6 +933,42 @@ static String build_script_section() {
                "if(d.ok){let m=$('msg');m.style.display='block';"
                  "setTimeout(()=>m.style.display='none',2000)}"
              "}).catch(()=>{})}"
+
+           // Select track
+           "function selectTrack(id){"
+             "fetch('/api/tracks/select',{method:'POST',"
+               "headers:{'Content-Type':'application/json'},"
+               "body:JSON.stringify({id:id})})"
+             ".then(r=>r.json()).then(d=>{"
+               "if(d.ok){refreshStatus();loadTracks()}"
+             "}).catch(()=>{})}"
+
+           // Delete track
+           "function deleteTrack(id,name){"
+             "if(!confirm('\\u786e\\u8ba4\\u5220\\u9664\\u8d5b\\u9053: '+name+'?'))return;"
+             "fetch('/api/tracks/delete',{method:'POST',"
+               "headers:{'Content-Type':'application/json'},"
+               "body:JSON.stringify({id:id})})"
+             ".then(r=>r.json()).then(d=>{"
+               "if(d.ok)loadTracks()"
+             "}).catch(()=>{})}"
+
+           // Toggle recording
+           "var _isRec=false;"
+           "function toggleRecording(){"
+             "let act=_isRec?'stop':'start';"
+             "fetch('/api/recording',{method:'POST',"
+               "headers:{'Content-Type':'application/json'},"
+               "body:JSON.stringify({action:act})})"
+             ".then(r=>r.json()).then(d=>{"
+               "if(d.ok){_isRec=d.recording;updateRecBtn()}"
+             "}).catch(()=>{})}"
+           "function updateRecBtn(){"
+             "let b=$('rec-btn');"
+             "if(_isRec){b.textContent='\\u505c\\u6b62\\u5f55\\u5236';"
+               "b.style.background='#f44'}"
+             "else{b.textContent='\\u5f00\\u59cb\\u5f55\\u5236';"
+               "b.style.background='#0af'}}"
 
            // Init
            "refreshStatus();loadSessions();loadTracks();loadSettings();"

@@ -22,8 +22,8 @@ AppConfig app_config;
 static const char* CONFIG_DIR  = "/config";
 static const char* CONFIG_PATH = "/config/settings.json";
 
-static const char* DEFAULT_SSID = "GPS-LapTimer";
-static const char* DEFAULT_PASS = "12345678";
+static const char* DEFAULT_SSID = "KartGPS";
+static const char* DEFAULT_PASS = "kartgps123";
 static const uint8_t DEFAULT_BRIGHTNESS  = 200;
 static const uint8_t DEFAULT_GPS_RATE_HZ = 25;
 

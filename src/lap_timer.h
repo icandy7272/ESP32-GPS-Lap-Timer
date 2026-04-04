@@ -43,6 +43,11 @@ void lap_timer_task(void* param);
 /// Does NOT stop the task or touch queues.
 void lap_timer_reset(void);
 
+/// Change the active track at runtime.
+/// Copies the track definition and resets the lap timer state.
+/// Thread-safe: called from wifi task on Core 1.
+void lap_timer_set_track(const TrackDefinition* track);
+
 // --- Math Helpers (exposed for unit testing) ------------------
 
 /// Haversine distance in metres between two WGS84 points.

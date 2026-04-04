@@ -563,6 +563,19 @@ void lap_timer_reset(void) {
     delta_init();
 }
 
+void lap_timer_set_track(const TrackDefinition* track) {
+    if (!track) {
+        return;
+    }
+    // Copy track into main.cpp's active_track (which s_track points to)
+    extern TrackDefinition active_track;
+    active_track = *track;
+    // s_track already points to &active_track, so it picks up the new data.
+    // Reset state for the new track.
+    lap_timer_reset();
+    Serial.printf("[lap_timer] Track changed to: %s\n", track->name);
+}
+
 void lap_timer_task(void* param) {
     (void)param;
 
