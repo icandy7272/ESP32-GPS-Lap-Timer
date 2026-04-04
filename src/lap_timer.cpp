@@ -489,11 +489,13 @@ static void update_session_delta(const GpsPoint* curr) {
         // Write delta into shared SessionState
         // The session task owns the full SessionState; we only touch delta fields
         extern SessionState session_state;
-        session_state.delta_ms      = delta_ms;
-        session_state.delta_valid   = valid;
-        session_state.off_track     = delta_is_off_track();
-        session_state.gps_fix_ok    = curr->fix_3d;
-        session_state.gps_satellites = curr->satellites;
+        session_state.delta_ms            = delta_ms;
+        session_state.delta_valid         = valid;
+        session_state.off_track           = delta_is_off_track();
+        session_state.gps_fix_ok          = curr->fix_3d;
+        session_state.gps_satellites      = curr->satellites;
+        session_state.speed_kmh           = curr->speed_kmh;
+        session_state.current_lap_start_us = s_lap_start_us;
         xSemaphoreGive(s_session_mutex);
     }
     // If mutex times out (2ms), skip this update. Non-critical.
@@ -523,6 +525,9 @@ void lap_timer_init(QueueHandle_t    gps_q,
     // Allocate lap point buffer in PSRAM
     if (s_lap_points == nullptr) {
         s_lap_points = (GpsPoint*)ps_malloc(sizeof(GpsPoint) * MAX_LAP_POINTS);
+        if (s_lap_points == nullptr) {
+            Serial.println("[lap_timer] WARN: PSRAM alloc failed — delta reference disabled");
+        }
     }
 
     // Initialise arming: start/finish (index 0) + sector lines

@@ -7,11 +7,13 @@
 
 #include "display.h"
 #include "session.h"
+#include "config.h"
 #include "types.h"
 #include "pins.h"
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
+#include <esp_timer.h>
 
 // ============================================================
 // Layout constants (320x240 landscape)
@@ -243,14 +245,13 @@ static void draw_driving_current_time(const SessionState& st) {
     s_tft.setTextDatum(TR_DATUM);
     s_tft.setTextColor(TFT_WHITE, delta_background_colour(st));
 
-    // Show current lap elapsed time (estimated from millis delta).
-    // In production, session.cpp provides current_lap_elapsed_ms.
-    // For now show the current lap number's context.
+    // Real elapsed time from lap start (not synthetic best+delta)
     char time_buf[12];
-    format_lap_time(time_buf, sizeof(time_buf),
-                    st.best_lap_time_ms >= 0
-                        ? st.best_lap_time_ms + st.delta_ms
-                        : -1);
+    int32_t elapsed_ms = -1;
+    if (st.current_lap_start_us > 0) {
+        elapsed_ms = (int32_t)((esp_timer_get_time() - st.current_lap_start_us) / 1000);
+    }
+    format_lap_time(time_buf, sizeof(time_buf), elapsed_ms);
     s_tft.drawString(time_buf, SCREEN_W - 4, 4, 2);
 }
 
@@ -512,7 +513,9 @@ static void render_frame(bool screen_changed) {
 static void init_backlight() {
     ledcSetup(0, 1000, 8);            // channel 0, 1 kHz, 8-bit
     ledcAttachPin(PIN_TFT_BL, 0);     // attach GPIO to channel 0
-    ledcWrite(0, 255);                 // full brightness
+    // Use configured brightness (0-255), default 200
+    extern AppConfig app_config;
+    ledcWrite(0, app_config.brightness);
 }
 
 static void init_tft() {

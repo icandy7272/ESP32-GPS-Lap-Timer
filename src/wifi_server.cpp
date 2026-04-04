@@ -301,6 +301,36 @@ static String extract_track_name(File& f) {
 // POST /api/tracks — create new track definition
 // ============================================================
 
+/// Parse a float from JSON body by key name. Returns 0.0 if not found.
+static double json_extract_double(const char* json, const char* key) {
+    char needle[64];
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    const char* p = strstr(json, needle);
+    if (!p) return 0.0;
+    p = strchr(p + strlen(needle), ':');
+    if (!p) return 0.0;
+    return strtod(p + 1, nullptr);
+}
+
+/// Extract a string from JSON by key. Writes to out, returns false if missing.
+static bool json_extract_str(const char* json, const char* key,
+                             char* out, int out_len) {
+    char needle[64];
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    const char* p = strstr(json, needle);
+    if (!p) return false;
+    p = strchr(p + strlen(needle), '"');
+    if (!p) return false;
+    p++;  // skip opening quote
+    const char* end = strchr(p, '"');
+    if (!end) return false;
+    int len = end - p;
+    if (len >= out_len) len = out_len - 1;
+    memcpy(out, p, len);
+    out[len] = '\0';
+    return true;
+}
+
 static void handle_api_tracks_post() {
     if (!server.hasArg("plain")) {
         server.send(400, "application/json", "{\"error\":\"no body\"}");
@@ -313,23 +343,39 @@ static void handle_api_tracks_post() {
         return;
     }
 
-    // Determine next track ID by counting existing files
-    int next_id = find_next_track_id();
+    const char* json = body.c_str();
 
-    char filename[48];
-    snprintf(filename, sizeof(filename), "/tracks/track_%03d.json", next_id);
+    // Build a TrackDefinition from the web form JSON
+    TrackDefinition track = {};
 
-    bool ok = write_track_file(filename, body);
-    if (ok) {
-        // Refresh in-memory track list so new track is available immediately
-        track_init();
+    if (!json_extract_str(json, "name", track.name, sizeof(track.name))) {
+        server.send(400, "application/json", "{\"error\":\"missing name\"}");
+        return;
+    }
 
-        char resp[96];
-        snprintf(resp, sizeof(resp),
-                 "{\"ok\":true,\"id\":\"track_%03d\"}", next_id);
-        server.send(201, "application/json", resp);
+    // Start/finish line (required)
+    track.start_finish.lat1_deg = json_extract_double(json, "sf_lat1");
+    track.start_finish.lon1_deg = json_extract_double(json, "sf_lon1");
+    track.start_finish.lat2_deg = json_extract_double(json, "sf_lat2");
+    track.start_finish.lon2_deg = json_extract_double(json, "sf_lon2");
+    track.start_finish.valid_heading_deg = (float)json_extract_double(json, "sf_heading");
+
+    // Validate: start/finish must have non-zero coords
+    if (track.start_finish.lat1_deg == 0.0 && track.start_finish.lon1_deg == 0.0) {
+        server.send(400, "application/json", "{\"error\":\"missing start/finish coordinates\"}");
+        return;
+    }
+
+    // Compute center from start/finish midpoint
+    track.center_lat_deg = (track.start_finish.lat1_deg + track.start_finish.lat2_deg) / 2.0;
+    track.center_lon_deg = (track.start_finish.lon1_deg + track.start_finish.lon2_deg) / 2.0;
+    track.sector_count = 1;  // just start/finish, no sector splits from web form
+
+    // Save through track module (validates, generates ID, writes proper JSON)
+    if (track_save(&track)) {
+        server.send(201, "application/json", "{\"ok\":true}");
     } else {
-        server.send(500, "application/json", "{\"error\":\"write failed\"}");
+        server.send(500, "application/json", "{\"error\":\"save failed\"}");
     }
 }
 
