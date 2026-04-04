@@ -7,6 +7,7 @@
 
 #include "session.h"
 #include "storage.h"
+#include "lap_timer.h"
 
 // --- Shared globals ---
 
@@ -76,6 +77,7 @@ void session_start_recording(const char* track_name)
     }
 
     reset_session_state();
+    lap_timer_reset();  // clear arming, history, best lap, delta reference
 
     xSemaphoreTake(session_mutex, portMAX_DELAY);
     session_state.is_recording = true;
@@ -84,7 +86,9 @@ void session_start_recording(const char* track_name)
     session_state.track_name[sizeof(session_state.track_name) - 1] = '\0';
     xSemaphoreGive(session_mutex);
 
-    storage_start_session(track_name);
+    if (!storage_start_session(track_name)) {
+        Serial.println("[session] SD failed — recording without storage");
+    }
     s_phase = SESSION_RECORDING;
 
     Serial.println("[session] recording started");

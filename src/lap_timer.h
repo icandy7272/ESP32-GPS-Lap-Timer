@@ -38,6 +38,11 @@ void lap_timer_init(QueueHandle_t    gps_q,
 ///              8192, NULL, 20, NULL, 0);
 void lap_timer_task(void* param);
 
+/// Reset all lap timer state for a new session.
+/// Clears history, arming, debounce, lap points, best lap.
+/// Does NOT stop the task or touch queues.
+void lap_timer_reset(void);
+
 // --- Math Helpers (exposed for unit testing) ------------------
 
 /// Haversine distance in metres between two WGS84 points.

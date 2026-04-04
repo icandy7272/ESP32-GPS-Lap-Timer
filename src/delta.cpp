@@ -336,6 +336,14 @@ bool delta_is_valid(void) {
     return s_has_reference && !s_off_track;
 }
 
+bool delta_has_reference(void) {
+    return s_has_reference;
+}
+
+bool delta_is_off_track(void) {
+    return s_off_track;
+}
+
 void delta_reset_elapsed(void) {
     s_off_track       = false;
     s_frozen_delta_ms = 0;

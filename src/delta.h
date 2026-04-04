@@ -36,6 +36,12 @@ int32_t delta_calculate(const GpsPoint* current);
 /// Returns false if off-track (>30m from reference) or no reference set.
 bool delta_is_valid(void);
 
+/// Returns true if a reference lap has been set (even if currently off-track).
+bool delta_has_reference(void);
+
+/// Returns true if currently off-track (lateral distance > 30m).
+bool delta_is_off_track(void);
+
 /// Reset delta state (e.g., at lap start).
 /// Clears elapsed time tracking but keeps reference polyline.
 void delta_reset_elapsed(void);

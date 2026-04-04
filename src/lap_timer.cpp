@@ -293,14 +293,20 @@ static void reset_arm(int line_idx) {
 
 // --- Debounce Validation --------------------------------------
 
-/// Start debounce: record tentative crossing time, begin countdown.
-static void debounce_start(int line_idx, int64_t crossing_us) {
-    s_debounce_active[line_idx]     = true;
-    s_debounce_remaining[line_idx]  = DEBOUNCE_SAMPLES;
-    s_debounce_crossing_us[line_idx] = crossing_us;
+/// Start debounce: record tentative crossing time and the expected side.
+static double s_debounce_expected_sign[MAX_SECTORS];
+
+static void debounce_start(int line_idx, int64_t crossing_us,
+                           double crossed_side_sign) {
+    s_debounce_active[line_idx]        = true;
+    s_debounce_remaining[line_idx]     = DEBOUNCE_SAMPLES;
+    s_debounce_crossing_us[line_idx]   = crossing_us;
+    s_debounce_expected_sign[line_idx] = crossed_side_sign;
 }
 
 /// Feed a new sample into debounce. Returns true when confirmed.
+/// Checks that the point is still on the crossed side of the line.
+/// If it bounced back, cancels the tentative crossing.
 static bool debounce_feed(int line_idx,
                           const GpsPoint* curr,
                           const DetectionLine* line) {
@@ -308,12 +314,15 @@ static bool debounce_feed(int line_idx,
         return false;
     }
 
-    // Verify the current point is still on the "crossed" side of the line.
-    // A reversal (back to original side) would indicate a false detection.
-    // For now we use a simple countdown: consecutive samples post-crossing
-    // confirm the crossing. A future refinement could check sign reversal.
-    (void)curr;
-    (void)line;
+    // Check current point is still on the expected side
+    double current_sign = side_of_line(curr->lat_deg, curr->lon_deg, line);
+    bool same_side = (current_sign * s_debounce_expected_sign[line_idx]) > 0;
+
+    if (!same_side) {
+        // Bounced back — false crossing, cancel
+        s_debounce_active[line_idx] = false;
+        return false;
+    }
 
     s_debounce_remaining[line_idx]--;
     if (s_debounce_remaining[line_idx] <= 0) {
@@ -403,8 +412,11 @@ static void process_line(int line_idx, const DetectionLine* line,
     // Crossing detected: compute precise time immediately
     int64_t crossing_us = compute_crossing_time(line);
 
-    // Start debounce validation
-    debounce_start(line_idx, crossing_us);
+    // Record which side the current point is on (the "crossed-to" side)
+    double crossed_side = side_of_line(curr->lat_deg, curr->lon_deg, line);
+
+    // Start debounce validation — must stay on this side
+    debounce_start(line_idx, crossing_us, crossed_side);
 }
 
 // --- Crossing Handlers ----------------------------------------
@@ -477,9 +489,11 @@ static void update_session_delta(const GpsPoint* curr) {
         // Write delta into shared SessionState
         // The session task owns the full SessionState; we only touch delta fields
         extern SessionState session_state;
-        session_state.delta_ms    = delta_ms;
-        session_state.delta_valid = valid;
-        session_state.off_track   = !valid;  // off_track whenever delta invalid (includes lateral >30m)
+        session_state.delta_ms      = delta_ms;
+        session_state.delta_valid   = valid;
+        session_state.off_track     = delta_is_off_track();
+        session_state.gps_fix_ok    = curr->fix_3d;
+        session_state.gps_satellites = curr->satellites;
         xSemaphoreGive(s_session_mutex);
     }
     // If mutex times out (2ms), skip this update. Non-critical.
@@ -519,6 +533,28 @@ void lap_timer_init(QueueHandle_t    gps_q,
         s_debounce_remaining[i]  = 0;
         s_debounce_crossing_us[i] = 0;
     }
+}
+
+void lap_timer_reset(void) {
+    s_history_count    = 0;
+    s_current_sector   = 0;
+    s_lap_start_us     = 0;
+    s_sector_start_us  = 0;
+    s_best_lap_time_ms = -1;
+    s_first_crossing   = true;
+    s_lap_point_count  = 0;
+
+    for (int i = 0; i < MAX_SECTORS; i++) {
+        s_arm_distance[i]        = 0.0;
+        s_arm_ready[i]           = true;
+        s_debounce_active[i]     = false;
+        s_debounce_remaining[i]  = 0;
+        s_debounce_crossing_us[i] = 0;
+    }
+
+    // Clear delta reference for fresh session
+    delta_free_reference();
+    delta_init();
 }
 
 void lap_timer_task(void* param) {

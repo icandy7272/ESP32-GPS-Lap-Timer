@@ -198,13 +198,27 @@ void storage_end_session() {
     build_final_path(final_path, sizeof(final_path));
 
     xSemaphoreTake(spi_mutex, portMAX_DELAY);
-    sd.rename(TMP_FILENAME, final_path);
+    // Check for collision: if final path already exists, append suffix
+    if (sd.exists(final_path)) {
+        // Rare: same-second session. Add _2 suffix before .vbo
+        char* dot = strrchr(final_path, '.');
+        if (dot) {
+            char tmp[PATH_BUF_LEN];
+            *dot = '\0';
+            snprintf(tmp, sizeof(tmp), "%s_2.vbo", final_path);
+            strncpy(final_path, tmp, PATH_BUF_LEN - 1);
+        }
+    }
+    bool renamed = sd.rename(TMP_FILENAME, final_path);
     xSemaphoreGive(spi_mutex);
 
-    sync_directory(SESSIONS_DIR);
-
-    Serial.printf("[storage] session saved: %s (%u bytes)\n",
-                  final_path, bytes_written);
+    if (renamed) {
+        sync_directory(SESSIONS_DIR);
+        Serial.printf("[storage] session saved: %s (%u bytes)\n",
+                      final_path, bytes_written);
+    } else {
+        Serial.printf("[storage] WARN: rename failed, data in %s\n", TMP_FILENAME);
+    }
 }
 
 // ------------------------------------------------------------
