@@ -13,7 +13,12 @@
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
+#include <SdFat.h>
 #include <esp_timer.h>
+
+// ---- External shared resources for SD free space query ------
+extern SdFat sd;
+extern SemaphoreHandle_t spi_mutex;
 
 // ============================================================
 // Layout constants (320x240 landscape)
@@ -89,6 +94,11 @@ static SessionState s_prev_state;      // previous frame snapshot for dirty dete
 static DirtyFlags   s_dirty;
 
 static int s_lap_list_scroll = 0;      // scroll offset for lap list
+
+// Cached SD free space (refreshed periodically, outside SPI render lock)
+static float    s_sd_free_gb     = -1.0f; // negative = not yet queried
+static uint32_t s_sd_query_ms    = 0;
+static constexpr uint32_t SD_QUERY_INTERVAL_MS = 10000; // refresh every 10s
 
 // Firmware version (displayed on status screen)
 static const char* FW_VERSION = "v1.0.0";
@@ -215,15 +225,28 @@ static bool handle_button_events() {
     bool screen_changed = false;
 
     while (xQueueReceive(s_btn_queue, &evt, 0) == pdTRUE) {
-        if (evt.event_type == BUTTON_SHORT_PRESS &&
-            evt.button_id == BUTTON_SECTOR &&
-            !s_screen_locked) {
-            uint8_t next = (static_cast<uint8_t>(s_current_screen) + 1)
-                           % SCREEN_COUNT;
-            s_current_screen = static_cast<ScreenId>(next);
-            s_lap_list_scroll = 0;
-            screen_changed = true;
+        if (evt.event_type != BUTTON_SHORT_PRESS ||
+            evt.button_id != BUTTON_SECTOR ||
+            s_screen_locked) {
+            continue;
         }
+
+        // On lap list screen: scroll within list instead of switching
+        if (s_current_screen == SCREEN_LAP_LIST) {
+            s_lap_list_scroll += LAPS_PER_PAGE;
+            if (s_lap_list_scroll >= s_cached_state.lap_count) {
+                s_lap_list_scroll = 0;
+            }
+            screen_changed = true;
+            continue;
+        }
+
+        // Other screens: cycle to next screen
+        uint8_t next = (static_cast<uint8_t>(s_current_screen) + 1)
+                       % SCREEN_COUNT;
+        s_current_screen = static_cast<ScreenId>(next);
+        s_lap_list_scroll = 0;
+        screen_changed = true;
     }
     return screen_changed;
 }
@@ -374,8 +397,24 @@ static void draw_status_screen(const SessionState& st) {
     s_tft.drawString(lap_line, 8, y, 2);
     y += LINE_H;
 
-    // WiFi AP placeholder
-    s_tft.drawString("WiFi: KartGPS AP", 8, y, 2);
+    // WiFi SSID from config
+    char wifi_line[48];
+    snprintf(wifi_line, sizeof(wifi_line), "WiFi: %s", app_config.wifi_ssid);
+    s_tft.drawString(wifi_line, 8, y, 2);
+    y += LINE_H;
+
+    // SD free space (query under spi_mutex with short timeout)
+    char sd_line[32];
+    if (xSemaphoreTake(spi_mutex, pdMS_TO_TICKS(SPI_TIMEOUT_MS)) == pdTRUE) {
+        uint64_t free_bytes = (uint64_t)sd.vol()->freeClusterCount()
+                            * (uint64_t)sd.vol()->bytesPerCluster();
+        xSemaphoreGive(spi_mutex);
+        float free_gb = (float)(free_bytes / (1024ULL * 1024ULL)) / 1024.0f;
+        snprintf(sd_line, sizeof(sd_line), "SD: %.1f GB free", (double)free_gb);
+    } else {
+        snprintf(sd_line, sizeof(sd_line), "SD: --");
+    }
+    s_tft.drawString(sd_line, 8, y, 2);
     y += LINE_H;
 
     // Uptime

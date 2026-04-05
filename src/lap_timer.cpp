@@ -612,18 +612,35 @@ void lap_timer_task(void* param) {
 
         // One-time track auto-detect after first 3D fix
         if (!auto_detected && curr.fix_3d) {
+            // Count candidates within 5km for diagnostics
+            int candidates = 0;
+            for (int ti = 0; ti < track_count(); ti++) {
+                const TrackDefinition* t = track_get(ti);
+                if (t) {
+                    double d = haversine_m(curr.lat_deg, curr.lon_deg,
+                                           t->center_lat_deg, t->center_lon_deg);
+                    if (d < 5000.0) candidates++;
+                }
+            }
+
             const TrackDefinition* detected =
                 track_auto_detect(curr.lat_deg, curr.lon_deg);
-            if (detected != nullptr) {
-                s_track = detected;
-                Serial.printf("[lap_timer] Auto-detected: %s\n", detected->name);
-                if (xSemaphoreTake(s_session_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-                    extern SessionState session_state;
+            if (xSemaphoreTake(s_session_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                extern SessionState session_state;
+                if (detected != nullptr) {
+                    s_track = detected;
                     strncpy(session_state.track_name, detected->name,
                             sizeof(session_state.track_name) - 1);
                     session_state.track_name[sizeof(session_state.track_name) - 1] = '\0';
-                    xSemaphoreGive(s_session_mutex);
+                    Serial.printf("[lap_timer] Auto-detected: %s (%d candidate(s) within 5km)\n",
+                                  detected->name, candidates);
+                } else {
+                    strncpy(session_state.track_name, "No Track",
+                            sizeof(session_state.track_name) - 1);
+                    session_state.track_name[sizeof(session_state.track_name) - 1] = '\0';
+                    Serial.println("[lap_timer] WARN: No track within 5km — configure via phone");
                 }
+                xSemaphoreGive(s_session_mutex);
             }
             auto_detected = true;
         }

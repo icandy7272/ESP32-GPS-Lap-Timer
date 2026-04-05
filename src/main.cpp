@@ -64,6 +64,10 @@ static void print_boot_info() {
 
 // --- GPS boot polling: wait for fix, update screen each second ---
 
+// Stored boot GPS fix for track auto-detect after GPS acquisition
+static GpsPoint s_boot_fix;
+static bool     s_boot_fix_valid = false;
+
 static void boot_wait_for_gps(uint32_t timeout_ms) {
     uint32_t start = millis();
     int best_sats = 0;
@@ -75,6 +79,8 @@ static void boot_wait_for_gps(uint32_t timeout_ms) {
                 best_sats = pt.satellites;
             }
             if (pt.fix_3d) {
+                s_boot_fix = pt;
+                s_boot_fix_valid = true;
                 display_show_gps_search(pt.satellites);
                 Serial.printf("[BOOT] GPS fix acquired: %d sats\n",
                               pt.satellites);
@@ -149,6 +155,20 @@ void setup() {
     // lap_timer_task not yet started, so we're the sole queue consumer
     boot_wait_for_gps(30000);
     delay(500);
+
+    // --- Auto-detect track from GPS position ---
+    if (s_boot_fix_valid) {
+        const TrackDefinition* detected =
+            track_auto_detect(s_boot_fix.lat_deg, s_boot_fix.lon_deg);
+        if (detected) {
+            memcpy(&active_track, detected, sizeof(TrackDefinition));
+            Serial.printf("[BOOT] Auto-detected: %s\n", active_track.name);
+        } else if (active_track.name[0] == '\0') {
+            strncpy(active_track.name, "No Track", sizeof(active_track.name) - 1);
+            active_track.name[sizeof(active_track.name) - 1] = '\0';
+            Serial.println("[BOOT] No track within 5km");
+        }
+    }
 
     // --- NOW start lap_timer_task (after boot GPS wait is done) ---
     xTaskCreatePinnedToCore(lap_timer_task, "lap_timer", 8192,

@@ -57,8 +57,13 @@ void session_task(void* param)
     for (;;) {
         // Alternate polling: lap events first, then button events.
         if (xQueueReceive(s_lap_event_q, &lap_ev, QUEUE_POLL_TICKS) == pdTRUE) {
-            if (s_phase != SESSION_RECORDING) {
-                continue;  // ignore lap events when not recording
+            // Accept lap events when recording (either via button/web or auto-start)
+            if (s_phase != SESSION_RECORDING && !session_state.is_recording) {
+                continue;  // ignore lap events when truly not recording
+            }
+            // Sync s_phase if auto-start activated recording outside session_start_recording()
+            if (s_phase != SESSION_RECORDING && session_state.is_recording) {
+                s_phase = SESSION_RECORDING;
             }
             if (lap_ev.event_type == LAP_EVENT_FINISH) {
                 handle_lap_finish(&lap_ev);

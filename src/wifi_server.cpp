@@ -377,7 +377,45 @@ static void handle_api_tracks_post() {
     // Compute center from start/finish midpoint
     track.center_lat_deg = (track.start_finish.lat1_deg + track.start_finish.lat2_deg) / 2.0;
     track.center_lon_deg = (track.start_finish.lon1_deg + track.start_finish.lon2_deg) / 2.0;
-    track.sector_count = 1;  // just start/finish, no sector splits from web form
+
+    // Parse optional sectors array
+    int sector_lines = 0;
+    const char* arr = strstr(json, "\"sectors\"");
+    if (arr) {
+        const char* pos = strchr(arr, '[');
+        if (pos) {
+            pos++;
+            // Iterate up to 3 sector objects
+            for (int si = 0; si < MAX_SECTORS - 1 && sector_lines < MAX_SECTORS - 1; si++) {
+                const char* obj = strchr(pos, '{');
+                if (!obj) break;
+                const char* obj_end = strchr(obj, '}');
+                if (!obj_end) break;
+
+                // Extract into a temporary null-terminated block
+                int blen = (int)(obj_end - obj + 1);
+                if (blen > 0 && blen < 512) {
+                    char blk[512];
+                    memcpy(blk, obj, blen);
+                    blk[blen] = '\0';
+
+                    DetectionLine* sl = &track.sectors[sector_lines];
+                    sl->lat1_deg = json_extract_double(blk, "lat1");
+                    sl->lon1_deg = json_extract_double(blk, "lon1");
+                    sl->lat2_deg = json_extract_double(blk, "lat2");
+                    sl->lon2_deg = json_extract_double(blk, "lon2");
+                    sl->valid_heading_deg = (float)json_extract_double(blk, "heading");
+
+                    // Only count if coords are non-zero
+                    if (sl->lat1_deg != 0.0 || sl->lon1_deg != 0.0) {
+                        sector_lines++;
+                    }
+                }
+                pos = obj_end + 1;
+            }
+        }
+    }
+    track.sector_count = sector_lines + 1;  // split lines + start/finish
 
     // Save through track module (validates, generates ID, writes proper JSON)
     if (track_save(&track)) {
@@ -392,6 +430,13 @@ static void handle_api_tracks_post() {
 // ============================================================
 
 static void handle_api_tracks_select() {
+    // Block track switch during recording to prevent timing/export inconsistency
+    if (session_state.is_recording) {
+        server.send(409, "application/json",
+                    "{\"error\":\"cannot switch track during recording\"}");
+        return;
+    }
+
     if (!server.hasArg("plain")) {
         server.send(400, "application/json", "{\"error\":\"no body\"}");
         return;
@@ -807,12 +852,20 @@ static String build_body_section() {
            "<h2>Tracks</h2>"
            "<ul id=\"tracks\"><li>Loading...</li></ul>"
            "<h2 style=\"margin-top:12px\">Add Track</h2>"
-           "<input id=\"tname\" placeholder=\"\xe8\xb5\x9b\xe9\x81\x93\xe5\x90\x8d\xe7\xa7\xb0 (Track name)\">"
-           "<input id=\"tlat1\" placeholder=\"\xe8\xb5\xb7\xe7\xbb\x88\xe7\xba\xbf\xe5\x9d\x90\xe6\xa0\x871 \xe7\xba\xac\xe5\xba\xa6 (SF lat1)\" type=\"number\" step=\"any\">"
-           "<input id=\"tlon1\" placeholder=\"\xe8\xb5\xb7\xe7\xbb\x88\xe7\xba\xbf\xe5\x9d\x90\xe6\xa0\x871 \xe7\xbb\x8f\xe5\xba\xa6 (SF lon1)\" type=\"number\" step=\"any\">"
-           "<input id=\"tlat2\" placeholder=\"\xe8\xb5\xb7\xe7\xbb\x88\xe7\xba\xbf\xe5\x9d\x90\xe6\xa0\x872 \xe7\xba\xac\xe5\xba\xa6 (SF lat2)\" type=\"number\" step=\"any\">"
-           "<input id=\"tlon2\" placeholder=\"\xe8\xb5\xb7\xe7\xbb\x88\xe7\xba\xbf\xe5\x9d\x90\xe6\xa0\x872 \xe7\xbb\x8f\xe5\xba\xa6 (SF lon2)\" type=\"number\" step=\"any\">"
-           "<input id=\"theading\" placeholder=\"\xe5\x90\x88\xe6\xb3\x95\xe7\xa9\xbf\xe8\xb6\x8a\xe6\x96\xb9\xe5\x90\x91 \xc2\xb0 (SF heading)\" type=\"number\" step=\"any\">"
+           "<input id=\"tname\" placeholder=\"Track name\">"
+           "<p style=\"color:#888;font-size:12px;margin:4px 0\">Start/Finish Line</p>"
+           "<input id=\"tlat1\" placeholder=\"SF lat1\" type=\"number\" step=\"any\">"
+           "<input id=\"tlon1\" placeholder=\"SF lon1\" type=\"number\" step=\"any\">"
+           "<input id=\"tlat2\" placeholder=\"SF lat2\" type=\"number\" step=\"any\">"
+           "<input id=\"tlon2\" placeholder=\"SF lon2\" type=\"number\" step=\"any\">"
+           "<input id=\"theading\" placeholder=\"SF heading (deg)\" type=\"number\" step=\"any\">"
+           "<div id=\"sectors-box\">"
+           "<p style=\"color:#888;font-size:12px;margin:8px 0 4px\">Sector Splits (optional, up to 3)</p>"
+           "<div id=\"sector-list\"></div>"
+           "<button type=\"button\" onclick=\"addSectorRow()\" "
+             "style=\"background:#334;font-size:0.8em;margin-top:4px\">"
+             "+ Add Sector Split</button>"
+           "</div>"
            "<button onclick=\"addTrack()\">Create Track</button>"
            "</div>"
 
@@ -899,12 +952,34 @@ static String build_script_section() {
                  "ul.appendChild(li)})"
              "}).catch(()=>{})}"
 
+           // Sector row management
+           "var _sectorCount=0;"
+           "function addSectorRow(){"
+             "if(_sectorCount>=3)return;"
+             "_sectorCount++;"
+             "var n=_sectorCount;"
+             "var d=document.createElement('div');"
+             "d.id='sec'+n;"
+             "d.innerHTML='<p style=\"color:#aaa;font-size:11px\">Split '+n+'</p>'"
+               "+'<input id=\"slat1_'+n+'\" placeholder=\"Sector '+n+' lat1\" type=\"number\" step=\"any\">'"
+               "+'<input id=\"slon1_'+n+'\" placeholder=\"Sector '+n+' lon1\" type=\"number\" step=\"any\">'"
+               "+'<input id=\"slat2_'+n+'\" placeholder=\"Sector '+n+' lat2\" type=\"number\" step=\"any\">'"
+               "+'<input id=\"slon2_'+n+'\" placeholder=\"Sector '+n+' lon2\" type=\"number\" step=\"any\">'"
+               "+'<input id=\"shd_'+n+'\" placeholder=\"Sector '+n+' heading\" type=\"number\" step=\"any\">';"
+             "$('sector-list').appendChild(d)}"
+
            // Add track
            "function addTrack(){"
+             "var secs=[];"
+             "for(var i=1;i<=_sectorCount;i++){"
+               "var la1=$('slat1_'+i),lo1=$('slon1_'+i);"
+               "var la2=$('slat2_'+i),lo2=$('slon2_'+i),hd=$('shd_'+i);"
+               "if(la1&&la1.value)secs.push({lat1:+la1.value,lon1:+lo1.value,"
+                 "lat2:+la2.value,lon2:+lo2.value,heading:+hd.value})}"
              "let b={name:$('tname').value,"
                "sf_lat1:+$('tlat1').value,sf_lon1:+$('tlon1').value,"
                "sf_lat2:+$('tlat2').value,sf_lon2:+$('tlon2').value,"
-               "sf_heading:+$('theading').value};"
+               "sf_heading:+$('theading').value,sectors:secs};"
              "fetch('/api/tracks',{method:'POST',"
                "headers:{'Content-Type':'application/json'},"
                "body:JSON.stringify(b)})"

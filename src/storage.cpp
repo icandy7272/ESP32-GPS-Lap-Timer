@@ -6,6 +6,7 @@
 // ============================================================
 
 #include "storage.h"
+#include "session.h"
 #include "types.h"
 #include "pins.h"
 #include "track.h"
@@ -62,6 +63,7 @@ static double   timestamp_us_to_secs_since_midnight(int64_t timestamp_us);
 static double   secs_to_hhmmss(double total_secs);
 static void     set_session_epoch(int64_t first_timestamp_us);
 static void     write_laptiming_lines();
+static void     write_session_metadata_json(const char* vbo_path);
 
 // Session-start epoch for monotonic VBO timestamps.
 static int64_t  session_epoch_us  = 0;
@@ -217,6 +219,8 @@ void storage_end_session() {
         sync_directory(SESSIONS_DIR);
         Serial.printf("[storage] session saved: %s (%u bytes)\n",
                       final_path, bytes_written);
+        // Write sidecar JSON with session metadata (non-critical)
+        write_session_metadata_json(final_path);
     } else {
         Serial.printf("[storage] WARN: rename failed, data in %s\n", TMP_FILENAME);
     }
@@ -550,6 +554,87 @@ static void write_laptiming_lines() {
     }
 
     vbo_file.write("\r\n", 2);
+}
+
+// ------------------------------------------------------------
+
+/// Write session metadata JSON sidecar alongside the VBO file.
+/// Non-critical — logs warning on failure.
+static void write_session_metadata_json(const char* vbo_path) {
+    // Build .json path from .vbo path
+    char json_path[PATH_BUF_LEN];
+    strncpy(json_path, vbo_path, sizeof(json_path) - 1);
+    json_path[sizeof(json_path) - 1] = '\0';
+    char* dot = strrchr(json_path, '.');
+    if (!dot) return;
+    strncpy(dot, ".json", sizeof(json_path) - (dot - json_path) - 1);
+
+    // Read session state under mutex
+    extern SemaphoreHandle_t session_mutex;
+    int      laps       = 0;
+    int32_t  best_ms    = -1;
+    int      best_num   = -1;
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        laps     = session_state.lap_count;
+        best_ms  = session_state.best_lap_time_ms;
+        best_num = session_state.best_lap_number;
+        xSemaphoreGive(session_mutex);
+    }
+
+    // Use session_start_ts for date/time fields
+    char date_str[11] = {0};  // "YYYY-MM-DD"
+    char time_str[9]  = {0};  // "HH:MM:SS"
+    if (strlen(session_start_ts) >= 15) {
+        snprintf(date_str, sizeof(date_str), "%.4s-%.2s-%.2s",
+                 session_start_ts, session_start_ts + 4, session_start_ts + 6);
+        snprintf(time_str, sizeof(time_str), "%.2s:%.2s:%.2s",
+                 session_start_ts + 9, session_start_ts + 11, session_start_ts + 13);
+    }
+
+    // Extract just the filename from vbo_path for the vbo_file field
+    const char* vbo_name = strrchr(vbo_path, '/');
+    vbo_name = vbo_name ? vbo_name + 1 : vbo_path;
+
+    // Format JSON
+    char buf[384];
+    int pos = snprintf(buf, sizeof(buf),
+        "{\n"
+        "  \"track\": \"%s\",\n"
+        "  \"date\": \"%s\",\n"
+        "  \"start_time\": \"%s\",\n"
+        "  \"laps\": %d,\n"
+        "  \"best_lap_ms\": %ld,\n"
+        "  \"best_lap_number\": %d,\n"
+        "  \"total_time_s\": %lu,\n"
+        "  \"vbo_file\": \"%s\"\n"
+        "}\n",
+        active_track_name,
+        date_str, time_str,
+        laps, (long)best_ms, best_num,
+        (unsigned long)(millis() / 1000),
+        vbo_name);
+
+    if (pos <= 0 || pos >= (int)sizeof(buf)) {
+        Serial.println("[storage] WARN: metadata JSON too large, skipped");
+        return;
+    }
+
+    xSemaphoreTake(spi_mutex, portMAX_DELAY);
+    FsFile jf;
+    bool ok = jf.open(json_path, O_WRONLY | O_CREAT | O_TRUNC);
+    if (ok) {
+        jf.write(buf, strlen(buf));
+        jf.flush();
+        jf.sync();
+        jf.close();
+    }
+    xSemaphoreGive(spi_mutex);
+
+    if (ok) {
+        Serial.printf("[storage] metadata written: %s\n", json_path);
+    } else {
+        Serial.printf("[storage] WARN: failed to write metadata %s\n", json_path);
+    }
 }
 
 // ------------------------------------------------------------
