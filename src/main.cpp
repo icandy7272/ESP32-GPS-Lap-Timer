@@ -148,6 +148,12 @@ void setup() {
     // --- Display init (TFT hardware) — must happen before boot screens ---
     display_init(btn_display_queue, spi_mutex, session_mutex);
 
+    // --- Recovery notification (before splash if session was salvaged) ---
+    if (storage_recovered) {
+        display_show_recovery();
+        delay(2000);
+    }
+
     // --- Boot screen 1: Splash ---
     display_show_splash();
     delay(1000);

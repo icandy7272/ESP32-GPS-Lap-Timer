@@ -339,6 +339,18 @@ static bool json_extract_str(const char* json, const char* key,
     return true;
 }
 
+static bool is_ascii_safe(const char* s) {
+    for (int i = 0; s[i]; i++) {
+        char c = s[i];
+        if (c < 0x20 || c > 0x7E) return false;
+        if (c == '"' || c == '\\' || c == '/' || c == ':' ||
+            c == '*' || c == '?' || c == '<' || c == '>' || c == '|') {
+            return false;
+        }
+    }
+    return true;
+}
+
 static void handle_api_tracks_post() {
     if (!server.hasArg("plain")) {
         server.send(400, "application/json", "{\"error\":\"no body\"}");
@@ -358,6 +370,11 @@ static void handle_api_tracks_post() {
 
     if (!json_extract_str(json, "name", track.name, sizeof(track.name))) {
         server.send(400, "application/json", "{\"error\":\"missing name\"}");
+        return;
+    }
+    if (!is_ascii_safe(track.name)) {
+        server.send(400, "application/json",
+                    "{\"error\":\"name contains invalid characters\"}");
         return;
     }
 
@@ -531,8 +548,15 @@ static void handle_api_recording() {
     if (strcmp(action, "start") == 0) {
         SessionState ss = read_session_state();
         session_start_recording(ss.track_name);
-        server.send(200, "application/json",
-                    "{\"ok\":true,\"recording\":true}");
+        // Verify recording actually started (storage may have failed)
+        SessionState after = read_session_state();
+        if (!after.is_recording) {
+            server.send(500, "application/json",
+                        "{\"ok\":false,\"error\":\"SD storage failed\"}");
+        } else {
+            server.send(200, "application/json",
+                        "{\"ok\":true,\"recording\":true}");
+        }
     } else if (strcmp(action, "stop") == 0) {
         session_stop_recording();
         server.send(200, "application/json",
@@ -692,12 +716,10 @@ static void handle_api_settings_get() {
     snprintf(buf, sizeof(buf),
              "{\"wifi_ssid\":\"%s\","
              "\"wifi_pass\":\"%s\","
-             "\"brightness\":%u,"
-             "\"gps_rate_hz\":%u}",
+             "\"brightness\":%u}",
              app_config.wifi_ssid,
              app_config.wifi_pass,
-             app_config.brightness,
-             app_config.gps_rate_hz);
+             app_config.brightness);
 
     server.send(200, "application/json", buf);
 }
@@ -742,9 +764,6 @@ static void apply_settings_from_json(const char* json) {
     int val = 0;
     if (extract_json_int(json, "brightness", &val)) {
         app_config.brightness = (uint8_t)constrain(val, 0, 255);
-    }
-    if (extract_json_int(json, "gps_rate_hz", &val)) {
-        app_config.gps_rate_hz = (uint8_t)constrain(val, 1, 25);
     }
 }
 
@@ -899,8 +918,6 @@ static String build_body_section() {
              "<input id=\"s-pass\" type=\"password\"></div>"
            "<div class=\"row\"><span class=\"label\">Brightness</span>"
              "<input id=\"s-bright\" type=\"number\" min=\"0\" max=\"255\"></div>"
-           "<div class=\"row\"><span class=\"label\">GPS Rate (Hz)</span>"
-             "<input id=\"s-rate\" type=\"number\" min=\"1\" max=\"25\"></div>"
            "<button onclick=\"saveSettings()\">Save Settings</button>"
            "<div id=\"msg\">Saved!</div>"
            "<p style=\"color:#aaa;font-size:12px;margin-top:8px\">"
@@ -908,8 +925,6 @@ static String build_body_section() {
              "\xe4\xbf\xae\xe6\x94\xb9\xe5\x90\x8e\xe9\x9c\x80\xe9\x87\x8d\xe5\x90\xaf"
              "\xe7\x94\x9f\xe6\x95\x88\xe3\x80\x82"
              "\xe4\xba\xae\xe5\xba\xa6\xe7\xab\x8b\xe5\x8d\xb3\xe7\x94\x9f\xe6\x95\x88\xe3\x80\x82"
-             "GPS\xe9\x87\x87\xe6\xa0\xb7\xe7\x8e\x87\xe4\xbf\xae\xe6\x94\xb9\xe5\x90\x8e"
-             "\xe9\x9c\x80\xe9\x87\x8d\xe5\x90\xaf\xe7\x94\x9f\xe6\x95\x88\xe3\x80\x82"
            "</p>"
            "</div>"
 
@@ -1012,16 +1027,14 @@ static String build_script_section() {
              "fetch('/api/settings').then(r=>r.json()).then(d=>{"
                "$('s-ssid').value=d.wifi_ssid;"
                "$('s-pass').value=d.wifi_pass;"
-               "$('s-bright').value=d.brightness;"
-               "$('s-rate').value=d.gps_rate_hz"
+               "$('s-bright').value=d.brightness"
              "}).catch(()=>{})}"
 
            // Save settings
            "function saveSettings(){"
              "let b={wifi_ssid:$('s-ssid').value,"
                "wifi_pass:$('s-pass').value,"
-               "brightness:+$('s-bright').value,"
-               "gps_rate_hz:+$('s-rate').value};"
+               "brightness:+$('s-bright').value};"
              "fetch('/api/settings',{method:'POST',"
                "headers:{'Content-Type':'application/json'},"
                "body:JSON.stringify(b)})"

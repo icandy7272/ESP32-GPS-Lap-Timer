@@ -32,4 +32,5 @@ void display_task(void* param);
 void display_show_splash();                     // "GPS Lap Timer v1.0"
 void display_show_gps_search(int sats);         // "GPS Searching... X sats"
 void display_show_track_found(const char* name); // "Track: XX"
+void display_show_recovery();                    // "Session Recovered" for 2s
 void display_show_ready();                       // "READY" in big green text

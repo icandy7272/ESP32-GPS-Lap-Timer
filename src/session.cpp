@@ -95,7 +95,11 @@ void session_start_recording(const char* track_name)
     xSemaphoreGive(session_mutex);
 
     if (!storage_start_session(track_name)) {
-        Serial.println("[session] SD failed — recording without storage");
+        Serial.println("[session] SD failed — cannot record");
+        xSemaphoreTake(session_mutex, portMAX_DELAY);
+        session_state.is_recording = false;
+        xSemaphoreGive(session_mutex);
+        return;
     }
     s_phase = SESSION_RECORDING;
 

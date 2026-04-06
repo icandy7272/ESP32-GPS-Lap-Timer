@@ -35,6 +35,10 @@ static const char* SESSIONS_DIR  = "sessions";
 static const char* TRACKS_DIR    = "tracks";
 static const char* TMP_FILENAME  = "_recording.vbo.tmp";
 
+// ---- Recovery flag (read by main.cpp after init) ------------
+
+bool storage_recovered = false;
+
 // ---- Module state -------------------------------------------
 
 SdFat    sd;  // non-static: shared with track.cpp via extern
@@ -380,6 +384,7 @@ static bool recover_tmp_file() {
         xSemaphoreGive(spi_mutex);
 
         sync_directory(SESSIONS_DIR);
+        storage_recovered = true;
         Serial.printf("[storage] recovered session: %s\n", recovery_name);
     }
 

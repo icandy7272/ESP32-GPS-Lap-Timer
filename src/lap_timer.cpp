@@ -445,7 +445,12 @@ static void handle_finish_crossing(int64_t crossing_us) {
             xSemaphoreTake(s_session_mutex, portMAX_DELAY);
             session_state.is_recording = true;
             xSemaphoreGive(s_session_mutex);
-            storage_start_session(tname);
+            if (!storage_start_session(tname)) {
+                xSemaphoreTake(s_session_mutex, portMAX_DELAY);
+                session_state.is_recording = false;
+                xSemaphoreGive(s_session_mutex);
+                Serial.println("[lap_timer] Auto-start failed — SD error");
+            }
         }
 
         emit_lap_event(LAP_EVENT_FINISH, 0, crossing_us);

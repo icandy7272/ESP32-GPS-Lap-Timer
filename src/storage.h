@@ -48,3 +48,6 @@ bool storage_get_session_path(const char* name, char* path, int path_len);
 // --- Status ---
 // Bytes written to current session (for display/diagnostics).
 uint32_t storage_get_bytes_written();
+
+// True if power-loss recovery renamed a .tmp file on init.
+extern bool storage_recovered;

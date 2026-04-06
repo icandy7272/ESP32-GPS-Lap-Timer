@@ -192,11 +192,16 @@ static DirtyFlags compute_dirty(const SessionState& cur,
 // Screen lock logic (lock to driving screen at speed)
 // ============================================================
 
+// Idle auto-switch: after 10s below 5 km/h, jump to lap list
+static constexpr uint32_t IDLE_SWITCH_MS = 10000;
+static uint32_t s_idle_start_ms = 0;
+
 static void update_screen_lock(float speed_kmh, uint32_t now_ms) {
     if (speed_kmh > SPEED_LOCK_THRESHOLD) {
         s_screen_locked   = true;
         s_below_threshold = false;
         s_slow_since_ms   = 0;
+        s_idle_start_ms   = 0;
         s_current_screen  = SCREEN_DRIVING;
         return;
     }
@@ -210,8 +215,18 @@ static void update_screen_lock(float speed_kmh, uint32_t now_ms) {
             (now_ms - s_slow_since_ms >= UNLOCK_HOLD_MS)) {
             s_screen_locked = false;
         }
+        // Auto-switch to lap list after sustained idle
+        if (s_idle_start_ms == 0) {
+            s_idle_start_ms = now_ms;
+        }
+        if ((now_ms - s_idle_start_ms) > IDLE_SWITCH_MS &&
+            s_current_screen == SCREEN_DRIVING) {
+            s_current_screen = SCREEN_LAP_LIST;
+            s_idle_start_ms = 0;
+        }
     } else {
         s_below_threshold = false;
+        s_idle_start_ms   = 0;
     }
 }
 
@@ -371,8 +386,8 @@ static void draw_status_screen(const SessionState& st) {
     s_tft.setTextDatum(TL_DATUM);
     s_tft.setTextColor(TFT_WHITE, TFT_BLACK);
 
-    int y = 8;
-    constexpr int LINE_H = 28;
+    int y = 4;
+    constexpr int LINE_H = 25;
 
     // GPS
     char gps_line[40];
@@ -421,6 +436,10 @@ static void draw_status_screen(const SessionState& st) {
         snprintf(sd_line, sizeof(sd_line), "SD: --");
     }
     s_tft.drawString(sd_line, 8, y, 2);
+    y += LINE_H;
+
+    // Battery (no IC in v1.0)
+    s_tft.drawString("Battery: N/A", 8, y, 2);
     y += LINE_H;
 
     // Uptime
@@ -633,6 +652,13 @@ void display_show_track_found(const char* name) {
     s_tft.drawString("Track:", SCREEN_W / 2, SCREEN_H / 2 - 20, 2);
     s_tft.setTextColor(TFT_WHITE, TFT_BLACK);
     s_tft.drawString(name, SCREEN_W / 2, SCREEN_H / 2 + 10, 4);
+}
+
+void display_show_recovery() {
+    s_tft.fillScreen(TFT_BLACK);
+    s_tft.setTextDatum(MC_DATUM);
+    s_tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+    s_tft.drawString("Session Recovered", SCREEN_W / 2, SCREEN_H / 2, 4);
 }
 
 void display_show_ready() {
