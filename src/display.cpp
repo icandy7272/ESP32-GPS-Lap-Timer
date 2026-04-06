@@ -16,9 +16,8 @@
 #include <SdFat.h>
 #include <esp_timer.h>
 
-// ---- External shared resources for SD free space query ------
+// ---- External shared resource for SD free space query -------
 extern SdFat sd;
-extern SemaphoreHandle_t spi_mutex;
 
 // ============================================================
 // Layout constants (320x240 landscape)
@@ -225,9 +224,20 @@ static bool handle_button_events() {
     bool screen_changed = false;
 
     while (xQueueReceive(s_btn_queue, &evt, 0) == pdTRUE) {
-        if (evt.event_type != BUTTON_SHORT_PRESS ||
-            evt.button_id != BUTTON_SECTOR ||
-            s_screen_locked) {
+        if (evt.button_id != BUTTON_SECTOR || s_screen_locked) {
+            continue;
+        }
+
+        // Long press on lap list: exit to next screen
+        if (evt.event_type == BUTTON_LONG_PRESS &&
+            s_current_screen == SCREEN_LAP_LIST) {
+            s_current_screen = SCREEN_DRIVING;
+            s_lap_list_scroll = 0;
+            screen_changed = true;
+            continue;
+        }
+
+        if (evt.event_type != BUTTON_SHORT_PRESS) {
             continue;
         }
 
@@ -403,14 +413,10 @@ static void draw_status_screen(const SessionState& st) {
     s_tft.drawString(wifi_line, 8, y, 2);
     y += LINE_H;
 
-    // SD free space (query under spi_mutex with short timeout)
+    // SD free space (from cached value, updated outside render lock)
     char sd_line[32];
-    if (xSemaphoreTake(spi_mutex, pdMS_TO_TICKS(SPI_TIMEOUT_MS)) == pdTRUE) {
-        uint64_t free_bytes = (uint64_t)sd.vol()->freeClusterCount()
-                            * (uint64_t)sd.vol()->bytesPerCluster();
-        xSemaphoreGive(spi_mutex);
-        float free_gb = (float)(free_bytes / (1024ULL * 1024ULL)) / 1024.0f;
-        snprintf(sd_line, sizeof(sd_line), "SD: %.1f GB free", (double)free_gb);
+    if (s_sd_free_gb >= 0.0f) {
+        snprintf(sd_line, sizeof(sd_line), "SD: %.1f GB free", (double)s_sd_free_gb);
     } else {
         snprintf(sd_line, sizeof(sd_line), "SD: --");
     }
@@ -660,11 +666,24 @@ void display_task(void* param) {
         bool screen_changed = handle_button_events() || first_frame;
         first_frame = false;
 
-        // 3. Update screen lock based on GPS speed
-        float speed_kmh = s_cached_state.speed_kmh;
-        update_screen_lock(speed_kmh, millis());
+        // 3. Refresh SD free space periodically (outside SPI render lock)
+        uint32_t now_ms = millis();
+        if (s_current_screen == SCREEN_STATUS &&
+            (now_ms - s_sd_query_ms >= SD_QUERY_INTERVAL_MS || s_sd_free_gb < 0)) {
+            if (xSemaphoreTake(s_spi_mtx, pdMS_TO_TICKS(SPI_TIMEOUT_MS)) == pdTRUE) {
+                uint64_t fb = (uint64_t)sd.vol()->freeClusterCount()
+                            * (uint64_t)sd.vol()->bytesPerCluster();
+                xSemaphoreGive(s_spi_mtx);
+                s_sd_free_gb = (float)(fb / (1024ULL * 1024ULL)) / 1024.0f;
+                s_sd_query_ms = now_ms;
+            }
+        }
 
-        // 4. Render the active screen
+        // 4. Update screen lock based on GPS speed
+        float speed_kmh = s_cached_state.speed_kmh;
+        update_screen_lock(speed_kmh, now_ms);
+
+        // 5. Render the active screen
         render_frame(screen_changed);
     }
 }
