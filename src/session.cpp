@@ -161,6 +161,13 @@ static void handle_lap_finish(const LapEvent* ev)
         s_current_sector = 0;
         xSemaphoreTake(session_mutex, portMAX_DELAY);
         session_state.current_lap = 1;
+        // Init sector times for the first in-progress lap
+        int first_idx = session_state.lap_count;
+        if (first_idx < MAX_LAPS_PER_SESSION) {
+            for (int i = 0; i < MAX_SECTORS; i++) {
+                session_state.laps[first_idx].sector_times_ms[i] = -1;
+            }
+        }
         xSemaphoreGive(session_mutex);
         return;
     }
@@ -178,23 +185,23 @@ static void handle_lap_finish(const LapEvent* ev)
 
     LapStatus status = classify_lap(lap_time_ms);
 
-    // Build lap record
+    // Build lap record — preserve sector times already written by
+    // handle_lap_sector() during this lap; only fill remaining slots.
     LapRecord* lap        = &session_state.laps[idx];
     lap->lap_number       = session_state.current_lap;
     lap->lap_time_ms      = lap_time_ms;
-    lap->sector_count     = 0;
     lap->status           = (uint8_t)status;
     lap->finish_timestamp_us = ev->crossing_us;
-
-    // Init sector times to incomplete
-    for (int i = 0; i < MAX_SECTORS; i++) {
-        lap->sector_times_ms[i] = -1;
-    }
 
     // Compute final sector time (from last sector start to finish line)
     lap->sector_times_ms[s_current_sector] =
         (int32_t)((ev->crossing_us - s_sector_start_us[s_current_sector]) / 1000);
     lap->sector_count = s_current_sector + 1;
+
+    // Mark any unused sector slots as incomplete
+    for (int i = lap->sector_count; i < MAX_SECTORS; i++) {
+        lap->sector_times_ms[i] = -1;
+    }
 
     session_state.lap_count++;
     session_state.current_lap++;
@@ -205,6 +212,14 @@ static void handle_lap_finish(const LapEvent* ev)
             lap_time_ms < session_state.best_lap_time_ms) {
             session_state.best_lap_number  = lap->lap_number;
             session_state.best_lap_time_ms = lap_time_ms;
+        }
+    }
+
+    // Init sector times for the next in-progress lap (still under mutex)
+    int next_idx = session_state.lap_count;
+    if (next_idx < MAX_LAPS_PER_SESSION) {
+        for (int i = 0; i < MAX_SECTORS; i++) {
+            session_state.laps[next_idx].sector_times_ms[i] = -1;
         }
     }
 

@@ -671,10 +671,14 @@ void display_task(void* param) {
         if (s_current_screen == SCREEN_STATUS &&
             (now_ms - s_sd_query_ms >= SD_QUERY_INTERVAL_MS || s_sd_free_gb < 0)) {
             if (xSemaphoreTake(s_spi_mtx, pdMS_TO_TICKS(SPI_TIMEOUT_MS)) == pdTRUE) {
-                uint64_t fb = (uint64_t)sd.vol()->freeClusterCount()
-                            * (uint64_t)sd.vol()->bytesPerCluster();
+                if (sd.vol() != nullptr) {
+                    uint64_t fb = (uint64_t)sd.vol()->freeClusterCount()
+                                * (uint64_t)sd.vol()->bytesPerCluster();
+                    s_sd_free_gb = (float)(fb / (1024ULL * 1024ULL)) / 1024.0f;
+                } else {
+                    s_sd_free_gb = -1.0f;  // SD not mounted
+                }
                 xSemaphoreGive(s_spi_mtx);
-                s_sd_free_gb = (float)(fb / (1024ULL * 1024ULL)) / 1024.0f;
                 s_sd_query_ms = now_ms;
             }
         }

@@ -489,7 +489,21 @@ static void handle_api_tracks_delete() {
         return;
     }
 
+    // Check if the deleted track is the currently active one
+    extern TrackDefinition active_track;
+    bool was_active = (strcmp(active_track.id, id) == 0);
+
     if (track_delete(id)) {
+        // If the active track was deleted, clear it and reset lap timer
+        if (was_active) {
+            memset(&active_track, 0, sizeof(TrackDefinition));
+            lap_timer_reset();
+            if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                strlcpy(session_state.track_name, "No Track",
+                        sizeof(session_state.track_name));
+                xSemaphoreGive(session_mutex);
+            }
+        }
         server.send(200, "application/json", "{\"ok\":true}");
     } else {
         server.send(404, "application/json", "{\"error\":\"track not found\"}");
@@ -635,24 +649,31 @@ static void stream_file_from_sd(const String& path,
     }
 
     size_t file_size = f.size();
+    xSemaphoreGive(spi_mutex);
+
     String disposition = "attachment; filename=" + filename;
 
     server.sendHeader("Content-Disposition", disposition);
     server.setContentLength(file_size);
     server.send(200, "application/octet-stream", "");
 
-    // Stream in chunks with rate limiting during recording
+    // Stream in chunks, releasing SPI between reads so storage_task
+    // can write VBO data without queue overflows during recording.
     uint8_t buf[FILE_CHUNK_SIZE];
-    while (f.available()) {
-        size_t n = f.read(buf, sizeof(buf));
+    while (true) {
+        xSemaphoreTake(spi_mutex, portMAX_DELAY);
+        size_t n = f.available() ? f.read(buf, sizeof(buf)) : 0;
+        xSemaphoreGive(spi_mutex);
+
         if (n == 0) { break; }
-        // VBO is text-based, safe to wrap in String
+
         String chunk;
         chunk.concat((const char*)buf, n);
         server.sendContent(chunk);
         vTaskDelay(pdMS_TO_TICKS(CHUNK_DELAY_MS));
     }
 
+    xSemaphoreTake(spi_mutex, portMAX_DELAY);
     f.close();
     xSemaphoreGive(spi_mutex);
 }

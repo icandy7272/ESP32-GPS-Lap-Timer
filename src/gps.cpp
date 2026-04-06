@@ -562,7 +562,7 @@ static bool uart_detect_nmea(int timeout_ms) {
 // ---- UART + UBX configuration ---------------------------------
 
 static void uart_init() {
-    Serial2.setRxBufferSize(512);
+    Serial2.setRxBufferSize(1024);  // 25Hz NMEA needs >= 1KB buffer
 
     // Derive rate from runtime config.
     uint8_t rate_hz = app_config.gps_rate_hz;

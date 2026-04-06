@@ -22,6 +22,7 @@
 #include "wifi_server.h"
 #include "config.h"
 #include "track.h"
+#include <SD.h>
 
 // --- Shared FreeRTOS primitives (created once here) ----------
 
@@ -118,6 +119,9 @@ void setup() {
     if (!storage_init()) {
         Serial.println("[BOOT] SD card init FAILED — running without storage");
     } else {
+        // Mount Arduino SD singleton (used by config_load and wifi_server)
+        // storage_init() mounts SdFat but not Arduino SD.
+        SD.begin(PIN_SD_CS);
         config_load();
         Serial.println("[BOOT] SD card OK, config loaded");
     }
