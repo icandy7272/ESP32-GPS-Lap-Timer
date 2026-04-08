@@ -5,6 +5,11 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const indexHtml = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const scenariosModule = require(path.join(root, "scenarios.js"));
+const webConsoleModule = require(path.join(root, "web_console.js"));
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 assert.match(indexHtml, /id="web-console-root"/);
 assert.match(indexHtml, /id="device-screen-root"/);
@@ -50,5 +55,25 @@ assert.equal(
   "ready-to-drive",
   'getScenarioById("missing") should fall back to ready-to-drive',
 );
+
+assert.equal(
+  typeof webConsoleModule.renderWebConsoleMarkup,
+  "function",
+  "web_console.js should export renderWebConsoleMarkup",
+);
+
+const recordingScenario = getScenarioById("recording");
+assert.ok(recordingScenario, "Expected recording scenario to exist");
+assert.ok(recordingScenario.sessions.length > 0, "recording scenario should include at least one session");
+assert.ok(recordingScenario.tracks.length > 0, "recording scenario should include at least one track");
+
+const markup = webConsoleModule.renderWebConsoleMarkup(recordingScenario);
+assert.match(markup, /Status/);
+assert.match(markup, /Sessions/);
+assert.match(markup, /Tracks/);
+assert.match(markup, /Settings/);
+assert.match(markup, /Start Recording|Stop Recording/);
+assert.match(markup, new RegExp(escapeRegExp(recordingScenario.sessions[0])));
+assert.match(markup, new RegExp(escapeRegExp(recordingScenario.tracks[0].name)));
 
 console.log("preview scaffold ok");

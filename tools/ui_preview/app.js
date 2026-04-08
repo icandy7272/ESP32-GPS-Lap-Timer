@@ -96,18 +96,29 @@
     controlsRoot.appendChild(buttonsWrap);
   }
 
+  function resolveWebConsoleRenderer() {
+    const api = window.UiPreviewWebConsole;
+    if (!api || typeof api.renderWebConsoleMarkup !== "function") {
+      return null;
+    }
+
+    return api.renderWebConsoleMarkup;
+  }
+
   function renderWebConsolePreview(activeScenario) {
     const webRoot = document.getElementById("web-console-root");
     if (!webRoot) {
       return;
     }
 
-    const renderer =
-      window.UiPreviewWebConsole && window.UiPreviewWebConsole.renderWebConsoleMarkup;
+    const renderer = resolveWebConsoleRenderer();
 
     if (typeof renderer === "function") {
-      webRoot.innerHTML = renderer(activeScenario);
-      return;
+      const markup = renderer(activeScenario);
+      if (typeof markup === "string" && markup.trim().length > 0) {
+        webRoot.innerHTML = markup;
+        return;
+      }
     }
 
     const gpsState = activeScenario.status && activeScenario.status.gps_fix ? "GPS fixed" : "GPS searching";
