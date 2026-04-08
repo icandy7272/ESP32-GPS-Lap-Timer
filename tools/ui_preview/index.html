@@ -2,41 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta
-      name="viewport"
-      content="width=device-width,initial-scale=1,shrink-to-fit=no"
-    />
+    <meta name="viewport" content="width=device-width,initial-scale=1,shrink-to-fit=no" />
     <title>UI Preview Workbench</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="preview-shell">
-      <header class="preview-header">
-        <div>
-          <p class="eyebrow">Preview Workbench</p>
-          <h1>UI Preview Workbench</h1>
-        </div>
-        <p class="preview-subtitle">
-          Stage web console frames, device screens, and scenario controls in one
-          neutral shell.
-        </p>
-      </header>
-
-      <main class="preview-panels">
-        <section id="web-console-root" class="panel">
-          <div class="panel-title">Web console</div>
-          <div class="panel-body"></div>
-        </section>
-        <section id="device-screen-root" class="panel">
-          <div class="panel-title">Device screen</div>
-          <div class="panel-body"></div>
-        </section>
-      </main>
-
-      <section id="scenario-controls-root" class="panel scenario-controls">
-        <div class="panel-title">Scenario controls</div>
-        <div class="panel-body"></div>
-      </section>
+    <div id="workbench-layout">
+      <div id="web-console-root"></div>
+      <div id="device-screen-root"></div>
+      <div id="scenario-controls-root"></div>
     </div>
 
     <script defer src="scenarios.js"></script>
