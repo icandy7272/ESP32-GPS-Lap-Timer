@@ -145,8 +145,11 @@
       window.UiPreviewDeviceScreen && window.UiPreviewDeviceScreen.renderDeviceScreenMarkup;
 
     if (typeof renderer === "function") {
-      deviceRoot.innerHTML = renderer(activeScenario);
-      return;
+      const markup = renderer(activeScenario);
+      if (typeof markup === "string" && markup.trim().length > 0) {
+        deviceRoot.innerHTML = markup;
+        return;
+      }
     }
 
     const screen = (activeScenario.device && activeScenario.device.screen) || "unknown";

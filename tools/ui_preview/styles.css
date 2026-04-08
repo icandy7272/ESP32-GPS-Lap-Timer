@@ -260,6 +260,266 @@ body {
   font-size: 0.8rem;
 }
 
+#device-screen-root {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(160deg, #eff6ff, #dbeafe);
+}
+
+.device-preview {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+.device-frame {
+  width: 376px;
+  border-radius: 16px;
+  border: 2px solid #0f172a;
+  background: linear-gradient(180deg, #1f2937, #0f172a);
+  padding: 14px;
+  box-shadow:
+    0 12px 22px rgba(15, 23, 42, 0.3),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.device-frame__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.device-frame__title {
+  color: #e2e8f0;
+}
+
+.device-frame__resolution {
+  color: #94a3b8;
+}
+
+.device-screen {
+  width: 320px;
+  height: 240px;
+  border-radius: 6px;
+  border: 2px solid #020617;
+  overflow: hidden;
+  font-family: "Menlo", "Consolas", "SFMono-Regular", monospace;
+  color: #ffffff;
+  background: #000000;
+}
+
+.device-time {
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.device-boot {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 16px;
+}
+
+.device-boot__headline {
+  font-size: 1.9rem;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.device-boot__subline {
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.device-boot--splash {
+  background: #000000;
+}
+
+.device-boot--gps-searching {
+  background: #000000;
+}
+
+.device-boot--gps-searching .device-boot__headline {
+  color: #facc15;
+  font-size: 1.45rem;
+}
+
+.device-boot--track-found {
+  background: #000000;
+}
+
+.device-boot--track-found .device-boot__subline {
+  color: #22d3ee;
+}
+
+.device-boot--track-found .device-boot__headline {
+  font-size: 1.3rem;
+}
+
+.device-boot--recovery {
+  background: #000000;
+}
+
+.device-boot--recovery .device-boot__headline {
+  color: #fde047;
+  font-size: 1.45rem;
+}
+
+.device-boot--ready {
+  background: #000000;
+}
+
+.device-boot--ready .device-boot__headline {
+  color: #22c55e;
+  font-size: 3.1rem;
+}
+
+.device-driving {
+  height: 100%;
+  display: grid;
+  grid-template-rows: 24px 1fr 20px;
+  color: #ffffff;
+}
+
+.device-driving__top,
+.device-driving__bottom {
+  padding: 2px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.86rem;
+}
+
+.device-driving__bottom {
+  font-size: 0.72rem;
+}
+
+.device-driving__delta {
+  display: grid;
+  place-items: center;
+  font-size: 4.4rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.device-driving--no-gps {
+  background: #4b5563;
+}
+
+.device-driving--off-track {
+  background: #facc15;
+  color: #111827;
+}
+
+.device-driving--delta-unavailable {
+  background: #4b5563;
+}
+
+.device-driving--delta-fast {
+  background: #15803d;
+}
+
+.device-driving--delta-slow {
+  background: #b91c1c;
+}
+
+.device-driving--delta-even {
+  background: #4b5563;
+}
+
+.device-status {
+  height: 100%;
+  background: #000000;
+  color: #ffffff;
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  font-size: 0.88rem;
+}
+
+.device-status__line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.device-status__line--recording {
+  color: #f87171;
+}
+
+.device-status__line--firmware {
+  color: #6b7280;
+}
+
+.device-lap-list {
+  height: 100%;
+  background: #000000;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+}
+
+.device-lap-list__title {
+  padding: 4px 8px 0;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.device-lap-list__header {
+  background: #1e3a8a;
+  color: #ffffff;
+  font-size: 0.9rem;
+  padding: 5px 8px;
+}
+
+.device-lap-list__rows {
+  padding-top: 2px;
+}
+
+.device-lap-list__row {
+  height: 28px;
+  display: grid;
+  grid-template-columns: 44px 1fr auto;
+  align-items: center;
+  padding: 0 8px;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+  color: #ffffff;
+  font-size: 0.88rem;
+}
+
+.device-lap-list__row.is-best {
+  background: #14532d;
+}
+
+.device-lap-list__lap {
+  color: #cbd5e1;
+}
+
+.device-lap-list__delta {
+  min-width: 58px;
+  text-align: right;
+}
+
+.device-lap-list__empty {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: #6b7280;
+  font-size: 0.95rem;
+}
+
 @media (min-width: 900px) {
   #workbench-layout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
