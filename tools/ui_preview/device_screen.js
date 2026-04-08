@@ -261,7 +261,6 @@
       return "";
     }
 
-    const bestLapNumber = Math.max(0, toInt(device && device.best_lap_number, 0));
     const bestLapMs = toInt(status && status.best_lap_ms, -1);
     return laps
       .slice(0, 7)
@@ -269,7 +268,7 @@
         const lapNumber = Math.max(0, toInt(lap && lap.lap_number, index + 1));
         const lapTimeMs = toInt(lap && lap.lap_time_ms, -1);
         const lapStatus = String((lap && lap.status) || "timed").trim().toLowerCase().replace(/_/g, "-");
-        const isBest = bestLapNumber > 0 ? lapNumber === bestLapNumber : false;
+        const isBest = bestLapMs > 0 && lapStatus === "timed" && lapTimeMs === bestLapMs;
         let suffix = "";
         if (isBest && lapTimeMs >= 0) {
           suffix = "BEST";

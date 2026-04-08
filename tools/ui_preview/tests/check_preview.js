@@ -194,6 +194,13 @@ const deltaUnavailableScenario = getScenarioById("ready-to-drive");
 const deltaValidScenario = getScenarioById("recording");
 const lapListScenario = getScenarioById("session-review");
 const lapListScenarioLaps = ((lapListScenario.device || {}).laps || []);
+const lapListBestMismatchScenario = {
+  ...lapListScenario,
+  device: {
+    ...(lapListScenario.device || {}),
+    best_lap_number: 2,
+  },
+};
 const idleStatusScenario = {
   ...getScenarioById("heavy-track-library"),
   device: {
@@ -225,6 +232,7 @@ const offTrackDrivingMarkup = deviceScreenModule.renderDeviceScreenMarkup(offTra
 const deltaUnavailableMarkup = deviceScreenModule.renderDeviceScreenMarkup(deltaUnavailableScenario);
 const deltaValidMarkup = deviceScreenModule.renderDeviceScreenMarkup(deltaValidScenario);
 const lapListMarkup = deviceScreenModule.renderDeviceScreenMarkup(lapListScenario);
+const lapListBestMismatchMarkup = deviceScreenModule.renderDeviceScreenMarkup(lapListBestMismatchScenario);
 const idleStatusMarkup = deviceScreenModule.renderDeviceScreenMarkup(idleStatusScenario);
 const recordingStatusMarkup = deviceScreenModule.renderDeviceScreenMarkup(recordingStatusScenario);
 
@@ -251,6 +259,14 @@ assert.match(
   new RegExp(
     escapeRegExp(formatLapTimeForExpectation(lapListScenarioLaps[Math.min(6, lapListScenarioLaps.length - 1)].lap_time_ms)),
   ),
+);
+assert.match(
+  lapListBestMismatchMarkup,
+  /0:50\.89<\/span><span class="device-lap-list__delta device-time">BEST/,
+);
+assert.doesNotMatch(
+  lapListBestMismatchMarkup,
+  /0:52\.22<\/span><span class="device-lap-list__delta device-time">BEST/,
 );
 assert.match(idleStatusMarkup, /class="device-status__line">Recording: Idle/);
 assert.doesNotMatch(idleStatusMarkup, /class="device-status__line device-status__line--recording">Recording: Idle/);
