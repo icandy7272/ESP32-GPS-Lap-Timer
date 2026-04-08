@@ -158,7 +158,19 @@
     return formatDelta(sector.deltaMs);
   }
 
-  function getSectorToneClass(sector) {
+  function getLiveSectorToneClass(deltaStateClass) {
+    if (String(deltaStateClass || "").indexOf("device-driving--delta-fast") >= 0) {
+      return "device-sector--fast";
+    }
+
+    if (String(deltaStateClass || "").indexOf("device-driving--delta-slow") >= 0) {
+      return "device-sector--slow";
+    }
+
+    return "device-sector--neutral";
+  }
+
+  function getSectorToneClass(sector, liveSectorToneClass) {
     if (!sector) {
       return "device-sector--pending";
     }
@@ -168,7 +180,7 @@
     }
 
     if (sector.state === "live") {
-      return "device-sector--live";
+      return liveSectorToneClass || "device-sector--neutral";
     }
 
     if (sector.state === "pending") {
@@ -241,10 +253,10 @@
     return {
       text: formatSectorValue(focusedSector),
       stateClass: toneClass + " device-driving--sector-focus",
-      eyebrow: "Sector Delta",
-      label: focusedSector.label,
-    };
-  }
+        eyebrow: "",
+        label: focusedSector.label,
+      };
+    }
 
   function renderBootBlock(status, device) {
     const bootState = resolveBootState(device, status);
@@ -300,7 +312,7 @@
     );
   }
 
-  function renderSectorRibbon(sectors) {
+  function renderSectorRibbon(sectors, liveSectorToneClass) {
     if (!Array.isArray(sectors) || sectors.length === 0) {
       return "";
     }
@@ -311,8 +323,7 @@
         .map(function (sector) {
           return (
             '<div class="device-sector ' +
-            getSectorToneClass(sector) +
-            (sector.state === "focus" ? " device-sector--focus" : "") +
+            getSectorToneClass(sector, liveSectorToneClass) +
             '">' +
             '<span class="device-sector__label">' +
             escapeHtml(sector.label) +
@@ -338,7 +349,7 @@
     const deltaState = resolveDrivingHeroState(status, device, variant, sectors);
     const bestLabel = bestLapMs > 0 ? formatLapTime(bestLapMs) : "--:--.--";
     const hasSectorRibbon = variant === "polished" && sectors.length > 0;
-    const referenceLabel = escapeHtml((device && device.sector_reference_label) || "Best lap sector split");
+    const liveSectorToneClass = getLiveSectorToneClass(deltaState.stateClass);
 
     return (
       '<div class="device-driving ' +
@@ -368,6 +379,7 @@
       escapeHtml(deltaState.text) +
       "</span>" +
       "</div>" +
+      (hasSectorRibbon ? renderSectorRibbon(sectors, liveSectorToneClass) : "") +
       '<div class="device-driving__bottom">' +
       '<span class="device-driving__best device-time">Best:' +
       bestLabel +
@@ -377,12 +389,6 @@
       satellites +
       " sats</span>" +
       "</div>" +
-      (hasSectorRibbon ? renderSectorRibbon(sectors) : "") +
-      (hasSectorRibbon
-        ? '<div class="device-driving__reference">Reference: ' +
-          referenceLabel +
-          "</div>"
-        : "") +
       "</div>"
     );
   }

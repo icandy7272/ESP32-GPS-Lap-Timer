@@ -32,7 +32,8 @@ assert.match(stylesSource, /\.device-preview--polished \.device-driving__delta\s
 assert.match(stylesSource, /\.device-status__line\s*\{[\s\S]*overflow: visible;[\s\S]*min-height: 1\.24em;[\s\S]*line-height: 1\.24;/);
 assert.match(stylesSource, /\.device-status__text\s*\{[\s\S]*overflow: hidden;[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap;/);
 assert.match(stylesSource, /\.device-preview--polished \.device-driving--sector-focus \.device-driving__delta\s*\{[\s\S]*font-size: clamp\(2\.7rem, 9\.4vw, 3\.55rem\);/);
-assert.match(stylesSource, /\.device-sector-ribbon\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
+assert.match(stylesSource, /\.device-sector-ribbon\s*\{[\s\S]*grid-auto-flow: column;[\s\S]*grid-auto-columns: minmax\(0, 1fr\);[\s\S]*gap: 0;/);
+assert.match(stylesSource, /\.device-sector\s*\{[\s\S]*border-radius: 0;/);
 
 const { SCENARIOS, DEFAULT_SCENARIO_ID, getScenarioById } = scenariosModule;
 const requiredScenarioIds = [
@@ -272,14 +273,20 @@ assert.match(deltaUnavailableMarkup, /---/);
 assert.match(deltaValidMarkup, /[+-]\d+\.\d{2}/);
 assert.match(deltaSlowMarkup, /\+0\.24/);
 assert.match(sectorFocusPolishedMarkup, /device-driving--sector-focus/);
-assert.match(sectorFocusPolishedMarkup, /Sector Delta/);
+assert.doesNotMatch(sectorFocusPolishedMarkup, /Sector Delta/);
+assert.doesNotMatch(sectorFocusPolishedMarkup, /Reference:/);
 assert.match(sectorFocusPolishedMarkup, />S1<\/span>/);
 assert.match(sectorFocusPolishedMarkup, />BEST<\/span>/);
+assert.match(sectorFocusPolishedMarkup, /class="device-driving__delta-label">S2/);
+assert.match(sectorFocusPolishedMarkup, />S2<\/span>/);
+assert.match(sectorFocusPolishedMarkup, /\+0\.12/);
 assert.match(sectorFocusPolishedMarkup, />S3<\/span>/);
 assert.match(sectorFocusPolishedMarkup, />LIVE<\/span>/);
-assert.match(sectorFocusPolishedMarkup, />S4<\/span>/);
-assert.match(sectorFocusPolishedMarkup, />--<\/span>/);
-assert.match(sectorFocusPolishedMarkup, /Reference: Best lap sector split/);
+assert.doesNotMatch(sectorFocusPolishedMarkup, />S4<\/span>/);
+assert.match(
+  sectorFocusPolishedMarkup,
+  /device-driving__delta[\s\S]*device-sector-ribbon[\s\S]*device-driving__bottom/,
+);
 assert.doesNotMatch(sectorFocusOriginalMarkup, /device-sector-ribbon/);
 assert.match(comparisonMarkup, /Original TFT/);
 assert.match(comparisonMarkup, /Polished TFT/);

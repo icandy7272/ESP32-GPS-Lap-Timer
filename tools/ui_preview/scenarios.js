@@ -209,12 +209,10 @@
         firmware_version: "v1.0.0",
         uptime_seconds: 962,
         sd_free_gb: 13.2,
-        sector_reference_label: "Best lap sector split",
         sectors: [
           { label: "S1", delta_ms: -50, state: "best" },
           { label: "S2", delta_ms: 120, state: "focus" },
           { label: "S3", state: "live" },
-          { label: "S4", state: "pending" },
         ],
       },
     },
