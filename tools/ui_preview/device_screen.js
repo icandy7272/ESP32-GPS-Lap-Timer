@@ -103,6 +103,91 @@
     return "original";
   }
 
+  function normalizeSectorState(value) {
+    const normalized = String(value || "completed")
+      .trim()
+      .toLowerCase()
+      .replace(/_/g, "-");
+
+    if (
+      normalized === "best" ||
+      normalized === "focus" ||
+      normalized === "live" ||
+      normalized === "pending" ||
+      normalized === "completed"
+    ) {
+      return normalized;
+    }
+
+    return "completed";
+  }
+
+  function getSectorEntries(device) {
+    const sectors = Array.isArray(device && device.sectors) ? device.sectors : [];
+    return sectors.slice(0, 4).map(function (sector, index) {
+      const hasDelta = Boolean(sector) && Object.prototype.hasOwnProperty.call(sector, "delta_ms");
+      return {
+        label: (sector && sector.label) || "S" + String(index + 1),
+        state: normalizeSectorState(sector && sector.state),
+        deltaMs: hasDelta ? toInt(sector.delta_ms, 0) : null,
+      };
+    });
+  }
+
+  function formatSectorValue(sector) {
+    if (!sector) {
+      return "--";
+    }
+
+    if (sector.state === "live") {
+      return "LIVE";
+    }
+
+    if (sector.state === "pending") {
+      return "--";
+    }
+
+    if (sector.state === "best") {
+      return "BEST";
+    }
+
+    if (sector.deltaMs == null) {
+      return "--";
+    }
+
+    return formatDelta(sector.deltaMs);
+  }
+
+  function getSectorToneClass(sector) {
+    if (!sector) {
+      return "device-sector--pending";
+    }
+
+    if (sector.state === "best") {
+      return "device-sector--best";
+    }
+
+    if (sector.state === "live") {
+      return "device-sector--live";
+    }
+
+    if (sector.state === "pending") {
+      return "device-sector--pending";
+    }
+
+    if (sector.deltaMs == null || sector.deltaMs === 0) {
+      return "device-sector--neutral";
+    }
+
+    return sector.deltaMs < 0 ? "device-sector--fast" : "device-sector--slow";
+  }
+
+  function findFocusedSector(sectors) {
+    return sectors.find(function (sector) {
+      return sector.state === "focus";
+    }) || null;
+  }
+
   function resolveDrivingDeltaState(status, device) {
     const gpsFix = Boolean(status && status.gps_fix);
     if (!gpsFix) {
@@ -121,6 +206,44 @@
     const polarityClass =
       delta < 0 ? "device-driving--delta-fast" : delta > 0 ? "device-driving--delta-slow" : "device-driving--delta-even";
     return { text: formatDelta(delta), stateClass: polarityClass };
+  }
+
+  function resolveDrivingHeroState(status, device, variant, sectors) {
+    const baseState = resolveDrivingDeltaState(status, device);
+    const gpsFix = Boolean(status && status.gps_fix);
+
+    if (variant !== "polished" || !gpsFix || (device && device.off_track)) {
+      return {
+        text: baseState.text,
+        stateClass: baseState.stateClass,
+        eyebrow: "",
+        label: "",
+      };
+    }
+
+    const focusedSector = findFocusedSector(sectors);
+    if (!focusedSector) {
+      return {
+        text: baseState.text,
+        stateClass: baseState.stateClass,
+        eyebrow: "",
+        label: "",
+      };
+    }
+
+    let toneClass = "device-driving--delta-even";
+    if (focusedSector.state === "best" || (focusedSector.deltaMs != null && focusedSector.deltaMs < 0)) {
+      toneClass = "device-driving--delta-fast";
+    } else if (focusedSector.deltaMs != null && focusedSector.deltaMs > 0) {
+      toneClass = "device-driving--delta-slow";
+    }
+
+    return {
+      text: formatSectorValue(focusedSector),
+      stateClass: toneClass + " device-driving--sector-focus",
+      eyebrow: "Sector Delta",
+      label: focusedSector.label,
+    };
   }
 
   function renderBootBlock(status, device) {
@@ -177,18 +300,50 @@
     );
   }
 
-  function renderDrivingBlock(status, device) {
+  function renderSectorRibbon(sectors) {
+    if (!Array.isArray(sectors) || sectors.length === 0) {
+      return "";
+    }
+
+    return (
+      '<div class="device-sector-ribbon">' +
+      sectors
+        .map(function (sector) {
+          return (
+            '<div class="device-sector ' +
+            getSectorToneClass(sector) +
+            (sector.state === "focus" ? " device-sector--focus" : "") +
+            '">' +
+            '<span class="device-sector__label">' +
+            escapeHtml(sector.label) +
+            "</span>" +
+            '<span class="device-sector__value device-time">' +
+            escapeHtml(formatSectorValue(sector)) +
+            "</span>" +
+            "</div>"
+          );
+        })
+        .join("") +
+      "</div>"
+    );
+  }
+
+  function renderDrivingBlock(status, device, variant) {
     const gpsFix = Boolean(status && status.gps_fix);
     const satellites = Math.max(0, toInt(status && status.satellites, 0));
     const currentLap = Math.max(0, toInt(status && status.current_lap, 0));
     const currentLapTimeMs = Math.max(0, toInt(device && device.current_lap_time_ms, 0));
     const bestLapMs = toInt(status && status.best_lap_ms, -1);
-    const deltaState = resolveDrivingDeltaState(status, device);
+    const sectors = variant === "polished" ? getSectorEntries(device) : [];
+    const deltaState = resolveDrivingHeroState(status, device, variant, sectors);
     const bestLabel = bestLapMs > 0 ? formatLapTime(bestLapMs) : "--:--.--";
+    const hasSectorRibbon = variant === "polished" && sectors.length > 0;
+    const referenceLabel = escapeHtml((device && device.sector_reference_label) || "Best lap sector split");
 
     return (
       '<div class="device-driving ' +
       deltaState.stateClass +
+      (hasSectorRibbon ? " device-driving--has-sectors" : "") +
       '">' +
       '<div class="device-driving__top">' +
       '<span class="device-driving__lap">L' +
@@ -199,7 +354,19 @@
       "</span>" +
       "</div>" +
       '<div class="device-driving__delta device-time">' +
+      (deltaState.eyebrow
+        ? '<span class="device-driving__delta-eyebrow">' +
+          escapeHtml(deltaState.eyebrow) +
+          "</span>"
+        : "") +
+      (deltaState.label
+        ? '<span class="device-driving__delta-label">' +
+          escapeHtml(deltaState.label) +
+          "</span>"
+        : "") +
+      '<span class="device-driving__delta-value">' +
       escapeHtml(deltaState.text) +
+      "</span>" +
       "</div>" +
       '<div class="device-driving__bottom">' +
       '<span class="device-driving__best device-time">Best:' +
@@ -210,6 +377,12 @@
       satellites +
       " sats</span>" +
       "</div>" +
+      (hasSectorRibbon ? renderSectorRibbon(sectors) : "") +
+      (hasSectorRibbon
+        ? '<div class="device-driving__reference">Reference: ' +
+          referenceLabel +
+          "</div>"
+        : "") +
       "</div>"
     );
   }
@@ -393,7 +566,7 @@
     } else if (screen === "lap-list") {
       bodyMarkup = renderLapListBlock(status, device);
     } else {
-      bodyMarkup = renderDrivingBlock(status, device);
+      bodyMarkup = renderDrivingBlock(status, device, variant);
     }
 
     return (

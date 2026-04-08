@@ -325,6 +325,7 @@ body {
   margin: 0;
   color: #e2e8f0;
   font-size: 0.94rem;
+  line-height: 1.2;
   letter-spacing: 0.01em;
 }
 
@@ -333,6 +334,7 @@ body {
   color: #94a3b8;
   font-size: 0.78rem;
   line-height: 1.4;
+  padding-bottom: 1px;
 }
 
 .device-preview {
@@ -361,6 +363,7 @@ body {
   color: #cbd5e1;
   font-size: 0.72rem;
   font-weight: 700;
+  line-height: 1.2;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -510,6 +513,10 @@ body {
     0 0 18px rgba(255, 255, 255, 0.12);
 }
 
+.device-preview--polished .device-driving--sector-focus .device-driving__delta {
+  font-size: clamp(2.7rem, 9.4vw, 3.55rem);
+}
+
 .device-preview--polished .device-driving--delta-fast .device-driving__delta {
   color: #dcfce7;
 }
@@ -634,7 +641,7 @@ body {
 .device-driving {
   height: 100%;
   display: grid;
-  grid-template-rows: 24px 1fr 20px;
+  grid-template-rows: 24px minmax(0, 1fr) auto;
   color: #ffffff;
 }
 
@@ -645,18 +652,59 @@ body {
   align-items: center;
   justify-content: space-between;
   font-size: 0.9rem;
+  line-height: 1.2;
 }
 
 .device-driving__bottom {
   font-size: 0.77rem;
 }
 
+.device-driving--has-sectors {
+  grid-template-rows: 24px minmax(0, 1fr) auto auto auto;
+}
+
 .device-driving__delta {
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px 10px 6px;
   font-size: clamp(3.35rem, 12vw, 4.6rem);
   font-weight: 700;
-  line-height: 1;
+  line-height: 1.05;
+  text-align: center;
+}
+
+.device-driving__delta-eyebrow {
+  font-size: 0.58rem;
+  line-height: 1.2;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.76);
+}
+
+.device-driving__delta-label {
+  font-size: 0.86rem;
+  line-height: 1.18;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.device-driving__delta-value {
+  display: inline-block;
+  line-height: 1.04;
+  padding-bottom: 0.08em;
+}
+
+.device-driving__reference {
+  padding: 0 10px 7px;
+  font-size: 0.58rem;
+  line-height: 1.2;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.62);
 }
 
 .device-driving--no-gps {
@@ -699,6 +747,8 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.2;
+  padding-bottom: 1px;
 }
 
 .device-status__line--recording {
@@ -729,6 +779,7 @@ body {
   color: #ffffff;
   font-size: 0.94rem;
   padding: 6px 10px;
+  line-height: 1.2;
 }
 
 .device-lap-list__rows {
@@ -744,6 +795,76 @@ body {
   border-top: 1px solid rgba(148, 163, 184, 0.15);
   color: #ffffff;
   font-size: 0.92rem;
+  line-height: 1.2;
+}
+
+.device-sector-ribbon {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 0 10px 6px;
+}
+
+.device-sector {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 5px 4px 6px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  text-align: center;
+}
+
+.device-sector__label {
+  font-size: 0.58rem;
+  line-height: 1.15;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.7);
+}
+
+.device-sector__value {
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.device-sector--best {
+  background: rgba(20, 83, 45, 0.88);
+  border-color: rgba(74, 222, 128, 0.34);
+  color: #dcfce7;
+}
+
+.device-sector--fast {
+  background: rgba(21, 128, 61, 0.6);
+  border-color: rgba(74, 222, 128, 0.28);
+  color: #dcfce7;
+}
+
+.device-sector--slow {
+  background: rgba(153, 27, 27, 0.58);
+  border-color: rgba(248, 113, 113, 0.28);
+  color: #fee2e2;
+}
+
+.device-sector--live {
+  background: rgba(14, 165, 233, 0.2);
+  border-color: rgba(125, 211, 252, 0.32);
+  color: #e0f2fe;
+}
+
+.device-sector--pending {
+  color: rgba(203, 213, 225, 0.6);
+}
+
+.device-sector--neutral {
+  color: #e2e8f0;
+}
+
+.device-sector--focus {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 .device-lap-list__row.is-best {

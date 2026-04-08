@@ -29,6 +29,9 @@ assert.match(indexHtml, /id="scenario-controls-root"/);
 assert.match(stylesSource, /\.device-panel__description\s*\{[\s\S]*font-size: 0\.78rem;/);
 assert.match(stylesSource, /\.device-preview--polished \.device-status\s*\{[\s\S]*font-size: 0\.88rem;/);
 assert.match(stylesSource, /\.device-preview--polished \.device-driving__delta\s*\{[\s\S]*font-size: clamp\(3\.1rem, 11vw, 4\.1rem\);/);
+assert.match(stylesSource, /\.device-status__line\s*\{[\s\S]*line-height: 1\.2;/);
+assert.match(stylesSource, /\.device-preview--polished \.device-driving--sector-focus \.device-driving__delta\s*\{[\s\S]*font-size: clamp\(2\.7rem, 9\.4vw, 3\.55rem\);/);
+assert.match(stylesSource, /\.device-sector-ribbon\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
 
 const { SCENARIOS, DEFAULT_SCENARIO_ID, getScenarioById } = scenariosModule;
 const requiredScenarioIds = [
@@ -38,6 +41,7 @@ const requiredScenarioIds = [
   "no-gps-driving",
   "recording",
   "recording-slow",
+  "sector-focus",
   "best-lap-improved",
   "off-track",
   "session-review",
@@ -208,6 +212,7 @@ const offTrackDrivingScenario = {
 const deltaUnavailableScenario = getScenarioById("ready-to-drive");
 const deltaValidScenario = getScenarioById("recording");
 const deltaSlowScenario = getScenarioById("recording-slow");
+const sectorFocusScenario = getScenarioById("sector-focus");
 const lapListScenario = getScenarioById("session-review");
 const lapListScenarioLaps = ((lapListScenario.device || {}).laps || []);
 const lapListBestMismatchScenario = {
@@ -248,6 +253,8 @@ const offTrackDrivingMarkup = deviceScreenModule.renderDeviceScreenMarkup(offTra
 const deltaUnavailableMarkup = deviceScreenModule.renderDeviceScreenMarkup(deltaUnavailableScenario);
 const deltaValidMarkup = deviceScreenModule.renderDeviceScreenMarkup(deltaValidScenario);
 const deltaSlowMarkup = deviceScreenModule.renderDeviceScreenMarkup(deltaSlowScenario);
+const sectorFocusPolishedMarkup = deviceScreenModule.renderDeviceScreenMarkup(sectorFocusScenario, { variant: "polished" });
+const sectorFocusOriginalMarkup = deviceScreenModule.renderDeviceScreenMarkup(sectorFocusScenario, { variant: "original" });
 const comparisonMarkup = deviceScreenModule.renderDeviceScreenComparisonMarkup(deltaValidScenario);
 const lapListMarkup = deviceScreenModule.renderDeviceScreenMarkup(lapListScenario);
 const lapListBestMismatchMarkup = deviceScreenModule.renderDeviceScreenMarkup(lapListBestMismatchScenario);
@@ -263,6 +270,16 @@ assert.match(offTrackDrivingMarkup, /OFF TRACK/);
 assert.match(deltaUnavailableMarkup, /---/);
 assert.match(deltaValidMarkup, /[+-]\d+\.\d{2}/);
 assert.match(deltaSlowMarkup, /\+0\.24/);
+assert.match(sectorFocusPolishedMarkup, /device-driving--sector-focus/);
+assert.match(sectorFocusPolishedMarkup, /Sector Delta/);
+assert.match(sectorFocusPolishedMarkup, />S1<\/span>/);
+assert.match(sectorFocusPolishedMarkup, />BEST<\/span>/);
+assert.match(sectorFocusPolishedMarkup, />S3<\/span>/);
+assert.match(sectorFocusPolishedMarkup, />LIVE<\/span>/);
+assert.match(sectorFocusPolishedMarkup, />S4<\/span>/);
+assert.match(sectorFocusPolishedMarkup, />--<\/span>/);
+assert.match(sectorFocusPolishedMarkup, /Reference: Best lap sector split/);
+assert.doesNotMatch(sectorFocusOriginalMarkup, /device-sector-ribbon/);
 assert.match(comparisonMarkup, /Original TFT/);
 assert.match(comparisonMarkup, /Polished TFT/);
 assert.match(comparisonMarkup, /device-preview device-preview--original/);
