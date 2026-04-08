@@ -10,7 +10,7 @@ assert.match(indexHtml, /id="web-console-root"/);
 assert.match(indexHtml, /id="device-screen-root"/);
 assert.match(indexHtml, /id="scenario-controls-root"/);
 
-const { SCENARIOS, getScenarioById } = scenariosModule;
+const { SCENARIOS, DEFAULT_SCENARIO_ID, getScenarioById } = scenariosModule;
 const requiredScenarioIds = [
   "cold-boot",
   "gps-searching",
@@ -24,11 +24,23 @@ const requiredScenarioIds = [
 
 assert.ok(Array.isArray(SCENARIOS), "SCENARIOS should be an array");
 assert.ok(SCENARIOS.length >= 8, "Expected at least 8 scenarios");
+assert.equal(DEFAULT_SCENARIO_ID, "ready-to-drive");
 
 for (const scenarioId of requiredScenarioIds) {
   assert.ok(
     SCENARIOS.some((scenario) => scenario.id === scenarioId),
     `Missing required scenario id: ${scenarioId}`,
+  );
+}
+
+for (const scenario of SCENARIOS) {
+  assert.ok(
+    Array.isArray(scenario.tracks) && scenario.tracks.every((track) => typeof track.id === "string"),
+    `Scenario ${scenario.id} tracks should use string ids`,
+  );
+  assert.ok(
+    Array.isArray(scenario.sessions) && scenario.sessions.every((session) => typeof session === "string"),
+    `Scenario ${scenario.id} sessions should be filename strings`,
   );
 }
 

@@ -7,6 +7,14 @@
   root.UiPreviewScenarios = factory();
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   const DEFAULT_SCENARIO_ID = "ready-to-drive";
+  const TRACKS_BASE = [
+    { id: "track_001", name: "Ningbo Kart Center" },
+    { id: "track_002", name: "Shanghai International Circuit" },
+    { id: "track_003", name: "Zhuhai International Circuit" },
+    { id: "track_004", name: "Tianma Circuit" },
+    { id: "track_005", name: "Ningbo South Layout" },
+    { id: "track_006", name: "Hangzhou Kart Track" },
+  ];
 
   const SCENARIOS = [
     {
@@ -21,7 +29,7 @@
         track: "Ningbo Kart Center",
       },
       sessions: [],
-      tracks: [{ id: 1, name: "Ningbo Kart Center", points: 18 }],
+      tracks: TRACKS_BASE.slice(0, 1),
       settings: { wifi_ssid: "GPS-LapTimer", wifi_pass: "12345678", brightness: 200 },
       device: {
         screen: "boot",
@@ -46,7 +54,7 @@
         track: "Ningbo Kart Center",
       },
       sessions: [],
-      tracks: [{ id: 1, name: "Ningbo Kart Center", points: 18 }],
+      tracks: TRACKS_BASE.slice(0, 1),
       settings: { wifi_ssid: "GPS-LapTimer", wifi_pass: "12345678", brightness: 200 },
       device: {
         screen: "boot",
@@ -71,10 +79,7 @@
         track: "Ningbo Kart Center",
       },
       sessions: [],
-      tracks: [
-        { id: 1, name: "Ningbo Kart Center", points: 18 },
-        { id: 2, name: "Shanghai International Circuit", points: 24 },
-      ],
+      tracks: TRACKS_BASE.slice(0, 2),
       settings: { wifi_ssid: "GPS-LapTimer", wifi_pass: "12345678", brightness: 200 },
       device: {
         screen: "driving",
@@ -98,11 +103,8 @@
         best_lap_ms: 51230,
         track: "Ningbo Kart Center",
       },
-      sessions: [{ id: "2026-04-08-run-1", laps: 4, best_lap_ms: 51230 }],
-      tracks: [
-        { id: 1, name: "Ningbo Kart Center", points: 18 },
-        { id: 2, name: "Shanghai International Circuit", points: 24 },
-      ],
+      sessions: ["session_20260408_01.vbo"],
+      tracks: TRACKS_BASE.slice(0, 2),
       settings: { wifi_ssid: "GPS-LapTimer", wifi_pass: "12345678", brightness: 200 },
       device: {
         screen: "driving",
@@ -126,8 +128,8 @@
         best_lap_ms: 50120,
         track: "Ningbo Kart Center",
       },
-      sessions: [{ id: "2026-04-08-run-2", laps: 7, best_lap_ms: 50120 }],
-      tracks: [{ id: 1, name: "Ningbo Kart Center", points: 18 }],
+      sessions: ["session_20260408_02.vbo"],
+      tracks: TRACKS_BASE.slice(0, 1),
       settings: { wifi_ssid: "GPS-LapTimer", wifi_pass: "12345678", brightness: 200 },
       device: {
         screen: "driving",
@@ -151,8 +153,8 @@
         best_lap_ms: 51540,
         track: "Ningbo Kart Center",
       },
-      sessions: [{ id: "2026-04-08-run-3", laps: 5, best_lap_ms: 51540 }],
-      tracks: [{ id: 1, name: "Ningbo Kart Center", points: 18 }],
+      sessions: ["session_20260408_03.vbo"],
+      tracks: TRACKS_BASE.slice(0, 1),
       settings: { wifi_ssid: "GPS-LapTimer", wifi_pass: "12345678", brightness: 200 },
       device: {
         screen: "status",
@@ -176,14 +178,8 @@
         best_lap_ms: 50890,
         track: "Ningbo Kart Center",
       },
-      sessions: [
-        { id: "2026-04-08-run-4", laps: 8, best_lap_ms: 50890 },
-        { id: "2026-04-07-run-2", laps: 11, best_lap_ms: 51110 },
-      ],
-      tracks: [
-        { id: 1, name: "Ningbo Kart Center", points: 18 },
-        { id: 2, name: "Shanghai International Circuit", points: 24 },
-      ],
+      sessions: ["session_20260408_04.vbo", "session_20260407_02.vbo"],
+      tracks: TRACKS_BASE.slice(0, 2),
       settings: { wifi_ssid: "GPS-LapTimer", wifi_pass: "12345678", brightness: 200 },
       device: {
         screen: "lap-list",
@@ -208,18 +204,11 @@
         track: "Ningbo Kart Center",
       },
       sessions: [
-        { id: "2026-04-08-run-5", laps: 5, best_lap_ms: 52002 },
-        { id: "2026-04-07-run-3", laps: 12, best_lap_ms: 51239 },
-        { id: "2026-04-05-run-1", laps: 9, best_lap_ms: 51555 },
+        "session_20260408_05.vbo",
+        "session_20260407_03.vbo",
+        "session_20260405_01.vbo",
       ],
-      tracks: [
-        { id: 1, name: "Ningbo Kart Center", points: 18 },
-        { id: 2, name: "Shanghai International Circuit", points: 24 },
-        { id: 3, name: "Zhuhai International Circuit", points: 20 },
-        { id: 4, name: "Tianma Circuit", points: 16 },
-        { id: 5, name: "Ningbo South Layout", points: 22 },
-        { id: 6, name: "Hangzhou Kart Track", points: 15 },
-      ],
+      tracks: TRACKS_BASE.slice(0),
       settings: { wifi_ssid: "GPS-LapTimer", wifi_pass: "12345678", brightness: 200 },
       device: {
         screen: "status",

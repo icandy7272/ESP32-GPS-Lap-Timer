@@ -1,37 +1,51 @@
 /* Bootstrap for shared-scenario controls and safe placeholder panel rendering. */
 (function () {
-  const FALLBACK_SCENARIO_ID = "ready-to-drive";
   let initialized = false;
   let scenariosApi = null;
 
   const state = {
-    activeScenarioId: FALLBACK_SCENARIO_ID,
+    activeScenarioId: null,
   };
 
-  function createFallbackScenarioApi() {
-    const readyScenario = {
-      id: FALLBACK_SCENARIO_ID,
-      label: "Ready To Drive",
-      status: { gps_fix: true, satellites: 10, recording: false, track: "Ningbo Kart Center" },
-      device: { screen: "driving", off_track: false },
-    };
+  function isValidScenariosApi(api) {
+    if (!api || !Array.isArray(api.SCENARIOS) || api.SCENARIOS.length === 0) {
+      return false;
+    }
+    if (typeof api.DEFAULT_SCENARIO_ID !== "string" || typeof api.getScenarioById !== "function") {
+      return false;
+    }
 
-    return {
-      SCENARIOS: [readyScenario],
-      DEFAULT_SCENARIO_ID: FALLBACK_SCENARIO_ID,
-      getScenarioById: function () {
-        return readyScenario;
-      },
-    };
+    const defaultScenario = api.getScenarioById(api.DEFAULT_SCENARIO_ID);
+    return Boolean(defaultScenario && typeof defaultScenario.id === "string");
   }
 
-  function resolveScenariosApi() {
+  function resolveScenariosApiOrNull() {
     const api = window.UiPreviewScenarios;
-    if (api && Array.isArray(api.SCENARIOS) && typeof api.getScenarioById === "function") {
+    if (isValidScenariosApi(api)) {
       return api;
     }
 
-    return createFallbackScenarioApi();
+    return null;
+  }
+
+  function renderUnavailableState() {
+    const controlsRoot = document.getElementById("scenario-controls-root");
+    const webRoot = document.getElementById("web-console-root");
+    const deviceRoot = document.getElementById("device-screen-root");
+
+    if (controlsRoot) {
+      controlsRoot.innerHTML =
+        '<h2 class="scenario-controls__title">Scenario Controls</h2>' +
+        '<p class="scenario-controls__description">Scenario registry unavailable. Check scenarios.js load status.</p>';
+    }
+    if (webRoot) {
+      webRoot.innerHTML =
+        '<div class="preview-fallback"><h2>Web Console Preview</h2><p>Scenario data unavailable.</p></div>';
+    }
+    if (deviceRoot) {
+      deviceRoot.innerHTML =
+        '<div class="preview-fallback"><h2>Device Screen Preview</h2><p>Scenario data unavailable.</p></div>';
+    }
   }
 
   function renderScenarioControls() {
@@ -139,7 +153,19 @@
   }
 
   function renderAll() {
+    if (!scenariosApi) {
+      state.activeScenarioId = null;
+      renderUnavailableState();
+      return;
+    }
+
     const activeScenario = scenariosApi.getScenarioById(state.activeScenarioId);
+    if (!activeScenario || typeof activeScenario.id !== "string") {
+      state.activeScenarioId = null;
+      renderUnavailableState();
+      return;
+    }
+
     state.activeScenarioId = activeScenario.id;
     renderScenarioControls();
     renderWebConsolePreview(activeScenario);
@@ -152,10 +178,10 @@
     }
     initialized = true;
 
-    scenariosApi = resolveScenariosApi();
-    state.activeScenarioId = scenariosApi.getScenarioById(
-      scenariosApi.DEFAULT_SCENARIO_ID || FALLBACK_SCENARIO_ID,
-    ).id;
+    scenariosApi = resolveScenariosApiOrNull();
+    if (scenariosApi) {
+      state.activeScenarioId = scenariosApi.DEFAULT_SCENARIO_ID;
+    }
 
     renderAll();
   }
