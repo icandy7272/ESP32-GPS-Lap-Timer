@@ -29,7 +29,8 @@ assert.match(indexHtml, /id="scenario-controls-root"/);
 assert.match(stylesSource, /\.device-panel__description\s*\{[\s\S]*font-size: 0\.78rem;/);
 assert.match(stylesSource, /\.device-preview--polished \.device-status\s*\{[\s\S]*font-size: 0\.88rem;/);
 assert.match(stylesSource, /\.device-preview--polished \.device-driving__delta\s*\{[\s\S]*font-size: clamp\(3\.1rem, 11vw, 4\.1rem\);/);
-assert.match(stylesSource, /\.device-status__line\s*\{[\s\S]*line-height: 1\.2;/);
+assert.match(stylesSource, /\.device-status__line\s*\{[\s\S]*overflow: visible;[\s\S]*min-height: 1\.24em;[\s\S]*line-height: 1\.24;/);
+assert.match(stylesSource, /\.device-status__text\s*\{[\s\S]*overflow: hidden;[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap;/);
 assert.match(stylesSource, /\.device-preview--polished \.device-driving--sector-focus \.device-driving__delta\s*\{[\s\S]*font-size: clamp\(2\.7rem, 9\.4vw, 3\.55rem\);/);
 assert.match(stylesSource, /\.device-sector-ribbon\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
 
@@ -308,9 +309,9 @@ assert.doesNotMatch(
   lapListBestMismatchMarkup,
   /0:52\.22<\/span><span class="device-lap-list__delta device-time">BEST/,
 );
-assert.match(idleStatusMarkup, /class="device-status__line">Recording: Idle/);
-assert.doesNotMatch(idleStatusMarkup, /class="device-status__line device-status__line--recording">Recording: Idle/);
-assert.match(recordingStatusMarkup, /class="device-status__line device-status__line--recording">Recording: REC/);
+assert.match(idleStatusMarkup, /class="device-status__line"><span class="device-status__text">Recording: Idle/);
+assert.doesNotMatch(idleStatusMarkup, /class="device-status__line device-status__line--recording"><span class="device-status__text">Recording: Idle/);
+assert.match(recordingStatusMarkup, /class="device-status__line device-status__line--recording"><span class="device-status__text">Recording: REC/);
 assert.match(idleStatusMarkup, /SD: 12\.7 GB free/);
 assert.match(idleStatusMarkup, /Battery: N\/A/);
 assert.match(idleStatusMarkup, /Uptime: 6m 52s/);

@@ -744,10 +744,18 @@ body {
 }
 
 .device-status__line {
-  white-space: nowrap;
+  overflow: visible;
+  min-height: 1.24em;
+  line-height: 1.24;
+  padding-bottom: 2px;
+}
+
+.device-status__text {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
-  line-height: 1.2;
+  white-space: nowrap;
+  line-height: inherit;
   padding-bottom: 1px;
 }
 

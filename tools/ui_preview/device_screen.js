@@ -403,37 +403,27 @@
       ? "device-status__line device-status__line--recording"
       : "device-status__line";
 
+    function renderStatusLine(className, text) {
+      return (
+        '<div class="' +
+        className +
+        '"><span class="device-status__text">' +
+        text +
+        "</span></div>"
+      );
+    }
+
     return (
       '<div class="device-status">' +
-      '<div class="device-status__line">GPS: ' +
-      satellites +
-      " sats  Fix: " +
-      (gpsFix ? "3D" : "No fix") +
-      "</div>" +
-      '<div class="device-status__line">Track: ' +
-      trackName +
-      "</div>" +
-      '<div class="' +
-      recordingLineClass +
-      '">Recording: ' +
-      (recording ? "REC" : "Idle") +
-      "</div>" +
-      '<div class="device-status__line">Laps: ' +
-      lapCount +
-      " completed</div>" +
-      '<div class="device-status__line">WiFi: ' +
-      wifiSsid +
-      "</div>" +
-      '<div class="device-status__line">' +
-      sdLine +
-      "</div>" +
-      '<div class="device-status__line">Battery: N/A</div>' +
-      '<div class="device-status__line">' +
-      uptimeLine +
-      "</div>" +
-      '<div class="device-status__line device-status__line--firmware">' +
-      firmwareLine +
-      "</div>" +
+      renderStatusLine("device-status__line", "GPS: " + satellites + " sats  Fix: " + (gpsFix ? "3D" : "No fix")) +
+      renderStatusLine("device-status__line", "Track: " + trackName) +
+      renderStatusLine(recordingLineClass, "Recording: " + (recording ? "REC" : "Idle")) +
+      renderStatusLine("device-status__line", "Laps: " + lapCount + " completed") +
+      renderStatusLine("device-status__line", "WiFi: " + wifiSsid) +
+      renderStatusLine("device-status__line", sdLine) +
+      renderStatusLine("device-status__line", "Battery: N/A") +
+      renderStatusLine("device-status__line", uptimeLine) +
+      renderStatusLine("device-status__line device-status__line--firmware", firmwareLine) +
       "</div>"
     );
   }
