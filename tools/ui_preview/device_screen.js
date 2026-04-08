@@ -201,6 +201,9 @@
     const recording = Boolean(status && status.recording);
     const lapCount = Math.max(0, toInt(device && device.lap_count, 0));
     const wifiSsid = escapeHtml((settings && settings.wifi_ssid) || "--");
+    const recordingLineClass = recording
+      ? "device-status__line device-status__line--recording"
+      : "device-status__line";
 
     return (
       '<div class="device-status">' +
@@ -212,7 +215,9 @@
       '<div class="device-status__line">Track: ' +
       trackName +
       "</div>" +
-      '<div class="device-status__line device-status__line--recording">Recording: ' +
+      '<div class="' +
+      recordingLineClass +
+      '">Recording: ' +
       (recording ? "REC" : "Idle") +
       "</div>" +
       '<div class="device-status__line">Laps: ' +

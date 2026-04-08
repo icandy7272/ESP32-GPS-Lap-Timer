@@ -123,6 +123,15 @@ const readyBootScenario = {
   },
 };
 
+const recoveryBootScenario = {
+  ...getScenarioById("cold-boot"),
+  device: {
+    ...(getScenarioById("cold-boot").device || {}),
+    screen: "boot",
+    boot_state: "recovery",
+  },
+};
+
 const noGpsDrivingScenario = {
   ...getScenarioById("ready-to-drive"),
   device: {
@@ -151,17 +160,43 @@ const offTrackDrivingScenario = {
 const deltaUnavailableScenario = getScenarioById("ready-to-drive");
 const deltaValidScenario = getScenarioById("recording");
 const lapListScenario = getScenarioById("session-review");
+const idleStatusScenario = {
+  ...getScenarioById("heavy-track-library"),
+  device: {
+    ...(getScenarioById("heavy-track-library").device || {}),
+    screen: "status",
+  },
+  status: {
+    ...(getScenarioById("heavy-track-library").status || {}),
+    recording: false,
+  },
+};
+const recordingStatusScenario = {
+  ...getScenarioById("recording"),
+  device: {
+    ...(getScenarioById("recording").device || {}),
+    screen: "status",
+  },
+  status: {
+    ...(getScenarioById("recording").status || {}),
+    recording: true,
+  },
+};
 
 const gpsSearchMarkup = deviceScreenModule.renderDeviceScreenMarkup(gpsSearchingScenario);
 const readyBootMarkup = deviceScreenModule.renderDeviceScreenMarkup(readyBootScenario);
+const recoveryBootMarkup = deviceScreenModule.renderDeviceScreenMarkup(recoveryBootScenario);
 const noGpsDrivingMarkup = deviceScreenModule.renderDeviceScreenMarkup(noGpsDrivingScenario);
 const offTrackDrivingMarkup = deviceScreenModule.renderDeviceScreenMarkup(offTrackDrivingScenario);
 const deltaUnavailableMarkup = deviceScreenModule.renderDeviceScreenMarkup(deltaUnavailableScenario);
 const deltaValidMarkup = deviceScreenModule.renderDeviceScreenMarkup(deltaValidScenario);
 const lapListMarkup = deviceScreenModule.renderDeviceScreenMarkup(lapListScenario);
+const idleStatusMarkup = deviceScreenModule.renderDeviceScreenMarkup(idleStatusScenario);
+const recordingStatusMarkup = deviceScreenModule.renderDeviceScreenMarkup(recordingStatusScenario);
 
 assert.match(gpsSearchMarkup, /GPS Searching\.\.\./);
 assert.match(readyBootMarkup, /READY/);
+assert.match(recoveryBootMarkup, /Session Recovered/);
 
 assert.match(noGpsDrivingMarkup, /NO GPS/);
 assert.match(offTrackDrivingMarkup, /OFF TRACK/);
@@ -169,6 +204,9 @@ assert.match(deltaUnavailableMarkup, /---/);
 assert.match(deltaValidMarkup, /[+-]\d+\.\d{2}/);
 
 assert.match(lapListMarkup, /Lap List|SESSION:/);
+assert.match(idleStatusMarkup, /class="device-status__line">Recording: Idle/);
+assert.doesNotMatch(idleStatusMarkup, /class="device-status__line device-status__line--recording">Recording: Idle/);
+assert.match(recordingStatusMarkup, /class="device-status__line device-status__line--recording">Recording: REC/);
 
 const browserGlobalDeviceMarkup =
   browserGlobalSandbox.UiPreviewDeviceScreen.renderDeviceScreenMarkup(deltaValidScenario);

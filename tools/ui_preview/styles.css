@@ -271,14 +271,15 @@ body {
   display: flex;
   justify-content: center;
   width: 100%;
+  max-width: 100%;
 }
 
 .device-frame {
-  width: 376px;
+  width: min(376px, 100%);
   border-radius: 16px;
   border: 2px solid #0f172a;
   background: linear-gradient(180deg, #1f2937, #0f172a);
-  padding: 14px;
+  padding: clamp(8px, 2.8vw, 14px);
   box-shadow:
     0 12px 22px rgba(15, 23, 42, 0.3),
     inset 0 0 0 1px rgba(255, 255, 255, 0.08);
@@ -305,8 +306,10 @@ body {
 }
 
 .device-screen {
-  width: 320px;
-  height: 240px;
+  width: min(320px, 100%);
+  height: auto;
+  aspect-ratio: 4 / 3;
+  margin: 0 auto;
   border-radius: 6px;
   border: 2px solid #020617;
   overflow: hidden;
