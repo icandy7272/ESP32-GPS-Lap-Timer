@@ -10,6 +10,7 @@ const webConsoleModule = require(path.join(root, "web_console.js"));
 const deviceScreenModule = require(path.join(root, "device_screen.js"));
 const webConsoleSource = fs.readFileSync(path.join(root, "web_console.js"), "utf8");
 const deviceScreenSource = fs.readFileSync(path.join(root, "device_screen.js"), "utf8");
+const stylesSource = fs.readFileSync(path.join(root, "styles.css"), "utf8");
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -25,6 +26,9 @@ function formatLapTimeForExpectation(timeMs) {
 assert.match(indexHtml, /id="web-console-root"/);
 assert.match(indexHtml, /id="device-screen-root"/);
 assert.match(indexHtml, /id="scenario-controls-root"/);
+assert.match(stylesSource, /\.device-panel__description\s*\{[\s\S]*font-size: 0\.78rem;/);
+assert.match(stylesSource, /\.device-preview--polished \.device-status\s*\{[\s\S]*font-size: 0\.88rem;/);
+assert.match(stylesSource, /\.device-preview--polished \.device-driving__delta\s*\{[\s\S]*font-size: clamp\(3\.1rem, 11vw, 4\.1rem\);/);
 
 const { SCENARIOS, DEFAULT_SCENARIO_ID, getScenarioById } = scenariosModule;
 const requiredScenarioIds = [
