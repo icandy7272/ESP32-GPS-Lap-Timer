@@ -72,7 +72,7 @@ assert.match(markup, /Status/);
 assert.match(markup, /Sessions/);
 assert.match(markup, /Tracks/);
 assert.match(markup, /Settings/);
-assert.match(markup, /Start Recording|Stop Recording/);
+assert.match(markup, /Stop Recording/);
 assert.match(markup, new RegExp(escapeRegExp(recordingScenario.sessions[0])));
 assert.match(markup, new RegExp(escapeRegExp(recordingScenario.tracks[0].name)));
 
