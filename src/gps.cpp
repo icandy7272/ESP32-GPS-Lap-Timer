@@ -582,8 +582,15 @@ static bool uart_detect_nmea(int timeout_ms) {
 static void uart_init() {
     Serial2.setRxBufferSize(1024);
 
-    GPS_FIX_RATE_HZ = 25;
-    FIX_INTERVAL_US = 40000;
+    // Read rate from runtime config (single source of truth).
+    // Bound to module's supported range (1-25 Hz). Default 25 if invalid.
+    int cfg_rate = app_config.gps_rate_hz;
+    if (cfg_rate < 1 || cfg_rate > 25) {
+        cfg_rate = 25;
+    }
+    GPS_FIX_RATE_HZ = cfg_rate;
+    FIX_INTERVAL_US = 1000000 / cfg_rate;
+    Serial.printf("[gps] Target rate from config: %d Hz\n", GPS_FIX_RATE_HZ);
 
     static constexpr long TARGET_BAUD = 115200;
     static constexpr long KNOWN_BAUDS[] = {115200, 38400, 9600};
@@ -641,17 +648,25 @@ static void uart_init() {
         Serial.println("[gps] Already at 115200");
     }
 
-    // Step 4: Set measurement rate to 25Hz (AFTER baud increase)
-    Serial.printf("[gps] Setting rate to %d Hz...\n", GPS_FIX_RATE_HZ);
+    // Step 4: Set measurement rate. Always send the command (cheap, RAM only)
+    // but DO NOT mark need_save unless the baud also changed — because if
+    // we're already at TARGET_BAUD, the previous boot already saved this rate
+    // to flash, so re-saving wears the flash for no gain.
+    Serial.printf("[gps] Setting rate to %d Hz%s\n",
+                  GPS_FIX_RATE_HZ,
+                  need_save ? " (will persist)" : " (RAM only)");
     ubx_cfg_rate(GPS_FIX_RATE_HZ);
     delay(50);
-    need_save = true;
 
-    // Step 5: Save only if config changed
+    // Step 5: Persist to module flash only if baud actually changed.
+    // Sentence config and rate are re-sent every boot to RAM, which is fine
+    // and avoids unnecessary flash wear on the GNSS module.
     if (need_save) {
-        Serial.println("[gps] Saving config to flash...");
+        Serial.println("[gps] reconfigured: saving to flash");
         ubx_cfg_save();
         delay(100);
+    } else {
+        Serial.println("[gps] already configured (no flash save)");
     }
 
     Serial.println("[gps] Init complete");

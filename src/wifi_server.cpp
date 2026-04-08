@@ -716,10 +716,12 @@ static void handle_api_settings_get() {
     snprintf(buf, sizeof(buf),
              "{\"wifi_ssid\":\"%s\","
              "\"wifi_pass\":\"%s\","
-             "\"brightness\":%u}",
+             "\"brightness\":%u,"
+             "\"gps_rate_hz\":%u}",
              app_config.wifi_ssid,
              app_config.wifi_pass,
-             app_config.brightness);
+             app_config.brightness,
+             app_config.gps_rate_hz);
 
     server.send(200, "application/json", buf);
 }
@@ -764,6 +766,9 @@ static void apply_settings_from_json(const char* json) {
     int val = 0;
     if (extract_json_int(json, "brightness", &val)) {
         app_config.brightness = (uint8_t)constrain(val, 0, 255);
+    }
+    if (extract_json_int(json, "gps_rate_hz", &val)) {
+        app_config.gps_rate_hz = (uint8_t)constrain(val, 1, 25);
     }
 }
 

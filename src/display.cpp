@@ -523,18 +523,32 @@ static void draw_lap_list_row(int row_idx, const LapRecord& lap,
 
 static bool s_laplist_needs_clear = true;
 
+// Track empty-state visibility so we can clear it when first lap appears.
+static bool s_laplist_empty_drawn = false;
+
 static void draw_lap_list_screen(const SessionState& st) {
     if (s_laplist_needs_clear) {
         s_tft.fillScreen(TFT_BLACK);
         s_laplist_needs_clear = false;
+        s_laplist_empty_drawn = false;
     }
     draw_lap_list_header(st);
 
     if (st.lap_count == 0) {
-        s_tft.setTextDatum(MC_DATUM);
-        s_tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-        s_tft.drawString("No laps yet", SCREEN_W / 2, SCREEN_H / 2, 2);
+        if (!s_laplist_empty_drawn) {
+            s_tft.setTextDatum(MC_DATUM);
+            s_tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+            s_tft.drawString("No laps yet", SCREEN_W / 2, SCREEN_H / 2, 2);
+            s_laplist_empty_drawn = true;
+        }
         return;
+    }
+
+    // Transitioning from empty to non-empty: clear the leftover "No laps yet"
+    if (s_laplist_empty_drawn) {
+        // Clear the rows area below header (leaves header intact)
+        s_tft.fillRect(0, LAP_HEADER_H, SCREEN_W, SCREEN_H - LAP_HEADER_H, TFT_BLACK);
+        s_laplist_empty_drawn = false;
     }
 
     // Clamp scroll offset

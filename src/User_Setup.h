@@ -43,5 +43,7 @@
 #define SMOOTH_FONT  // Anti-aliased VLW fonts
 
 // --- SPI speed ---
-#define SPI_FREQUENCY       40000000   // 40 MHz — safe for most ILI9341 clones
+// NOTE: SPI_FREQUENCY is set via build_flags in platformio.ini
+// (currently 10MHz for breadboard signal integrity).
+// Do NOT define it here, or the build_flag will be silently overridden.
 #define SPI_READ_FREQUENCY   6000000   // Slower read back
