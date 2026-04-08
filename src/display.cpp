@@ -219,11 +219,12 @@ static void update_screen_lock(float speed_kmh, uint32_t now_ms) {
         if (s_idle_start_ms == 0) {
             s_idle_start_ms = now_ms;
         }
-        if ((now_ms - s_idle_start_ms) > IDLE_SWITCH_MS &&
-            s_current_screen == SCREEN_DRIVING) {
-            s_current_screen = SCREEN_LAP_LIST;
-            s_idle_start_ms = 0;
-        }
+        // Auto-switch disabled until buttons are connected
+        // if ((now_ms - s_idle_start_ms) > IDLE_SWITCH_MS &&
+        //     s_current_screen == SCREEN_DRIVING) {
+        //     s_current_screen = SCREEN_LAP_LIST;
+        //     s_idle_start_ms = 0;
+        // }
     } else {
         s_below_threshold = false;
         s_idle_start_ms   = 0;
@@ -381,8 +382,13 @@ static void draw_driving_screen(const DirtyFlags& df,
 // Status screen rendering
 // ============================================================
 
+static bool s_status_needs_clear = true;
+
 static void draw_status_screen(const SessionState& st) {
-    s_tft.fillScreen(TFT_BLACK);
+    if (s_status_needs_clear) {
+        s_tft.fillScreen(TFT_BLACK);
+        s_status_needs_clear = false;
+    }
     s_tft.setTextDatum(TL_DATUM);
     s_tft.setTextColor(TFT_WHITE, TFT_BLACK);
 
@@ -393,7 +399,7 @@ static void draw_status_screen(const SessionState& st) {
     char gps_line[40];
     snprintf(gps_line, sizeof(gps_line), "GPS: %d sats  Fix: %s",
              st.gps_satellites,
-             st.gps_fix_ok ? "3D" : "No fix");
+             st.gps_fix_ok ? "OK" : "No fix");
     s_tft.drawString(gps_line, 8, y, 2);
     y += LINE_H;
 
@@ -455,19 +461,27 @@ static void draw_status_screen(const SessionState& st) {
     snprintf(fw_line, sizeof(fw_line), "FW: %s", FW_VERSION);
     s_tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
     s_tft.drawString(fw_line, 8, y, 2);
+
+    // Clear any leftover area below last line
+    s_tft.fillRect(0, y + LINE_H, SCREEN_W, SCREEN_H - y - LINE_H, TFT_BLACK);
 }
 
 // ============================================================
 // Lap list screen rendering
 // ============================================================
 
+static bool s_laplist_header_drawn = false;
+
 static void draw_lap_list_header(const SessionState& st) {
-    s_tft.fillRect(0, 0, SCREEN_W, LAP_HEADER_H, TFT_NAVY);
+    if (!s_laplist_header_drawn) {
+        s_tft.fillRect(0, 0, SCREEN_W, LAP_HEADER_H, TFT_NAVY);
+        s_laplist_header_drawn = true;
+    }
     s_tft.setTextDatum(TL_DATUM);
     s_tft.setTextColor(TFT_WHITE, TFT_NAVY);
 
     char hdr[40];
-    snprintf(hdr, sizeof(hdr), "SESSION: %d laps", st.lap_count);
+    snprintf(hdr, sizeof(hdr), "SESSION: %d laps   ", st.lap_count);
     s_tft.drawString(hdr, 8, 6, 2);
 }
 
@@ -507,8 +521,13 @@ static void draw_lap_list_row(int row_idx, const LapRecord& lap,
     }
 }
 
+static bool s_laplist_needs_clear = true;
+
 static void draw_lap_list_screen(const SessionState& st) {
-    s_tft.fillScreen(TFT_BLACK);
+    if (s_laplist_needs_clear) {
+        s_tft.fillScreen(TFT_BLACK);
+        s_laplist_needs_clear = false;
+    }
     draw_lap_list_header(st);
 
     if (st.lap_count == 0) {
@@ -549,6 +568,13 @@ static void render_frame(bool screen_changed) {
     // Acquire SPI bus with 10ms timeout; skip frame on failure
     if (xSemaphoreTake(s_spi_mtx, pdMS_TO_TICKS(SPI_TIMEOUT_MS)) != pdTRUE) {
         return;
+    }
+
+    // On screen change, force clear for status/laplist screens
+    if (df.full_redraw) {
+        s_status_needs_clear   = true;
+        s_laplist_needs_clear  = true;
+        s_laplist_header_drawn = false;
     }
 
     switch (s_current_screen) {
@@ -633,14 +659,21 @@ void display_show_splash() {
     s_tft.drawString(FW_VERSION, SCREEN_W / 2, SCREEN_H / 2 + 20, 2);
 }
 
-void display_show_gps_search(int sats) {
-    s_tft.fillScreen(TFT_BLACK);
-    s_tft.setTextDatum(MC_DATUM);
-    s_tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-    s_tft.drawString("GPS Searching...", SCREEN_W / 2, SCREEN_H / 2 - 20, 4);
+static bool s_gps_search_cleared = false;
 
+void display_show_gps_search(int sats) {
+    if (!s_gps_search_cleared) {
+        s_tft.fillScreen(TFT_BLACK);
+        s_tft.setTextDatum(MC_DATUM);
+        s_tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+        s_tft.drawString("GPS Searching...", SCREEN_W / 2, SCREEN_H / 2 - 20, 4);
+        s_gps_search_cleared = true;
+    }
+
+    // Only update the satellite count (overwrite with background color)
     char sat_buf[24];
-    snprintf(sat_buf, sizeof(sat_buf), "%d satellites", sats);
+    snprintf(sat_buf, sizeof(sat_buf), "%d satellites  ", sats);  // trailing spaces to clear
+    s_tft.setTextDatum(MC_DATUM);
     s_tft.setTextColor(TFT_WHITE, TFT_BLACK);
     s_tft.drawString(sat_buf, SCREEN_W / 2, SCREEN_H / 2 + 20, 2);
 }

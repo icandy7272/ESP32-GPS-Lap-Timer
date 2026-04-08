@@ -305,7 +305,14 @@ static GpsPoint assemble_point(const GgaData* gga, const RmcData* rmc) {
     point.satellites   = gga->satellites;
     point.speed_kmh    = rmc->speed_kmh;
     point.heading_deg  = rmc->heading_deg;
-    point.fix_3d       = (gga->satellites >= 6);
+    // Use GGA fix_quality as the authoritative fix indicator.
+    // Whitelist real navigation fixes only:
+    //   1 = GPS, 2 = DGPS, 4 = RTK fixed, 5 = RTK float
+    // Reject 6 (estimated/dead-reckoning), 7 (manual), 8 (simulator).
+    // Note: field name is "fix_3d" for legacy reasons but actually
+    // means "has valid navigation fix" (not strictly 3D vs 2D).
+    int fq = gga->fix_quality;
+    point.fix_3d       = (fq == 1 || fq == 2 || fq == 4 || fq == 5);
     point.pps_synced   = pps_ok;
 
     if (pps_ok) {
@@ -372,6 +379,17 @@ static void send_fix_if_ready() {
     }
 
     GpsPoint point = assemble_point(&s_gga, &s_rmc);
+
+    // Periodic diagnostic — print fix status once per second
+    static uint32_t last_diag_ms = 0;
+    uint32_t now_ms = millis();
+    if (now_ms - last_diag_ms >= 1000) {
+        last_diag_ms = now_ms;
+        Serial.printf("[gps] fix_q=%d sats=%d fix_3d=%d pps=%d lat=%.5f lon=%.5f\n",
+                      s_gga.fix_quality, s_gga.satellites,
+                      point.fix_3d ? 1 : 0, point.pps_synced ? 1 : 0,
+                      point.lat_deg, point.lon_deg);
+    }
 
     // Send to queue; if full, discard oldest item then retry.
     if (xQueueSend(s_gps_queue, &point, 0) == errQUEUE_FULL) {
@@ -562,46 +580,81 @@ static bool uart_detect_nmea(int timeout_ms) {
 // ---- UART + UBX configuration ---------------------------------
 
 static void uart_init() {
-    Serial2.setRxBufferSize(1024);  // 25Hz NMEA needs >= 1KB buffer
+    Serial2.setRxBufferSize(1024);
 
-    // Derive rate from runtime config.
-    uint8_t rate_hz = app_config.gps_rate_hz;
-    if (rate_hz == 0 || rate_hz > 25) {
-        rate_hz = 25;
-    }
-    GPS_FIX_RATE_HZ = rate_hz;
-    FIX_INTERVAL_US = 1000000 / GPS_FIX_RATE_HZ;
+    GPS_FIX_RATE_HZ = 25;
+    FIX_INTERVAL_US = 40000;
 
-    // Step 1: open at factory 9600 and request baud change.
-    Serial2.begin(GPS_BAUD_FACTORY, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
-    delay(50);
-    ubx_cfg_prt(GPS_BAUD_TARGET);
-    delay(200);
+    static constexpr long TARGET_BAUD = 115200;
+    static constexpr long KNOWN_BAUDS[] = {115200, 38400, 9600};
+    static constexpr int  NUM_BAUDS = 3;
 
-    // Step 2: reconnect at target baud.
-    Serial2.end();
-    delay(100);
-    Serial2.begin(GPS_BAUD_TARGET, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
-    delay(100);
-
-    // Step 3: verify data arrives. If not, module was already at
-    // target baud (config saved from previous boot).
-    if (!uart_detect_nmea(UBX_DETECT_TIMEOUT_MS)) {
+    // Step 1: Detect current module baud rate
+    long live_baud = 0;
+    for (int i = 0; i < NUM_BAUDS; i++) {
         Serial2.end();
         delay(50);
-        Serial2.begin(GPS_BAUD_TARGET, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
-        delay(100);
+        Serial2.begin(KNOWN_BAUDS[i], SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
+        delay(200);
+        Serial.printf("[gps] Trying %ld baud... ", KNOWN_BAUDS[i]);
+        if (uart_detect_nmea(1500)) {
+            live_baud = KNOWN_BAUDS[i];
+            Serial.println("OK");
+            break;
+        }
+        Serial.println("no data");
+    }
+    if (live_baud == 0) {
+        Serial.println("[gps] ERROR: no NMEA at any baud rate");
+        Serial2.begin(TARGET_BAUD, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
+        return;
     }
 
-    // Step 4: configure rate and NMEA sentences.
-    ubx_cfg_rate(rate_hz);
-    delay(50);
+    bool need_save = false;
+
+    // Step 2: Disable unwanted NMEA sentences FIRST (reduce bandwidth)
+    Serial.println("[gps] Configuring NMEA (GGA+RMC only)...");
     ubx_configure_nmea_sentences();
     delay(50);
 
-    // Step 5: persist to non-volatile memory.
-    ubx_cfg_save();
-    delay(100);
+    // Step 3: Change baud to 115200 if not already there
+    if (live_baud != TARGET_BAUD) {
+        Serial.printf("[gps] Switching baud %ld -> %ld...\n", live_baud, TARGET_BAUD);
+        ubx_cfg_prt(TARGET_BAUD);
+        delay(100);
+        Serial2.end();
+        delay(50);
+        Serial2.begin(TARGET_BAUD, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
+        delay(100);
+
+        if (uart_detect_nmea(2000)) {
+            Serial.println("[gps] Baud switch verified");
+            need_save = true;
+        } else {
+            Serial.printf("[gps] WARN: baud switch failed, staying at %ld\n", live_baud);
+            Serial2.end();
+            delay(50);
+            Serial2.begin(live_baud, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
+            delay(100);
+        }
+    } else {
+        Serial.println("[gps] Already at 115200");
+    }
+
+    // Step 4: Set measurement rate to 25Hz (AFTER baud increase)
+    Serial.printf("[gps] Setting rate to %d Hz...\n", GPS_FIX_RATE_HZ);
+    ubx_cfg_rate(GPS_FIX_RATE_HZ);
+    delay(50);
+    need_save = true;
+
+    // Step 5: Save only if config changed
+    if (need_save) {
+        Serial.println("[gps] Saving config to flash...");
+        ubx_cfg_save();
+        delay(100);
+    }
+
+    Serial.println("[gps] Init complete");
 }
 
 // ---- PPS interrupt setup --------------------------------------

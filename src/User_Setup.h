@@ -23,6 +23,12 @@
 #define TFT_RST    8
 #define TFT_BL    47   // moved from GPIO46 (strapping pin) to GPIO47
 
+// ESP32-S3: force TFT_eSPI onto its explicit FSPI code path.
+// Without this, the library mixes Arduino's FSPI index (0) with the
+// ESP-IDF register macros (which expect SPI2/SPI3 => 2/3) and can
+// crash in TFT_eSPI::init() before any pixels are drawn.
+#define USE_FSPI_PORT
+
 // --- Backlight active level ---
 #define TFT_BACKLIGHT_ON HIGH
 
