@@ -15,3 +15,9 @@ Then visit `http://localhost:8000/index.html` in a browser to see the neutral pr
 
 - `src/wifi_server.cpp`
 - `src/display.cpp`
+
+## Manual verification
+
+- Start `python3 -m http.server 8000` while inside `tools/ui_preview`.
+- Visit `http://localhost:8000/index.html` and confirm the shell renders without missing-file errors.
+- Open DevTools and ensure `window.UiPreviewApp` exists before other scripts execute.
