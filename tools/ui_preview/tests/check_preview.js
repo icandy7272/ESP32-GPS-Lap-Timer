@@ -33,6 +33,7 @@ const requiredScenarioIds = [
   "ready-to-drive",
   "no-gps-driving",
   "recording",
+  "recording-slow",
   "best-lap-improved",
   "off-track",
   "session-review",
@@ -202,6 +203,7 @@ const offTrackDrivingScenario = {
 
 const deltaUnavailableScenario = getScenarioById("ready-to-drive");
 const deltaValidScenario = getScenarioById("recording");
+const deltaSlowScenario = getScenarioById("recording-slow");
 const lapListScenario = getScenarioById("session-review");
 const lapListScenarioLaps = ((lapListScenario.device || {}).laps || []);
 const lapListBestMismatchScenario = {
@@ -241,6 +243,7 @@ const noGpsDrivingMarkup = deviceScreenModule.renderDeviceScreenMarkup(noGpsDriv
 const offTrackDrivingMarkup = deviceScreenModule.renderDeviceScreenMarkup(offTrackDrivingScenario);
 const deltaUnavailableMarkup = deviceScreenModule.renderDeviceScreenMarkup(deltaUnavailableScenario);
 const deltaValidMarkup = deviceScreenModule.renderDeviceScreenMarkup(deltaValidScenario);
+const deltaSlowMarkup = deviceScreenModule.renderDeviceScreenMarkup(deltaSlowScenario);
 const comparisonMarkup = deviceScreenModule.renderDeviceScreenComparisonMarkup(deltaValidScenario);
 const lapListMarkup = deviceScreenModule.renderDeviceScreenMarkup(lapListScenario);
 const lapListBestMismatchMarkup = deviceScreenModule.renderDeviceScreenMarkup(lapListBestMismatchScenario);
@@ -255,6 +258,7 @@ assert.match(noGpsDrivingMarkup, /NO GPS/);
 assert.match(offTrackDrivingMarkup, /OFF TRACK/);
 assert.match(deltaUnavailableMarkup, /---/);
 assert.match(deltaValidMarkup, /[+-]\d+\.\d{2}/);
+assert.match(deltaSlowMarkup, /\+0\.24/);
 assert.match(comparisonMarkup, /Original TFT/);
 assert.match(comparisonMarkup, /Polished TFT/);
 assert.match(comparisonMarkup, /device-preview device-preview--original/);
