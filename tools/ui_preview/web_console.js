@@ -32,6 +32,19 @@
     return isRecording ? "Stop Recording" : "Start Recording";
   }
 
+  function renderCardHeading(title, count) {
+    return (
+      '<div class="web-console__card-head">' +
+      "<h2>" +
+      escapeHtml(title) +
+      "</h2>" +
+      (typeof count === "number"
+        ? '<span class="web-console__count">' + count + "</span>"
+        : "") +
+      "</div>"
+    );
+  }
+
   function renderSessionsMarkup(sessions) {
     if (!Array.isArray(sessions) || sessions.length === 0) {
       return renderEmptyListItem("No sessions");
@@ -82,6 +95,7 @@
     const data = scenario || {};
     const status = data.status || {};
     const settings = data.settings || {};
+    const scenarioLabel = escapeHtml(data.label || data.id || "Preview");
     const isRecording = Boolean(status.recording);
     const gpsFix = status.gps_fix ? "Yes" : "No";
     const recordingState = isRecording ? "REC" : "Idle";
@@ -92,11 +106,23 @@
     const ssid = escapeHtml(settings.wifi_ssid || "");
     const wifiPass = escapeHtml(settings.wifi_pass || "");
     const brightness = Number(settings.brightness);
+    const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    const tracks = Array.isArray(data.tracks) ? data.tracks : [];
 
     return (
       '<div class="web-console-preview">' +
+      '<div class="web-console__hero">' +
+      '<div class="web-console__hero-copy">' +
+      '<p class="web-console__eyebrow">Web Console Preview</p>' +
+      '<h1 class="web-console__title">GPS Lap Timer</h1>' +
+      '<p class="web-console__subtitle">Desktop mirror of the ESP32 Wi-Fi dashboard with shared scenario data.</p>' +
+      "</div>" +
+      '<span class="web-console__scenario-pill">' +
+      scenarioLabel +
+      "</span>" +
+      "</div>" +
       '<div class="web-console__card" data-card="status">' +
-      "<h2>Status</h2>" +
+      renderCardHeading("Status") +
       '<div class="web-console__row"><span class="web-console__label">GPS Fix</span><span class="web-console__value">' +
       gpsFix +
       "</span></div>" +
@@ -115,20 +141,22 @@
       '<div class="web-console__row"><span class="web-console__label">Track</span><span class="web-console__value">' +
       trackName +
       "</span></div>" +
-      '<button type="button" class="web-console__recording-cta" disabled>' +
+      '<button type="button" class="web-console__recording-cta' +
+      (isRecording ? " web-console__recording-cta--active" : "") +
+      '" disabled>' +
       getRecordingCtaLabel(isRecording) +
       "</button>" +
       "</div>" +
       '<div class="web-console__card" data-card="sessions">' +
-      "<h2>Sessions</h2>" +
+      renderCardHeading("Sessions", sessions.length) +
       '<ul class="web-console__list">' +
-      renderSessionsMarkup(data.sessions) +
+      renderSessionsMarkup(sessions) +
       "</ul>" +
       "</div>" +
       '<div class="web-console__card" data-card="tracks">' +
-      "<h2>Tracks</h2>" +
+      renderCardHeading("Tracks", tracks.length) +
       '<ul class="web-console__list">' +
-      renderTracksMarkup(data.tracks) +
+      renderTracksMarkup(tracks) +
       "</ul>" +
       '<h3 class="web-console__subheading">Add Track</h3>' +
       '<form class="web-console__form" aria-label="Add Track form shell">' +

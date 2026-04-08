@@ -50,6 +50,13 @@
     );
   }
 
+  function formatUptime(secondsValue) {
+    const seconds = Math.max(0, toInt(secondsValue, 0));
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return minutes + "m " + remainingSeconds + "s";
+  }
+
   function normalizeBootState(value) {
     const normalized = String(value || "splash")
       .trim()
@@ -110,6 +117,7 @@
     const bootState = resolveBootState(device, status);
     const satellites = Math.max(0, toInt(status && status.satellites, 0));
     const trackName = escapeHtml((status && status.track) || "No track");
+    const firmwareVersion = escapeHtml((device && device.firmware_version) || "v1.0.0");
 
     if (bootState === "gps-searching") {
       return (
@@ -152,7 +160,9 @@
     return (
       '<div class="device-boot device-boot--splash">' +
       '<div class="device-boot__headline">GPS Lap Timer</div>' +
-      '<div class="device-boot__subline">v1.0.0</div>' +
+      '<div class="device-boot__subline">' +
+      firmwareVersion +
+      "</div>" +
       "</div>"
     );
   }
@@ -199,8 +209,15 @@
     const satellites = Math.max(0, toInt(status && status.satellites, 0));
     const trackName = escapeHtml((status && status.track) || "No track");
     const recording = Boolean(status && status.recording);
-    const lapCount = Math.max(0, toInt(device && device.lap_count, 0));
+    const lapRows = Array.isArray(device && device.lap_rows) ? device.lap_rows : [];
+    const lapCount =
+      lapRows.length > 0 ? lapRows.length : Math.max(0, toInt(device && device.lap_count, 0));
     const wifiSsid = escapeHtml((settings && settings.wifi_ssid) || "--");
+    const sdFreeGb = Number(device && device.sd_free_gb);
+    const sdLine = Number.isFinite(sdFreeGb) && sdFreeGb >= 0 ? "SD: " + sdFreeGb.toFixed(1) + " GB free" : "SD: --";
+    const batteryLine = escapeHtml((device && device.battery_text) || "Battery: N/A");
+    const uptimeLine = "Uptime: " + formatUptime(device && device.uptime_seconds);
+    const firmwareLine = "FW: " + escapeHtml((device && device.firmware_version) || "v1.0.0");
     const recordingLineClass = recording
       ? "device-status__line device-status__line--recording"
       : "device-status__line";
@@ -226,15 +243,55 @@
       '<div class="device-status__line">WiFi: ' +
       wifiSsid +
       "</div>" +
-      '<div class="device-status__line">SD: --</div>' +
-      '<div class="device-status__line">Battery: N/A</div>' +
-      '<div class="device-status__line">Uptime: 0m 0s</div>' +
-      '<div class="device-status__line device-status__line--firmware">FW: v1.0.0</div>' +
+      '<div class="device-status__line">' +
+      sdLine +
+      "</div>" +
+      '<div class="device-status__line">' +
+      batteryLine +
+      "</div>" +
+      '<div class="device-status__line">' +
+      uptimeLine +
+      "</div>" +
+      '<div class="device-status__line device-status__line--firmware">' +
+      firmwareLine +
+      "</div>" +
       "</div>"
     );
   }
 
-  function renderLapListRows(device, status) {
+  function renderScenarioLapRows(device) {
+    const rows = Array.isArray(device && device.lap_rows) ? device.lap_rows : [];
+    if (rows.length === 0) {
+      return "";
+    }
+
+    return rows
+      .slice(0, 7)
+      .map(function (row) {
+        const label = escapeHtml(row && row.label ? row.label : "--");
+        const time = escapeHtml(row && row.time ? row.time : "--:--.--");
+        const delta = escapeHtml(row && row.delta ? row.delta : "");
+        const isBest = Boolean(row && row.is_best);
+        return (
+          '<div class="device-lap-list__row' +
+          (isBest ? " is-best" : "") +
+          '">' +
+          '<span class="device-lap-list__lap">' +
+          label +
+          "</span>" +
+          '<span class="device-lap-list__time device-time">' +
+          time +
+          "</span>" +
+          '<span class="device-lap-list__delta device-time">' +
+          delta +
+          "</span>" +
+          "</div>"
+        );
+      })
+      .join("");
+  }
+
+  function renderSyntheticLapRows(device, status) {
     const lapCount = Math.max(0, toInt(device && device.lap_count, 0));
     if (lapCount === 0) {
       return '<div class="device-lap-list__empty">No laps yet</div>';
@@ -280,8 +337,18 @@
     return rowsMarkup;
   }
 
+  function renderLapListRows(device, status) {
+    const scenarioRowsMarkup = renderScenarioLapRows(device);
+    if (scenarioRowsMarkup) {
+      return scenarioRowsMarkup;
+    }
+
+    return renderSyntheticLapRows(device, status);
+  }
+
   function renderLapListBlock(status, device) {
-    const lapCount = Math.max(0, toInt(device && device.lap_count, 0));
+    const scenarioRows = Array.isArray(device && device.lap_rows) ? device.lap_rows : [];
+    const lapCount = scenarioRows.length > 0 ? scenarioRows.length : Math.max(0, toInt(device && device.lap_count, 0));
     return (
       '<div class="device-lap-list">' +
       '<div class="device-lap-list__title">Lap List</div>' +

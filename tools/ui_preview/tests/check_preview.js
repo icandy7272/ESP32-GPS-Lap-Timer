@@ -51,6 +51,12 @@ for (const scenario of SCENARIOS) {
     Array.isArray(scenario.sessions) && scenario.sessions.every((session) => typeof session === "string"),
     `Scenario ${scenario.id} sessions should be filename strings`,
   );
+  if (scenario.device && Object.prototype.hasOwnProperty.call(scenario.device, "lap_rows")) {
+    assert.ok(
+      Array.isArray(scenario.device.lap_rows),
+      `Scenario ${scenario.id} lap_rows should be an array when present`,
+    );
+  }
 }
 
 const fallbackScenario = getScenarioById("missing");
@@ -97,12 +103,28 @@ assert.equal(
 );
 
 const recordingScenario = getScenarioById("recording");
+const heavyTrackLibraryScenario = getScenarioById("heavy-track-library");
+const coldBootScenario = getScenarioById("cold-boot");
+const bestLapImprovedScenario = getScenarioById("best-lap-improved");
+const sessionReviewScenario = getScenarioById("session-review");
 assert.ok(recordingScenario, "Expected recording scenario to exist");
 assert.ok(recordingScenario.sessions.length > 0, "recording scenario should include at least one session");
 assert.ok(recordingScenario.tracks.length > 0, "recording scenario should include at least one track");
+assert.ok(coldBootScenario, "Expected cold-boot scenario to exist");
+assert.ok(bestLapImprovedScenario, "Expected best-lap-improved scenario to exist");
+assert.ok(sessionReviewScenario, "Expected session-review scenario to exist");
+assert.ok(
+  heavyTrackLibraryScenario.sessions.length > 1,
+  "heavy-track-library should include multiple sessions",
+);
+assert.ok(
+  heavyTrackLibraryScenario.tracks.length > 1,
+  "heavy-track-library should include multiple tracks",
+);
 
 const markup = webConsoleModule.renderWebConsoleMarkup(recordingScenario);
 const browserGlobalMarkup = browserGlobalSandbox.UiPreviewWebConsole.renderWebConsoleMarkup(recordingScenario);
+const heavyTrackLibraryMarkup = webConsoleModule.renderWebConsoleMarkup(heavyTrackLibraryScenario);
 assert.match(markup, /Status/);
 assert.match(markup, /Sessions/);
 assert.match(markup, /Tracks/);
@@ -112,6 +134,19 @@ assert.match(markup, new RegExp(escapeRegExp(recordingScenario.sessions[0])));
 assert.match(markup, new RegExp(escapeRegExp(recordingScenario.tracks[0].name)));
 assert.doesNotMatch(markup, /href="#"/);
 assert.equal(browserGlobalMarkup, markup, "browser-global and CommonJS renderers should match");
+assert.match(
+  heavyTrackLibraryMarkup,
+  new RegExp(escapeRegExp(heavyTrackLibraryScenario.sessions[1])),
+);
+assert.match(
+  heavyTrackLibraryMarkup,
+  new RegExp(escapeRegExp(heavyTrackLibraryScenario.tracks[1].name)),
+);
+assert.doesNotMatch(
+  heavyTrackLibraryMarkup,
+  /No sessions|No tracks/,
+  "heavy-track-library should not render empty-state text",
+);
 
 const gpsSearchingScenario = getScenarioById("gps-searching");
 const readyBootScenario = {
@@ -160,6 +195,7 @@ const offTrackDrivingScenario = {
 const deltaUnavailableScenario = getScenarioById("ready-to-drive");
 const deltaValidScenario = getScenarioById("recording");
 const lapListScenario = getScenarioById("session-review");
+const lapListScenarioRows = ((lapListScenario.device || {}).lap_rows || []);
 const idleStatusScenario = {
   ...getScenarioById("heavy-track-library"),
   device: {
@@ -204,6 +240,18 @@ assert.match(deltaUnavailableMarkup, /---/);
 assert.match(deltaValidMarkup, /[+-]\d+\.\d{2}/);
 
 assert.match(lapListMarkup, /Lap List|SESSION:/);
+assert.ok(
+  lapListScenarioRows.length >= 8,
+  "session-review should provide enough lap rows to reveal paging or scrolling",
+);
+assert.match(
+  lapListMarkup,
+  new RegExp(escapeRegExp(lapListScenarioRows[0].label || "")),
+);
+assert.match(
+  lapListMarkup,
+  new RegExp(escapeRegExp(lapListScenarioRows[Math.min(6, lapListScenarioRows.length - 1)].time || "")),
+);
 assert.match(idleStatusMarkup, /class="device-status__line">Recording: Idle/);
 assert.doesNotMatch(idleStatusMarkup, /class="device-status__line device-status__line--recording">Recording: Idle/);
 assert.match(recordingStatusMarkup, /class="device-status__line device-status__line--recording">Recording: REC/);

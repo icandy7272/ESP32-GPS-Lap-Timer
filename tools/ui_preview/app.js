@@ -63,7 +63,13 @@
 
     const description = document.createElement("p");
     description.className = "scenario-controls__description";
-    description.textContent = "Tooling-only controls. Select a scenario to refresh both previews.";
+    description.textContent =
+      "Tooling-only controls. Select a shared firmware scenario to refresh both previews.";
+
+    const activeScenario = scenariosApi.getScenarioById(state.activeScenarioId);
+    const activeLabel = document.createElement("p");
+    activeLabel.className = "scenario-controls__active";
+    activeLabel.textContent = "Active scenario: " + (activeScenario.label || activeScenario.id);
 
     const buttonsWrap = document.createElement("div");
     buttonsWrap.className = "scenario-controls__buttons";
@@ -93,6 +99,7 @@
 
     controlsRoot.appendChild(heading);
     controlsRoot.appendChild(description);
+    controlsRoot.appendChild(activeLabel);
     controlsRoot.appendChild(buttonsWrap);
   }
 
