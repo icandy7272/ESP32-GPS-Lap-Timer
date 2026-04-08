@@ -22,7 +22,7 @@ Shared scenarios live in `tools/ui_preview/scenarios.js`.
 Each scenario is the source of truth for both renderers:
 
 - `status`, `sessions`, `tracks`, and `settings` feed the web console preview
-- `device` feeds the TFT preview, including boot state, driving state, status details, and lap-list rows
+- `device` feeds the TFT preview, including boot state, driving state, status details, and raw lap history for the lap-list view
 
 If one preview diverges from the other, update the scenario first unless the issue is renderer-specific.
 

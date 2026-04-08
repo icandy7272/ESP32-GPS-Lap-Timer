@@ -15,6 +15,13 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function formatLapTimeForExpectation(timeMs) {
+  const minutes = Math.floor(timeMs / 60000);
+  const seconds = Math.floor((timeMs % 60000) / 1000);
+  const hundredths = Math.floor((timeMs % 1000) / 10);
+  return String(minutes) + ":" + String(seconds).padStart(2, "0") + "." + String(hundredths).padStart(2, "0");
+}
+
 assert.match(indexHtml, /id="web-console-root"/);
 assert.match(indexHtml, /id="device-screen-root"/);
 assert.match(indexHtml, /id="scenario-controls-root"/);
@@ -52,10 +59,10 @@ for (const scenario of SCENARIOS) {
     Array.isArray(scenario.sessions) && scenario.sessions.every((session) => typeof session === "string"),
     `Scenario ${scenario.id} sessions should be filename strings`,
   );
-  if (scenario.device && Object.prototype.hasOwnProperty.call(scenario.device, "lap_rows")) {
+  if (scenario.device && Object.prototype.hasOwnProperty.call(scenario.device, "laps")) {
     assert.ok(
-      Array.isArray(scenario.device.lap_rows),
-      `Scenario ${scenario.id} lap_rows should be an array when present`,
+      Array.isArray(scenario.device.laps),
+      `Scenario ${scenario.id} laps should be an array when present`,
     );
   }
 }
@@ -186,7 +193,7 @@ const offTrackDrivingScenario = {
 const deltaUnavailableScenario = getScenarioById("ready-to-drive");
 const deltaValidScenario = getScenarioById("recording");
 const lapListScenario = getScenarioById("session-review");
-const lapListScenarioRows = ((lapListScenario.device || {}).lap_rows || []);
+const lapListScenarioLaps = ((lapListScenario.device || {}).laps || []);
 const idleStatusScenario = {
   ...getScenarioById("heavy-track-library"),
   device: {
@@ -232,20 +239,27 @@ assert.match(deltaValidMarkup, /[+-]\d+\.\d{2}/);
 
 assert.match(lapListMarkup, /Lap List|SESSION:/);
 assert.ok(
-  lapListScenarioRows.length >= 8,
-  "session-review should provide enough lap rows to reveal paging or scrolling",
+  lapListScenarioLaps.length >= 8,
+  "session-review should provide enough laps to reveal paging or scrolling",
 );
 assert.match(
   lapListMarkup,
-  new RegExp(escapeRegExp(lapListScenarioRows[0].label || "")),
+  new RegExp(escapeRegExp(formatLapTimeForExpectation(lapListScenarioLaps[0].lap_time_ms))),
 );
 assert.match(
   lapListMarkup,
-  new RegExp(escapeRegExp(lapListScenarioRows[Math.min(6, lapListScenarioRows.length - 1)].time || "")),
+  new RegExp(
+    escapeRegExp(formatLapTimeForExpectation(lapListScenarioLaps[Math.min(6, lapListScenarioLaps.length - 1)].lap_time_ms)),
+  ),
 );
 assert.match(idleStatusMarkup, /class="device-status__line">Recording: Idle/);
 assert.doesNotMatch(idleStatusMarkup, /class="device-status__line device-status__line--recording">Recording: Idle/);
 assert.match(recordingStatusMarkup, /class="device-status__line device-status__line--recording">Recording: REC/);
+assert.match(idleStatusMarkup, /SD: 12\.7 GB free/);
+assert.match(idleStatusMarkup, /Battery: N\/A/);
+assert.match(idleStatusMarkup, /Uptime: 6m 52s/);
+assert.match(idleStatusMarkup, /FW: v1\.0\.0/);
+assert.match(deviceScreenModule.renderDeviceScreenMarkup(getScenarioById("cold-boot")), /v1\.0\.0/);
 
 const browserGlobalDeviceMarkup =
   browserGlobalSandbox.UiPreviewDeviceScreen.renderDeviceScreenMarkup(deltaValidScenario);

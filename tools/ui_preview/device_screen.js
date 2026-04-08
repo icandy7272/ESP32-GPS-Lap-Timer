@@ -209,13 +209,11 @@
     const satellites = Math.max(0, toInt(status && status.satellites, 0));
     const trackName = escapeHtml((status && status.track) || "No track");
     const recording = Boolean(status && status.recording);
-    const lapRows = Array.isArray(device && device.lap_rows) ? device.lap_rows : [];
-    const lapCount =
-      lapRows.length > 0 ? lapRows.length : Math.max(0, toInt(device && device.lap_count, 0));
+    const laps = Array.isArray(device && device.laps) ? device.laps : [];
+    const lapCount = laps.length > 0 ? laps.length : Math.max(0, toInt(device && device.lap_count, 0));
     const wifiSsid = escapeHtml((settings && settings.wifi_ssid) || "--");
     const sdFreeGb = Number(device && device.sd_free_gb);
     const sdLine = Number.isFinite(sdFreeGb) && sdFreeGb >= 0 ? "SD: " + sdFreeGb.toFixed(1) + " GB free" : "SD: --";
-    const batteryLine = escapeHtml((device && device.battery_text) || "Battery: N/A");
     const uptimeLine = "Uptime: " + formatUptime(device && device.uptime_seconds);
     const firmwareLine = "FW: " + escapeHtml((device && device.firmware_version) || "v1.0.0");
     const recordingLineClass = recording
@@ -246,9 +244,7 @@
       '<div class="device-status__line">' +
       sdLine +
       "</div>" +
-      '<div class="device-status__line">' +
-      batteryLine +
-      "</div>" +
+      '<div class="device-status__line">Battery: N/A</div>' +
       '<div class="device-status__line">' +
       uptimeLine +
       "</div>" +
@@ -259,31 +255,41 @@
     );
   }
 
-  function renderScenarioLapRows(device) {
-    const rows = Array.isArray(device && device.lap_rows) ? device.lap_rows : [];
-    if (rows.length === 0) {
+  function renderScenarioLapRows(device, status) {
+    const laps = Array.isArray(device && device.laps) ? device.laps : [];
+    if (laps.length === 0) {
       return "";
     }
 
-    return rows
+    const bestLapNumber = Math.max(0, toInt(device && device.best_lap_number, 0));
+    const bestLapMs = toInt(status && status.best_lap_ms, -1);
+    return laps
       .slice(0, 7)
-      .map(function (row) {
-        const label = escapeHtml(row && row.label ? row.label : "--");
-        const time = escapeHtml(row && row.time ? row.time : "--:--.--");
-        const delta = escapeHtml(row && row.delta ? row.delta : "");
-        const isBest = Boolean(row && row.is_best);
+      .map(function (lap, index) {
+        const lapNumber = Math.max(0, toInt(lap && lap.lap_number, index + 1));
+        const lapTimeMs = toInt(lap && lap.lap_time_ms, -1);
+        const lapStatus = String((lap && lap.status) || "timed").trim().toLowerCase().replace(/_/g, "-");
+        const isBest = bestLapNumber > 0 ? lapNumber === bestLapNumber : false;
+        let suffix = "";
+        if (isBest && lapTimeMs >= 0) {
+          suffix = "BEST";
+        } else if (lapStatus === "timed" && lapTimeMs >= 0) {
+          if (bestLapMs >= 0) {
+            suffix = formatDelta(lapTimeMs - bestLapMs);
+          }
+        }
         return (
           '<div class="device-lap-list__row' +
           (isBest ? " is-best" : "") +
           '">' +
           '<span class="device-lap-list__lap">' +
-          label +
+          String(lapNumber).padStart(2, " ") +
           "</span>" +
           '<span class="device-lap-list__time device-time">' +
-          time +
+          formatLapTime(lapTimeMs) +
           "</span>" +
           '<span class="device-lap-list__delta device-time">' +
-          delta +
+          escapeHtml(suffix) +
           "</span>" +
           "</div>"
         );
@@ -338,7 +344,7 @@
   }
 
   function renderLapListRows(device, status) {
-    const scenarioRowsMarkup = renderScenarioLapRows(device);
+    const scenarioRowsMarkup = renderScenarioLapRows(device, status);
     if (scenarioRowsMarkup) {
       return scenarioRowsMarkup;
     }
@@ -347,8 +353,8 @@
   }
 
   function renderLapListBlock(status, device) {
-    const scenarioRows = Array.isArray(device && device.lap_rows) ? device.lap_rows : [];
-    const lapCount = scenarioRows.length > 0 ? scenarioRows.length : Math.max(0, toInt(device && device.lap_count, 0));
+    const laps = Array.isArray(device && device.laps) ? device.laps : [];
+    const lapCount = laps.length > 0 ? laps.length : Math.max(0, toInt(device && device.lap_count, 0));
     return (
       '<div class="device-lap-list">' +
       '<div class="device-lap-list__title">Lap List</div>' +
