@@ -55,7 +55,7 @@ Check these files first:
 - Verify every scenario button updates both previews.
 - Verify `ready-to-drive`, `recording`, and `best-lap-improved` look correct in the web console.
 - Verify `cold-boot` and `gps-searching` cover boot states on the device screen.
-- Verify `off-track` and `recording` cover runtime driving states on the device screen.
+- Verify `no-gps-driving`, `off-track`, and `recording` cover runtime driving states on the device screen.
 - Verify `session-review` shows enough lap rows to judge density and paging behavior.
 - Verify `heavy-track-library` stays readable with many sessions and tracks.
 - Verify the layout remains readable when the browser width is narrowed.

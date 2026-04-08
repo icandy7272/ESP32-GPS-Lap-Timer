@@ -24,6 +24,7 @@ const requiredScenarioIds = [
   "cold-boot",
   "gps-searching",
   "ready-to-drive",
+  "no-gps-driving",
   "recording",
   "best-lap-improved",
   "off-track",
@@ -167,17 +168,7 @@ const recoveryBootScenario = {
   },
 };
 
-const noGpsDrivingScenario = {
-  ...getScenarioById("ready-to-drive"),
-  device: {
-    ...(getScenarioById("ready-to-drive").device || {}),
-    screen: "driving",
-  },
-  status: {
-    ...(getScenarioById("ready-to-drive").status || {}),
-    gps_fix: false,
-  },
-};
+const noGpsDrivingScenario = getScenarioById("no-gps-driving");
 
 const offTrackDrivingScenario = {
   ...getScenarioById("off-track"),

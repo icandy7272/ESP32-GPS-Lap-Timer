@@ -32,19 +32,6 @@
     return isRecording ? "Stop Recording" : "Start Recording";
   }
 
-  function renderCardHeading(title, count) {
-    return (
-      '<div class="web-console__card-head">' +
-      "<h2>" +
-      escapeHtml(title) +
-      "</h2>" +
-      (typeof count === "number"
-        ? '<span class="web-console__count">' + count + "</span>"
-        : "") +
-      "</div>"
-    );
-  }
-
   function renderSessionsMarkup(sessions) {
     if (!Array.isArray(sessions) || sessions.length === 0) {
       return renderEmptyListItem("No sessions");
@@ -95,7 +82,6 @@
     const data = scenario || {};
     const status = data.status || {};
     const settings = data.settings || {};
-    const scenarioLabel = escapeHtml(data.label || data.id || "Preview");
     const isRecording = Boolean(status.recording);
     const gpsFix = status.gps_fix ? "Yes" : "No";
     const recordingState = isRecording ? "REC" : "Idle";
@@ -111,18 +97,8 @@
 
     return (
       '<div class="web-console-preview">' +
-      '<div class="web-console__hero">' +
-      '<div class="web-console__hero-copy">' +
-      '<p class="web-console__eyebrow">Web Console Preview</p>' +
-      '<h1 class="web-console__title">GPS Lap Timer</h1>' +
-      '<p class="web-console__subtitle">Desktop mirror of the ESP32 Wi-Fi dashboard with shared scenario data.</p>' +
-      "</div>" +
-      '<span class="web-console__scenario-pill">' +
-      scenarioLabel +
-      "</span>" +
-      "</div>" +
       '<div class="web-console__card" data-card="status">' +
-      renderCardHeading("Status") +
+      "<h2>Status</h2>" +
       '<div class="web-console__row"><span class="web-console__label">GPS Fix</span><span class="web-console__value">' +
       gpsFix +
       "</span></div>" +
@@ -148,13 +124,13 @@
       "</button>" +
       "</div>" +
       '<div class="web-console__card" data-card="sessions">' +
-      renderCardHeading("Sessions", sessions.length) +
+      "<h2>Sessions</h2>" +
       '<ul class="web-console__list">' +
       renderSessionsMarkup(sessions) +
       "</ul>" +
       "</div>" +
       '<div class="web-console__card" data-card="tracks">' +
-      renderCardHeading("Tracks", tracks.length) +
+      "<h2>Tracks</h2>" +
       '<ul class="web-console__list">' +
       renderTracksMarkup(tracks) +
       "</ul>" +
