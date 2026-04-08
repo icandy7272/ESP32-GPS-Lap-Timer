@@ -296,7 +296,7 @@ body {
 
 #device-screen-root {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   background:
     radial-gradient(circle at bottom left, rgba(34, 197, 94, 0.14), transparent 30%),
@@ -566,6 +566,12 @@ body {
 
   #scenario-controls-root {
     grid-column: 1 / -1;
+  }
+
+  #device-screen-root {
+    align-self: start;
+    position: sticky;
+    top: 24px;
   }
 }
 
