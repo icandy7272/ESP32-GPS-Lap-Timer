@@ -42,9 +42,9 @@
         const safeSession = escapeHtml(sessionName);
         return (
           '<li class="web-console__item">' +
-          '<a class="web-console__session-link" href="#" aria-disabled="true">' +
+          '<span class="web-console__session-link">' +
           safeSession +
-          "</a>" +
+          "</span>" +
           "</li>"
         );
       })
