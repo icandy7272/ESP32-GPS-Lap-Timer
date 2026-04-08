@@ -93,6 +93,16 @@
     return "driving";
   }
 
+  function normalizeVariant(value) {
+    const normalized = String(value || "original")
+      .trim()
+      .toLowerCase();
+    if (normalized === "polished") {
+      return "polished";
+    }
+    return "original";
+  }
+
   function resolveDrivingDeltaState(status, device) {
     const gpsFix = Boolean(status && status.gps_fix);
     if (!gpsFix) {
@@ -367,12 +377,13 @@
     );
   }
 
-  function renderDeviceScreenMarkup(scenario) {
+  function renderDeviceScreenMarkup(scenario, options) {
     const data = scenario || {};
     const status = data.status || {};
     const device = data.device || {};
     const settings = data.settings || {};
     const screen = normalizeRuntimeScreen(device.screen);
+    const variant = normalizeVariant(options && options.variant);
 
     let bodyMarkup = "";
     if (screen === "boot") {
@@ -386,7 +397,9 @@
     }
 
     return (
-      '<div class="device-preview">' +
+      '<div class="device-preview device-preview--' +
+      variant +
+      '">' +
       '<div class="device-frame">' +
       '<div class="device-frame__header">' +
       '<span class="device-frame__title">ESP32 TFT</span>' +
@@ -402,7 +415,29 @@
     );
   }
 
+  function renderDeviceScreenComparisonMarkup(scenario) {
+    return (
+      '<div class="device-compare">' +
+      '<section class="device-panel device-panel--original">' +
+      '<div class="device-panel__header">' +
+      '<h2 class="device-panel__title">Original TFT</h2>' +
+      '<p class="device-panel__description">Baseline preview aligned to the current firmware shell.</p>' +
+      "</div>" +
+      renderDeviceScreenMarkup(scenario, { variant: "original" }) +
+      "</section>" +
+      '<section class="device-panel device-panel--polished">' +
+      '<div class="device-panel__header">' +
+      '<h2 class="device-panel__title">Polished TFT</h2>' +
+      '<p class="device-panel__description">Same state, tuned for stronger contrast and hierarchy.</p>' +
+      "</div>" +
+      renderDeviceScreenMarkup(scenario, { variant: "polished" }) +
+      "</section>" +
+      "</div>"
+    );
+  }
+
   return {
     renderDeviceScreenMarkup: renderDeviceScreenMarkup,
+    renderDeviceScreenComparisonMarkup: renderDeviceScreenComparisonMarkup,
   };
 });

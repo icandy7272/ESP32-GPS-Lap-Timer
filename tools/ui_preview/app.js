@@ -148,11 +148,21 @@
       return;
     }
 
-    const renderer =
+    const comparisonRenderer =
+      window.UiPreviewDeviceScreen && window.UiPreviewDeviceScreen.renderDeviceScreenComparisonMarkup;
+    const singleRenderer =
       window.UiPreviewDeviceScreen && window.UiPreviewDeviceScreen.renderDeviceScreenMarkup;
 
-    if (typeof renderer === "function") {
-      const markup = renderer(activeScenario);
+    if (typeof comparisonRenderer === "function") {
+      const markup = comparisonRenderer(activeScenario);
+      if (typeof markup === "string" && markup.trim().length > 0) {
+        deviceRoot.innerHTML = markup;
+        return;
+      }
+    }
+
+    if (typeof singleRenderer === "function") {
+      const markup = singleRenderer(activeScenario);
       if (typeof markup === "string" && markup.trim().length > 0) {
         deviceRoot.innerHTML = markup;
         return;

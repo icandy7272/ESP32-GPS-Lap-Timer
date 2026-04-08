@@ -84,6 +84,11 @@ assert.equal(
   "function",
   "device_screen.js should export renderDeviceScreenMarkup",
 );
+assert.equal(
+  typeof deviceScreenModule.renderDeviceScreenComparisonMarkup,
+  "function",
+  "device_screen.js should export renderDeviceScreenComparisonMarkup",
+);
 
 const browserGlobalSandbox = {};
 vm.runInNewContext(webConsoleSource, browserGlobalSandbox);
@@ -108,6 +113,11 @@ assert.equal(
   typeof browserGlobalSandbox.UiPreviewDeviceScreen.renderDeviceScreenMarkup,
   "function",
   "browser global UiPreviewDeviceScreen should expose renderDeviceScreenMarkup",
+);
+assert.equal(
+  typeof browserGlobalSandbox.UiPreviewDeviceScreen.renderDeviceScreenComparisonMarkup,
+  "function",
+  "browser global UiPreviewDeviceScreen should expose renderDeviceScreenComparisonMarkup",
 );
 
 const recordingScenario = getScenarioById("recording");
@@ -231,6 +241,7 @@ const noGpsDrivingMarkup = deviceScreenModule.renderDeviceScreenMarkup(noGpsDriv
 const offTrackDrivingMarkup = deviceScreenModule.renderDeviceScreenMarkup(offTrackDrivingScenario);
 const deltaUnavailableMarkup = deviceScreenModule.renderDeviceScreenMarkup(deltaUnavailableScenario);
 const deltaValidMarkup = deviceScreenModule.renderDeviceScreenMarkup(deltaValidScenario);
+const comparisonMarkup = deviceScreenModule.renderDeviceScreenComparisonMarkup(deltaValidScenario);
 const lapListMarkup = deviceScreenModule.renderDeviceScreenMarkup(lapListScenario);
 const lapListBestMismatchMarkup = deviceScreenModule.renderDeviceScreenMarkup(lapListBestMismatchScenario);
 const idleStatusMarkup = deviceScreenModule.renderDeviceScreenMarkup(idleStatusScenario);
@@ -244,6 +255,10 @@ assert.match(noGpsDrivingMarkup, /NO GPS/);
 assert.match(offTrackDrivingMarkup, /OFF TRACK/);
 assert.match(deltaUnavailableMarkup, /---/);
 assert.match(deltaValidMarkup, /[+-]\d+\.\d{2}/);
+assert.match(comparisonMarkup, /Original TFT/);
+assert.match(comparisonMarkup, /Polished TFT/);
+assert.match(comparisonMarkup, /device-preview device-preview--original/);
+assert.match(comparisonMarkup, /device-preview device-preview--polished/);
 
 assert.match(lapListMarkup, /Lap List|SESSION:/);
 assert.ok(
