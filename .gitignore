@@ -10,6 +10,13 @@
 # Claude Code
 .claude/
 .context/
+.superpowers/
+
+# clangd / IDE indexers
+compile_commands.json
+
+# Local backup directories created by tooling
+test_backups/
 
 # OS
 .DS_Store
