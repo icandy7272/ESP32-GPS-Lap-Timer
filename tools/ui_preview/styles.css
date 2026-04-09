@@ -835,12 +835,6 @@ body {
   line-height: 1.2;
 }
 
-.device-sector--best {
-  background: rgba(20, 83, 45, 0.88);
-  border-color: rgba(74, 222, 128, 0.34);
-  color: #dcfce7;
-}
-
 .device-sector--fast {
   background: rgba(21, 128, 61, 0.6);
   border-color: rgba(74, 222, 128, 0.28);

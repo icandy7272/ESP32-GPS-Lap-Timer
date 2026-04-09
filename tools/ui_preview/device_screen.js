@@ -147,10 +147,6 @@
       return "--";
     }
 
-    if (sector.state === "best") {
-      return "BEST";
-    }
-
     if (sector.deltaMs == null) {
       return "--";
     }
@@ -173,10 +169,6 @@
   function getSectorToneClass(sector, liveSectorToneClass) {
     if (!sector) {
       return "device-sector--pending";
-    }
-
-    if (sector.state === "best") {
-      return "device-sector--best";
     }
 
     if (sector.state === "live") {
@@ -244,7 +236,7 @@
     }
 
     let toneClass = "device-driving--delta-even";
-    if (focusedSector.state === "best" || (focusedSector.deltaMs != null && focusedSector.deltaMs < 0)) {
+    if (focusedSector.deltaMs != null && focusedSector.deltaMs < 0) {
       toneClass = "device-driving--delta-fast";
     } else if (focusedSector.deltaMs != null && focusedSector.deltaMs > 0) {
       toneClass = "device-driving--delta-slow";

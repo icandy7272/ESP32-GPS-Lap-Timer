@@ -210,7 +210,7 @@
         uptime_seconds: 962,
         sd_free_gb: 13.2,
         sectors: [
-          { label: "S1", delta_ms: -50, state: "best" },
+          { label: "S1", delta_ms: -50, state: "completed" },
           { label: "S2", delta_ms: 120, state: "focus" },
           { label: "S3", state: "live" },
         ],

@@ -276,13 +276,14 @@ assert.match(sectorFocusPolishedMarkup, /device-driving--sector-focus/);
 assert.doesNotMatch(sectorFocusPolishedMarkup, /Sector Delta/);
 assert.doesNotMatch(sectorFocusPolishedMarkup, /Reference:/);
 assert.match(sectorFocusPolishedMarkup, />S1<\/span>/);
-assert.match(sectorFocusPolishedMarkup, />BEST<\/span>/);
+assert.match(sectorFocusPolishedMarkup, /-0\.05/);
 assert.match(sectorFocusPolishedMarkup, /class="device-driving__delta-label">S2/);
 assert.match(sectorFocusPolishedMarkup, />S2<\/span>/);
 assert.match(sectorFocusPolishedMarkup, /\+0\.12/);
 assert.match(sectorFocusPolishedMarkup, />S3<\/span>/);
 assert.match(sectorFocusPolishedMarkup, />LIVE<\/span>/);
 assert.doesNotMatch(sectorFocusPolishedMarkup, />S4<\/span>/);
+assert.doesNotMatch(sectorFocusPolishedMarkup, />BEST<\/span>/);
 assert.match(
   sectorFocusPolishedMarkup,
   /device-driving__delta[\s\S]*device-sector-ribbon[\s\S]*device-driving__bottom/,
