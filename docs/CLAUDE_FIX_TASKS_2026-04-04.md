@@ -1407,3 +1407,201 @@ Claude 任务：
    `GPS 频率设置`
    `重启后是否重复 save`
    `lap list 首圈显示`
+
+## 2026-04-08 针对 commit 8b77376 的复审补充
+
+复审对象：
+
+- `commit 8b77376`
+- 标题：`fix(gps): use GGA fix_quality for fix detection, not satellite count`
+
+这次 commit 有正向修复，也还有几个需要继续调整的点。
+
+### 正向确认
+
+1. `fix_3d = satellites >= 6` 这个明显过严的判断已经去掉，改成基于 `GGA fix_quality`，方向是对的
+2. driving screen 右上角的 current lap time 现在已经不是 synthetic value，之前那条 finding 可以继续视为已关闭
+3. `platformio.ini` 切到 `esp32-s3-devkitc-1-n16r8` 仍然是正确方向
+
+### C876-1
+
+- 级别：`P1`
+- 标题：`gps_rate_hz 配置仍然被硬编码成 25Hz，Web / settings.json 改了也不会生效`
+
+位置：
+
+- `src/gps.cpp:582-648`
+
+问题说明：
+
+这次提交虽然主要修的是 fix detection，但 `uart_init()` 里仍然直接写死：
+
+- `GPS_FIX_RATE_HZ = 25`
+- `FIX_INTERVAL_US = 40000`
+
+并且后面还会无条件：
+
+- `ubx_cfg_rate(GPS_FIX_RATE_HZ)`
+
+这意味着：
+
+- `config/settings.json` 里的 `gps_rate_hz` 失效
+- Web 设置页如果改了 GPS 频率，也不会真正影响模块
+- 每次开机仍会强制把模块改回 25Hz
+
+这条在当前 bring-up 阶段尤其不合适，因为调试时用户本来就可能需要临时切到：
+
+- `1Hz`
+- `5Hz`
+- `10Hz`
+
+来排查搜星、串口、稳定性问题。
+
+Claude 任务：
+
+1. 恢复 `app_config.gps_rate_hz` 为运行时单一真相源
+2. 只对非法值做兜底，不要再无条件写死成 `25`
+3. `FIX_INTERVAL_US` 必须和最终采用的 GPS 频率一致
+4. 串口日志打印“最终生效的 GPS rate”
+
+验收标准：
+
+- Web/API/`settings.json` 修改 `gps_rate_hz` 后，重启仍保持该频率
+- 日志可见最终生效频率
+- `1Hz/5Hz/25Hz` 至少人工验证三档不会偷偷改回 25Hz
+
+### C876-2
+
+- 级别：`P2`
+- 标题：`“只在配置变化时保存”仍未实现，模块配置还是每次开机都 save 一次`
+
+位置：
+
+- `src/gps.cpp:644-652`
+
+问题说明：
+
+代码注释写的是：
+
+- `Save only if config changed`
+
+但实际逻辑仍然是：
+
+- 设置完 rate 后直接 `need_save = true`
+- 所以每次启动都会进 `ubx_cfg_save()`
+
+这会导致：
+
+1. 启动时间被拉长
+2. GNSS 模块非易失存储被重复写入
+
+所以这条和 commit message 里的语义仍不一致，不能算真正完成。
+
+Claude 任务：
+
+1. 让 `need_save` 真正和“配置是否变化”绑定
+2. 已经处于目标 baud / rate / sentence set 时，不要重复 save
+3. 日志区分：
+   `already configured`
+   `reconfigured`
+   `saved`
+
+验收标准：
+
+- 已完成配置的模块再次重启，不再每次都打印 `Saving config to flash...`
+- 只有真实发生变更时才 save
+
+### C876-3
+
+- 级别：`P2`
+- 标题：`TFT SPI 频率声称已降到 10MHz，但实际编译结果仍然是 40MHz`
+
+位置：
+
+- `platformio.ini:43-45`
+- `src/User_Setup.h:45-47`
+
+问题说明：
+
+这次 commit message 里写了：
+
+- `TFT SPI frequency 40MHz → 10MHz`
+
+但当前仓库里同时存在两份定义：
+
+- `platformio.ini` 通过 build flag 传 `-DSPI_FREQUENCY=10000000`
+- `src/User_Setup.h` 又重新 `#define SPI_FREQUENCY 40000000`
+
+本地预处理验证结果表明：
+
+- 最终宏值仍然是 `40000000`
+
+也就是说，这条“为了面包板飞线更稳而降速”的改动，实际并没有真正生效。
+
+Claude 任务：
+
+1. 统一 `SPI_FREQUENCY` 的单一真相源
+2. 不要让 `platformio.ini` 和 `src/User_Setup.h` 双重定义互相打架
+3. 如果决定用 `10MHz`，就确保最终编译值真的就是 `10MHz`
+
+验收标准：
+
+- 编译时不再出现 `SPI_FREQUENCY` 重定义冲突
+- 最终编译值和文档声明一致
+- 真机上屏幕初始化和刷屏稳定
+
+### C876-4
+
+- 级别：`P2`
+- 标题：`Lap list 的 “No laps yet” 空状态文案残影问题在这个 commit 里仍然存在`
+
+位置：
+
+- `src/display.cpp:524-537`
+
+问题说明：
+
+这个 commit 延续了“lap list 只在进入页面时清一次屏”的策略，但仍然保留了：
+
+- `lap_count == 0` 时画 `No laps yet`
+- 然后直接 `return`
+
+后续一旦开始有 laps，代码只会继续画：
+
+- header
+- rows
+
+却没有显式清掉之前那句空状态文案。
+
+所以这个 UI 残影问题在 `8b77376` 里还没有被顺带修掉。
+
+Claude 任务：
+
+1. 给 lap list empty-state 做独立清除逻辑
+2. 覆盖 `0 laps -> 有 laps` 的状态切换
+3. 不要依赖“切屏再回来一次”来清掉旧文字
+
+验收标准：
+
+- 初始 `No laps yet`
+- 第一圈出来后该文案消失
+- 翻页/返回第一页不出现旧字残影
+
+### 建议这次继续调整吗
+
+结论：
+
+- 需要继续调整
+
+原因：
+
+1. `C876-1` 直接影响运行时配置语义，属于应该尽快修掉的实质性问题
+2. `C876-2`、`C876-3` 会让“已经修了”的行为和实际运行状态不一致
+3. `C876-4` 是明确的可见 UI 回归
+
+### 建议 Claude 的处理顺序
+
+1. 先修 `C876-1`
+2. 再修 `C876-3`
+3. 然后修 `C876-2`
+4. 最后修 `C876-4`
