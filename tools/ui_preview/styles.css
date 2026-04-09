@@ -31,7 +31,6 @@ body {
 }
 
 #workbench-layout > div {
-  background: var(--shell-panel);
   border: 1px solid var(--shell-border);
   border-radius: 20px;
   min-height: 200px;
