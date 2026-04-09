@@ -22,6 +22,7 @@
 #include "wifi_server.h"
 #include "config.h"
 #include "track.h"
+#include "track_runtime.h"
 #include <SD.h>
 
 // --- Shared FreeRTOS primitives (created once here) ----------
@@ -167,11 +168,20 @@ void setup() {
     delay(500);
 
     // --- Auto-detect track from GPS position ---
+    bool boot_track_confirmed = false;
     if (s_boot_fix_valid) {
         const TrackDefinition* detected =
             track_auto_detect(s_boot_fix.lat_deg, s_boot_fix.lon_deg);
         if (detected) {
-            memcpy(&active_track, detected, sizeof(TrackDefinition));
+            char detected_name[sizeof(session_state.track_name)] = {0};
+            track_runtime_sync_detected_track(
+                &active_track, detected, detected_name, sizeof(detected_name));
+            if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                strlcpy(session_state.track_name, detected_name,
+                        sizeof(session_state.track_name));
+                xSemaphoreGive(session_mutex);
+            }
+            boot_track_confirmed = true;
             Serial.printf("[BOOT] Auto-detected: %s\n", active_track.name);
         } else if (active_track.name[0] == '\0') {
             strncpy(active_track.name, "No Track", sizeof(active_track.name) - 1);
@@ -185,7 +195,8 @@ void setup() {
                             nullptr, 20, nullptr, 0);
 
     // --- Boot screen 3: Track found ---
-    if (active_track.name[0] != '\0') {
+    if (track_runtime_should_show_track_found(boot_track_confirmed,
+                                              &active_track)) {
         display_show_track_found(active_track.name);
         delay(1500);
     }

@@ -4,6 +4,7 @@
 
 #include "wifi_internal.h"
 #include "track.h"
+#include "track_runtime.h"
 #include "session.h"
 #include "lap_timer.h"
 #include "types.h"
@@ -336,12 +337,26 @@ void handle_api_tracks_delete() {
         return;
     }
 
-    // Check if the deleted track is the currently active one
     extern TrackDefinition active_track;
+    SessionState ss = read_session_state();
+    TrackDeleteDecision delete_decision =
+        track_runtime_evaluate_delete(ss.is_recording, &active_track, id);
+
+    if (delete_decision == TRACK_DELETE_BLOCK_ACTIVE_RECORDING) {
+        server.send(409, "application/json",
+                    "{\"error\":\"cannot delete active track during recording\"}");
+        return;
+    }
+
+    const TrackDefinition* existing_track = track_get_by_id(id);
+    if (!existing_track) {
+        server.send(404, "application/json", "{\"error\":\"track not found\"}");
+        return;
+    }
+
     bool was_active = (strcmp(active_track.id, id) == 0);
 
     if (track_delete(id)) {
-        // If the active track was deleted, clear it and reset lap timer
         if (was_active) {
             memset(&active_track, 0, sizeof(TrackDefinition));
             lap_timer_reset();
@@ -353,6 +368,6 @@ void handle_api_tracks_delete() {
         }
         server.send(200, "application/json", "{\"ok\":true}");
     } else {
-        server.send(404, "application/json", "{\"error\":\"track not found\"}");
+        server.send(500, "application/json", "{\"error\":\"delete failed\"}");
     }
 }
