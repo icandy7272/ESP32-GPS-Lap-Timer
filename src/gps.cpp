@@ -380,22 +380,32 @@ static void send_fix_if_ready() {
 
     GpsPoint point = assemble_point(&s_gga, &s_rmc);
 
-    // Periodic diagnostic — print fix status once per second
-    static uint32_t last_diag_ms = 0;
-    uint32_t now_ms = millis();
-    if (now_ms - last_diag_ms >= 1000) {
-        last_diag_ms = now_ms;
-        Serial.printf("[gps] fix_q=%d sats=%d fix_3d=%d pps=%d lat=%.5f lon=%.5f\n",
-                      s_gga.fix_quality, s_gga.satellites,
-                      point.fix_3d ? 1 : 0, point.pps_synced ? 1 : 0,
-                      point.lat_deg, point.lon_deg);
-    }
-
     // Send to queue; if full, discard oldest item then retry.
+    bool queue_was_full = false;
     if (xQueueSend(s_gps_queue, &point, 0) == errQUEUE_FULL) {
+        queue_was_full = true;
         GpsPoint discard;
         xQueueReceive(s_gps_queue, &discard, 0);
         xQueueSend(s_gps_queue, &point, 0);
+    }
+
+    // Periodic diagnostic — print rate (fixes/sec) and queue health
+    static uint32_t last_diag_ms = 0;
+    static uint16_t fixes_since_last = 0;
+    static uint16_t drops_since_last = 0;
+    fixes_since_last++;
+    if (queue_was_full) drops_since_last++;
+    uint32_t now_ms = millis();
+    if (now_ms - last_diag_ms >= 1000) {
+        Serial.printf("[gps] %u/s drops=%u fix_q=%d sats=%d "
+                      "fix_3d=%d pps=%d lat=%.5f lon=%.5f\n",
+                      fixes_since_last, drops_since_last,
+                      s_gga.fix_quality, s_gga.satellites,
+                      point.fix_3d ? 1 : 0, point.pps_synced ? 1 : 0,
+                      point.lat_deg, point.lon_deg);
+        last_diag_ms = now_ms;
+        fixes_since_last = 0;
+        drops_since_last = 0;
     }
 
     // Advance fix index within the current PPS second (0..24).
