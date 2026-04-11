@@ -16,7 +16,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
-#include <SD.h>
 
 // --- HTTP server on port 80 ---
 WebServer server(80);
@@ -29,12 +28,6 @@ unsigned long last_request_ms = 0;
 // ============================================================
 
 void wifi_init() {
-    // Mount Arduino SD singleton (storage.cpp uses SdFat separately)
-    // Both can coexist since they share SPI bus via spi_mutex
-    xSemaphoreTake(spi_mutex, portMAX_DELAY);
-    SD.begin(PIN_SD_CS);
-    xSemaphoreGive(spi_mutex);
-
     WiFi.mode(WIFI_AP);
     WiFi.softAP(app_config.wifi_ssid, app_config.wifi_pass);
 
@@ -62,10 +55,14 @@ void wifi_init() {
 // FreeRTOS task
 // ============================================================
 
+extern int crash_bc_core1;
+
 void wifi_task(void* param) {
     (void)param;
     for (;;) {
+        crash_bc_core1 = 50;  // wifi: about to handleClient
         server.handleClient();
+        crash_bc_core1 = 51;  // wifi: handleClient done
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
@@ -75,8 +72,14 @@ void wifi_task(void* param) {
 // ============================================================
 
 bool is_throttled() {
-    SessionState ss = read_session_state();
-    if (!ss.is_recording) {
+    // Read only the is_recording flag — avoids copying the full ~4KB
+    // SessionState onto the wifi task stack (8KB limit).
+    bool recording = false;
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        recording = session_state.is_recording;
+        xSemaphoreGive(session_mutex);
+    }
+    if (!recording) {
         return false;
     }
     unsigned long now = millis();

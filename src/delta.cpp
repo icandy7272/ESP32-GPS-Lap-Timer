@@ -75,6 +75,7 @@ static void precompute_reference(void) {
                                s_ref_points[i].lon_deg);
         s_ref_cum_dist[i] = s_ref_cum_dist[i - 1] + d;
         s_ref_elapsed_us[i] = s_ref_points[i].timestamp_us - start_us;
+        if ((i & 0xFF) == 0) { taskYIELD(); }  // yield Core 0 every 256 pts
     }
     s_ref_total_dist = s_ref_cum_dist[s_ref_count - 1];
 
@@ -82,6 +83,7 @@ static void precompute_reference(void) {
         s_ref_headings[i] = compute_heading(
             s_ref_points[i].lat_deg, s_ref_points[i].lon_deg,
             s_ref_points[i + 1].lat_deg, s_ref_points[i + 1].lon_deg);
+        if ((i & 0xFF) == 0) { taskYIELD(); }  // yield Core 0 every 256 pts
     }
 }
 
@@ -287,10 +289,13 @@ void delta_set_reference(const GpsPoint* points, int count) {
     }
 
     // Copy reference data
+    extern int crash_bc_core0;
+    crash_bc_core0 = 11;  // in delta_set_reference: memcpy
     memcpy(s_ref_points, points, sizeof(GpsPoint) * count);
     s_ref_count = count;
 
     // Pre-compute distances, headings, elapsed times
+    crash_bc_core0 = 14;  // in precompute_reference
     precompute_reference();
 
     s_has_reference = true;

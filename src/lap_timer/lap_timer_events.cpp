@@ -6,6 +6,11 @@
 
 #include <Arduino.h>
 
+// Per-core breadcrumbs — survive warm resets, cleared on power cycle.
+// Core 0: lap_timer, gps     Core 1: session, display, storage, wifi
+RTC_NOINIT_ATTR int crash_bc_core0;
+RTC_NOINIT_ATTR int crash_bc_core1;
+
 namespace lap_timer_internal {
 
 void emit_lap_event(uint8_t event_type, int sector_index, int64_t crossing_us) {
@@ -67,9 +72,12 @@ void handle_finish_crossing(int64_t crossing_us) {
     }
 
     if (is_new_best && s_lap_points != nullptr && s_lap_point_count > 0) {
+        crash_bc_core0 = 10;  // entering delta_set_reference
         delta_set_reference(s_lap_points, s_lap_point_count);
+        crash_bc_core0 = 12;  // delta done
     }
 
+    crash_bc_core0 = 13;  // about to emit lap event
     emit_lap_event(LAP_EVENT_FINISH, 0, crossing_us);
 
     s_lap_point_count = 0;

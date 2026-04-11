@@ -2,8 +2,9 @@
 
 // ============================================================
 // Button debounce module — ESP32-S3 GPS Lap Timer
-// Polls PIN_BTN_RECORD (GPIO4, latching) and PIN_BTN_SECTOR
-// (GPIO5, momentary) with 50 ms software debounce.
+// Polls the populated GPIO buttons for the current hardware revision.
+// Today that means PIN_BTN_RECORD (GPIO4, momentary); PIN_BTN_SECTOR
+// (GPIO5) is kept as an optional future expansion and may be absent.
 // Fan-out: each press event is sent to BOTH btn_session_queue
 // AND btn_display_queue.
 // See docs/ARCHITECTURE.md section 5.

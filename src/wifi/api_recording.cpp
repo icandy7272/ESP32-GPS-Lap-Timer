@@ -1,5 +1,6 @@
 // ============================================================
 // POST /api/recording — start/stop recording
+// Reads individual fields under mutex to avoid 4KB stack copy.
 // ============================================================
 
 #include "wifi_internal.h"
@@ -8,6 +9,7 @@
 
 #include <Arduino.h>
 #include <WebServer.h>
+#include <string.h>
 
 void handle_api_recording() {
     if (!server.hasArg("plain")) {
@@ -24,11 +26,23 @@ void handle_api_recording() {
     }
 
     if (strcmp(action, "start") == 0) {
-        SessionState ss = read_session_state();
-        session_start_recording(ss.track_name);
-        // Verify recording actually started (storage may have failed)
-        SessionState after = read_session_state();
-        if (!after.is_recording) {
+        // Read only track_name — no full SessionState copy
+        char track_name[64] = {0};
+        if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            memcpy(track_name, session_state.track_name, sizeof(track_name));
+            xSemaphoreGive(session_mutex);
+        }
+
+        session_start_recording(track_name);
+
+        // Verify recording started — read only is_recording
+        bool started = false;
+        if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            started = session_state.is_recording;
+            xSemaphoreGive(session_mutex);
+        }
+
+        if (!started) {
             server.send(500, "application/json",
                         "{\"ok\":false,\"error\":\"SD storage failed\"}");
         } else {

@@ -283,7 +283,7 @@ typedef struct {
 // 按键事件（task_button → task_display / task_session）
 typedef struct {
     uint8_t  event_type;     // BUTTON_SHORT_PRESS / BUTTON_LONG_PRESS
-    uint8_t  button_id;      // BUTTON_SWITCH（目前只有 1 个自复位按键）
+    uint8_t  button_id;      // BUTTON_RECORD；BUTTON_SECTOR 仅作未来扩展
 } ButtonEvent;
 ```
 
@@ -334,16 +334,16 @@ typedef struct {
 
 | 信号 | GPIO 编号 | 方向 | 说明 |
 |------|-----------|------|------|
-| BTN_REC   | GPIO 4 | IN | 自锁按键（录制开始/停止），内部上拉，低电平触发，软件去抖 50ms |
-| BTN_SECTOR | GPIO 5 | IN | 瞬动按键（航段标记），内部上拉，低电平触发，软件去抖 50ms |
+| BTN_REC   | GPIO 4 | IN | 自复位按键（录制开始/停止），内部上拉，低电平触发，软件去抖 50ms |
+| BTN_SECTOR | GPIO 5 | IN | 预留扩展位；当前硬件未装配 |
 
 ### 引脚总览
 
 | GPIO | 功能 | 备注 |
 |------|------|------|
 | 2  | LED | 状态指示灯 |
-| 4  | BTN_REC | 录制开始/停止（自锁） |
-| 5  | BTN_SECTOR | 航段标记（瞬动） |
+| 4  | BTN_REC | 录制开始/停止（自复位） |
+| 5  | BTN_SECTOR | 预留扩展位（当前未装配） |
 | 8  | TFT_RST | TFT 复位 |
 | 9  | TFT_DC | TFT D/C |
 | 10 | CS_TFT | TFT 片选 |
@@ -436,11 +436,11 @@ Session 开始（首次穿越起终线）
 | `gps.cpp` | UART2 接收，NMEA GGA/RMC 解析，PPS 硬件中断校时，25Hz |
 | `lap_timer.cpp` | 有符号线段交叉过线检测，Catmull-Rom 样条插值精确计时，去抖验证，Arming 状态机，无效圈过滤（slow/short/no_ref） |
 | `delta.cpp` | Position-Based Delta（参考多段线投影），航向过滤，OFF TRACK 检测 |
-| `track.cpp` | 从 SD 卡加载赛道 JSON，按距离 <5km 自动识别，手动按键选择 |
+| `track.cpp` | 从 SD 卡加载赛道 JSON，按距离 <5km 自动识别，候选冲突时优先用 Web 手动切换 |
 | `storage.cpp` | VBO 写入（.tmp + 30s fsync + 原子重命名），断电恢复，Session JSON |
 | `display.cpp` | 驾驶界面（Delta 大字 + 颜色背景），状态界面，开机流程，10 FPS 局部刷新 |
 | `wifi_server.cpp` | AP 热点，Web 界面（赛道管理、VBO 下载、设置），记录模式限流 |
-| `button.cpp` | 单按键去抖，短按切换界面（速度 >15km/h 时锁定驾驶界面） |
+| `button.cpp` | 录制键去抖与事件分发；GPIO5 扩展键未装配时不会参与轮询 |
 | `session.cpp` | Session 状态机 Ready → Recording → Finished，SessionState 管理 |
 | `config.cpp` | settings.json（WiFi 密码、屏幕亮度） |
 

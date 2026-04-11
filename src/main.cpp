@@ -9,7 +9,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <esp_task_wdt.h>
+#include <esp_system.h>
 
+#include "sdfat_global.h"
 #include "pins.h"
 #include "types.h"
 #include "gps.h"
@@ -23,7 +25,6 @@
 #include "config.h"
 #include "track.h"
 #include "track_runtime.h"
-#include <SD.h>
 
 // --- Shared FreeRTOS primitives (created once here) ----------
 
@@ -120,11 +121,67 @@ void setup() {
     if (!storage_init()) {
         Serial.println("[BOOT] SD card init FAILED — running without storage");
     } else {
-        // Mount Arduino SD singleton (used by config_load and wifi_server)
-        // storage_init() mounts SdFat but not Arduino SD.
-        SD.begin(PIN_SD_CS);
         config_load();
         Serial.println("[BOOT] SD card OK, config loaded");
+
+        // --- Crash logger: if previous boot was a crash, log to SD ---
+        esp_reset_reason_t rst = esp_reset_reason();
+        if (rst == ESP_RST_PANIC || rst == ESP_RST_INT_WDT ||
+            rst == ESP_RST_TASK_WDT || rst == ESP_RST_WDT) {
+            const char* reason_str = "unknown";
+            switch (rst) {
+                case ESP_RST_PANIC:    reason_str = "PANIC (Guru Meditation)"; break;
+                case ESP_RST_INT_WDT:  reason_str = "INT_WDT (interrupt watchdog)"; break;
+                case ESP_RST_TASK_WDT: reason_str = "TASK_WDT (task watchdog)"; break;
+                case ESP_RST_WDT:      reason_str = "WDT (other watchdog)"; break;
+                default: break;
+            }
+            // Read per-core breadcrumbs from RTC memory (survives warm reset)
+            extern int crash_bc_core0;
+            extern int crash_bc_core1;
+            int bc0 = crash_bc_core0;
+            int bc1 = crash_bc_core1;
+
+            // Read stack watermarks from RTC (last snapshot before crash)
+            extern uint16_t wm_storage, wm_display, wm_session, wm_wifi, wm_laptimer;
+            uint16_t ws = wm_storage, wd = wm_display, wse = wm_session,
+                     ww = wm_wifi, wl = wm_laptimer;
+
+            // Try to persist crash evidence to SD
+            bool persisted = false;
+            xSemaphoreTake(spi_mutex, portMAX_DELAY);
+            FsFile log;
+            if (log.open("crash_log.txt", O_WRONLY | O_CREAT | O_APPEND)) {
+                char buf[384];
+                int n = snprintf(buf, sizeof(buf),
+                         "reason=%s core0=%d core1=%d "
+                         "wm:stor=%u disp=%u sess=%u wifi=%u lapt=%u\n",
+                         reason_str, bc0, bc1, ws, wd, wse, ww, wl);
+                log.write(reinterpret_cast<const uint8_t*>(buf), n);
+                log.sync();
+                log.close();
+                persisted = true;
+            }
+            xSemaphoreGive(spi_mutex);
+
+            // Only clear RTC breadcrumbs AFTER successful SD write.
+            // If SD write failed, keep them for the next boot attempt.
+            if (persisted) {
+                crash_bc_core0 = 0;
+                crash_bc_core1 = 0;
+                Serial.printf("[BOOT] Previous crash persisted: %s core0=%d core1=%d "
+                              "wm:stor=%u disp=%u sess=%u wifi=%u lapt=%u\n",
+                              reason_str, bc0, bc1, ws, wd, wse, ww, wl);
+            } else {
+                Serial.printf("[BOOT] WARN: crash detected (%s) but SD write failed — "
+                              "breadcrumbs preserved for next boot\n", reason_str);
+            }
+
+            // Reset watermarks to sentinel (0 = "not yet sampled this boot")
+            // so crash_log never inherits stale values from a previous boot.
+            wm_storage = 0; wm_display = 0; wm_session = 0;
+            wm_wifi = 0; wm_laptimer = 0;
+        }
     }
 
     // --- Delta engine ---
@@ -224,7 +281,7 @@ void setup() {
 
     // --- WiFi AP + HTTP server (Core 1) ---
     wifi_init();
-    xTaskCreatePinnedToCore(wifi_task, "wifi", 8192,
+    xTaskCreatePinnedToCore(wifi_task, "wifi", 12288,
                             nullptr, 5, nullptr, 1);
 
     Serial.println("[BOOT] All subsystems started");
@@ -232,8 +289,23 @@ void setup() {
                   ESP.getFreeHeap(), ESP.getFreePsram());
 }
 
+// Stack watermark snapshot — written every 5s by loop(), read by crash logger.
+// Survives warm reset so we can see the lowest watermark before a crash.
+RTC_NOINIT_ATTR uint16_t wm_storage;
+RTC_NOINIT_ATTR uint16_t wm_display;
+RTC_NOINIT_ATTR uint16_t wm_session;
+RTC_NOINIT_ATTR uint16_t wm_wifi;
+RTC_NOINIT_ATTR uint16_t wm_laptimer;
+
 void loop() {
-    // All work is in FreeRTOS tasks.
-    // Arduino loop just feeds the idle watchdog.
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(5000));
+
+    // Snapshot stack high-water marks for crash diagnostics.
+    // xTaskGetHandle is safe from the Arduino loop task.
+    TaskHandle_t h;
+    h = xTaskGetHandle("storage");  if (h) wm_storage  = uxTaskGetStackHighWaterMark(h);
+    h = xTaskGetHandle("display");  if (h) wm_display  = uxTaskGetStackHighWaterMark(h);
+    h = xTaskGetHandle("session");  if (h) wm_session  = uxTaskGetStackHighWaterMark(h);
+    h = xTaskGetHandle("wifi");     if (h) wm_wifi     = uxTaskGetStackHighWaterMark(h);
+    h = xTaskGetHandle("lap_timer");if (h) wm_laptimer = uxTaskGetStackHighWaterMark(h);
 }

@@ -3,14 +3,14 @@
 // Hand-parsed JSON to avoid ArduinoJson dependency.
 // Format: {"wifi_ssid":"...","wifi_pass":"...","brightness":N,"gps_rate_hz":N}
 //
-// Requires: SD library (included with Arduino ESP32 core)
+// Requires: SdFat (shared global `sd` instance from storage.cpp)
 // spi_mutex must be created before calling config_load/save.
 // ============================================================
 
 #include "config.h"
 
 #include <Arduino.h>
-#include <SD.h>
+#include "sdfat_global.h"
 #include <WiFi.h>
 
 // --- Extern references (created in main.cpp) ---
@@ -20,8 +20,8 @@ extern SemaphoreHandle_t spi_mutex;
 AppConfig app_config;
 
 // --- Constants ---
-static const char* CONFIG_DIR  = "/config";
-static const char* CONFIG_PATH = "/config/settings.json";
+static const char* CONFIG_DIR  = "config";
+static const char* CONFIG_PATH = "config/settings.json";
 
 static const char* DEFAULT_SSID = "KartGPS";
 static const char* DEFAULT_PASS = "kartgps123";
@@ -122,8 +122,8 @@ bool config_load() {
         return false;
     }
 
-    File f = SD.open(CONFIG_PATH, FILE_READ);
-    if (!f) {
+    FsFile f;
+    if (!f.open(CONFIG_PATH, O_RDONLY)) {
         xSemaphoreGive(spi_mutex);
         Serial.println("[config] No settings.json found, using defaults");
         return false;
@@ -131,7 +131,8 @@ bool config_load() {
 
     // Read entire file (expected < 256 bytes)
     char buf[256];
-    size_t bytes_read = f.readBytes(buf, sizeof(buf) - 1);
+    int bytes_read = f.read(buf, sizeof(buf) - 1);
+    if (bytes_read < 0) { bytes_read = 0; }
     buf[bytes_read] = '\0';
     f.close();
 
@@ -172,19 +173,19 @@ bool config_save() {
     }
 
     // Ensure directory exists
-    if (!SD.exists(CONFIG_DIR)) {
-        SD.mkdir(CONFIG_DIR);
+    if (!sd.exists(CONFIG_DIR)) {
+        sd.mkdir(CONFIG_DIR);
     }
 
-    File f = SD.open(CONFIG_PATH, FILE_WRITE);
-    if (!f) {
+    FsFile f;
+    if (!f.open(CONFIG_PATH, O_WRONLY | O_CREAT | O_TRUNC)) {
         xSemaphoreGive(spi_mutex);
         Serial.println("[config] Failed to open settings.json for write");
         return false;
     }
 
     char buf[256];
-    snprintf(buf, sizeof(buf),
+    int n = snprintf(buf, sizeof(buf),
              "{\"wifi_ssid\":\"%s\","
              "\"wifi_pass\":\"%s\","
              "\"brightness\":%u,"
@@ -194,8 +195,8 @@ bool config_save() {
              app_config.brightness,
              app_config.gps_rate_hz);
 
-    size_t written = f.print(buf);
-    f.flush();
+    size_t written = (n > 0) ? f.write(reinterpret_cast<const uint8_t*>(buf), n) : 0;
+    f.sync();
     f.close();
 
     xSemaphoreGive(spi_mutex);

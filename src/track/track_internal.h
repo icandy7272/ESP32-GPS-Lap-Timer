@@ -2,7 +2,7 @@
 
 #include "track.h"
 
-#include <SdFat.h>
+#include "../sdfat_global.h"
 #include <freertos/semphr.h>
 
 static constexpr int PATH_BUF_LEN = 128;
@@ -11,7 +11,6 @@ static constexpr double AUTO_DETECT_MAX_M = 5000.0;
 static constexpr const char* TRACKS_DIR = "tracks";
 
 extern SemaphoreHandle_t spi_mutex;
-extern SdFat sd;
 
 extern TrackDefinition s_tracks[MAX_TRACKS];
 extern int s_track_count;

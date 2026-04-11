@@ -3,14 +3,13 @@
 #include "../storage.h"
 #include "../track.h"
 
-#include <SdFat.h>
+#include "../sdfat_global.h"
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 
 extern SemaphoreHandle_t spi_mutex;
 extern QueueHandle_t vbo_write_queue;
 extern TrackDefinition active_track;
-extern SdFat sd;
 
 namespace storage_internal {
 

@@ -27,8 +27,8 @@ constexpr int PIN_GPS_TX   = 18;  // ESP32 TX → GPS RX
 constexpr int PIN_GPS_PPS  = 16;  // 1 Hz / 25 Hz pulse-per-second
 
 // --- Buttons ---
-constexpr int PIN_BTN_RECORD = 4;  // latching: power / start-stop recording
-constexpr int PIN_BTN_SECTOR = 5;  // momentary: mark sector / lap split
+constexpr int PIN_BTN_RECORD = 4;  // momentary: start/stop recording
+constexpr int PIN_BTN_SECTOR = 5;  // optional future UI/sector button (not populated)
 
 // --- On-board LED (DevKitC-1 RGB LED is GPIO48; plain LED on GPIO2 on many boards) ---
 constexpr int PIN_LED = 2;

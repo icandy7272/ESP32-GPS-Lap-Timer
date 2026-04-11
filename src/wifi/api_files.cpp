@@ -1,17 +1,19 @@
 // ============================================================
 // GET /files/:name — stream VBO file for download
 // Also handles 404 / unknown-path routing.
+// Uses SdFat via storage_get_session_path() + global sd instance.
 // ============================================================
 
 #include "wifi_internal.h"
+#include "../sdfat_global.h"
+#include "../storage.h"
 
 #include <Arduino.h>
 #include <WebServer.h>
-#include <SD.h>
 
 static void handle_files();
 static bool validate_filename(const String& name);
-static void stream_file_from_sd(const String& path, const String& filename);
+static void stream_file_from_sd(const char* path, const String& filename);
 
 void handle_not_found() {
     String uri = server.uri();
@@ -34,12 +36,19 @@ static void handle_files() {
         return;
     }
 
-    String path = "/sessions/" + filename;
+    char path[128];
+    if (!storage_get_session_path(filename.c_str(), path, sizeof(path))) {
+        server.send(404, "text/plain", "File not found");
+        return;
+    }
+
     stream_file_from_sd(path, filename);
 }
 
 static bool validate_filename(const String& name) {
-    if (name.length() == 0 || name.length() > 64) {
+    // Max session filename: YYYYMMDD_TrackName_HHMMSS_NNN.vbo
+    // where TrackName can be up to 63 chars → total up to ~87 chars.
+    if (name.length() == 0 || name.length() > 128) {
         return false;
     }
     for (unsigned int i = 0; i < name.length(); i++) {
@@ -53,21 +62,21 @@ static bool validate_filename(const String& name) {
     return true;
 }
 
-static void stream_file_from_sd(const String& path,
+static void stream_file_from_sd(const char* path,
                                 const String& filename) {
     if (xSemaphoreTake(spi_mutex, pdMS_TO_TICKS(2000)) != pdTRUE) {
         server.send(503, "text/plain", "SD card busy");
         return;
     }
 
-    File f = SD.open(path, FILE_READ);
-    if (!f) {
+    FsFile f;
+    if (!f.open(path, O_RDONLY)) {
         xSemaphoreGive(spi_mutex);
         server.send(404, "text/plain", "File not found");
         return;
     }
 
-    size_t file_size = f.size();
+    uint32_t file_size = f.fileSize();
     xSemaphoreGive(spi_mutex);
 
     String disposition = "attachment; filename=" + filename;
@@ -81,10 +90,10 @@ static void stream_file_from_sd(const String& path,
     uint8_t buf[FILE_CHUNK_SIZE];
     while (true) {
         xSemaphoreTake(spi_mutex, portMAX_DELAY);
-        size_t n = f.available() ? f.read(buf, sizeof(buf)) : 0;
+        int n = f.available() ? f.read(buf, sizeof(buf)) : 0;
         xSemaphoreGive(spi_mutex);
 
-        if (n == 0) { break; }
+        if (n <= 0) { break; }
 
         String chunk;
         chunk.concat((const char*)buf, n);

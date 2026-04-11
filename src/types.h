@@ -81,6 +81,8 @@ typedef struct {
     bool     is_recording;
     bool     gps_fix_ok;
     int      gps_satellites;
+    double   gps_lat_deg;            // WGS-84 decimal degrees (for web UI coordinate readout)
+    double   gps_lon_deg;            // WGS-84 decimal degrees
     float    speed_kmh;              // current GPS speed (for screen auto-lock)
     int64_t  current_lap_start_us;   // esp_timer when current lap started (for elapsed display)
     LapRecord laps[MAX_LAPS_PER_SESSION];

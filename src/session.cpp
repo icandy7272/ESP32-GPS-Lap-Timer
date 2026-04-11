@@ -156,8 +156,13 @@ static LapStatus classify_lap(int32_t lap_time_ms)
     return LAP_STATUS_TIMED;
 }
 
+// Core 1 breadcrumb — shares RTC variable with lap_timer_events.cpp (Core 0)
+extern int crash_bc_core1;
+
 static void handle_lap_finish(const LapEvent* ev)
 {
+    crash_bc_core1 = 30;  // session: entering handle_lap_finish
+
     // First crossing sets the start reference
     if (s_lap_start_us == 0) {
         s_lap_start_us = ev->crossing_us;
@@ -176,9 +181,12 @@ static void handle_lap_finish(const LapEvent* ev)
         return;
     }
 
+    crash_bc_core1 = 31;  // session: computing lap time
+
     int32_t lap_time_ms =
         (int32_t)((ev->crossing_us - s_lap_start_us) / 1000);
 
+    crash_bc_core1 = 32;  // session: taking session_mutex
     xSemaphoreTake(session_mutex, portMAX_DELAY);
 
     int idx = session_state.lap_count;
@@ -228,9 +236,11 @@ static void handle_lap_finish(const LapEvent* ev)
     }
 
     xSemaphoreGive(session_mutex);
+    crash_bc_core1 = 33;  // session: mutex released, about to write lap
 
     // Persist lap to SD (outside mutex)
     storage_write_lap_timing(lap);
+    crash_bc_core1 = 34;  // session: handle_lap_finish done
 
     // Advance lap start to this crossing; reset sector tracking
     s_lap_start_us = ev->crossing_us;

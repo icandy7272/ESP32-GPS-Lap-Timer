@@ -3,7 +3,7 @@
 // ============================================================
 
 #include "wifi_internal.h"
-#include "track.h"
+#include "../track.h"
 #include "track_runtime.h"
 #include "session.h"
 #include "lap_timer.h"
@@ -11,14 +11,10 @@
 
 #include <Arduino.h>
 #include <WebServer.h>
-#include <SD.h>
 
 // ============================================================
-// GET /api/tracks — list track definitions
+// GET /api/tracks — list track definitions (from in-memory array)
 // ============================================================
-
-static String extract_track_id(const char* filename);
-static String extract_track_name(File& f);
 
 void handle_api_tracks() {
     if (is_throttled()) {
@@ -27,66 +23,19 @@ void handle_api_tracks() {
     }
 
     String json = "{\"tracks\":[";
-    bool first = true;
-
-    if (xSemaphoreTake(spi_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-        File dir = SD.open("/tracks");
-        if (dir && dir.isDirectory()) {
-            File entry = dir.openNextFile();
-            while (entry) {
-                const char* name = entry.name();
-                if (strstr(name, ".json") != nullptr) {
-                    String id = extract_track_id(name);
-                    String tname = extract_track_name(entry);
-                    if (!first) { json += ","; }
-                    json += "{\"id\":\"" + id + "\",\"name\":\"" + tname + "\"}";
-                    first = false;
-                }
-                entry.close();
-                entry = dir.openNextFile();
-            }
-            dir.close();
-        }
-        xSemaphoreGive(spi_mutex);
+    int n = track_count();
+    for (int i = 0; i < n; i++) {
+        const TrackDefinition* t = track_get(i);
+        if (!t) { continue; }
+        if (i > 0) { json += ","; }
+        json += "{\"id\":\"";
+        json += t->id;
+        json += "\",\"name\":\"";
+        json += t->name;
+        json += "\"}";
     }
-
     json += "]}";
     server.send(200, "application/json", json);
-}
-
-// Extract track ID from filename: "track_001.json" -> "track_001"
-static String extract_track_id(const char* filename) {
-    String s(filename);
-    int dot = s.lastIndexOf('.');
-    if (dot > 0) {
-        return s.substring(0, dot);
-    }
-    return s;
-}
-
-// Read track name from first "name":"..." in a track JSON file.
-// File cursor is at position 0. Reads up to 256 bytes.
-static String extract_track_name(File& f) {
-    char buf[256];
-    size_t n = f.readBytes(buf, sizeof(buf) - 1);
-    buf[n] = '\0';
-    f.seek(0);
-
-    char name[64] = "Unknown";
-    // Reuse config.cpp-style extraction
-    const char* pattern = "\"name\":\"";
-    const char* start = strstr(buf, pattern);
-    if (start) {
-        start += strlen(pattern);
-        const char* end = strchr(start, '"');
-        if (end) {
-            size_t len = (size_t)(end - start);
-            if (len >= sizeof(name)) { len = sizeof(name) - 1; }
-            memcpy(name, start, len);
-            name[len] = '\0';
-        }
-    }
-    return String(name);
 }
 
 // ============================================================
@@ -226,60 +175,18 @@ void handle_api_tracks_post() {
     }
 }
 
-static int find_next_track_id() {
-    int max_id = 0;
-
-    if (xSemaphoreTake(spi_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-        if (!SD.exists("/tracks")) {
-            SD.mkdir("/tracks");
-        }
-        File dir = SD.open("/tracks");
-        if (dir && dir.isDirectory()) {
-            File entry = dir.openNextFile();
-            while (entry) {
-                const char* name = entry.name();
-                // Parse "track_NNN.json"
-                const char* p = strstr(name, "track_");
-                if (p) {
-                    int id = atoi(p + 6);
-                    if (id > max_id) { max_id = id; }
-                }
-                entry.close();
-                entry = dir.openNextFile();
-            }
-            dir.close();
-        }
-        xSemaphoreGive(spi_mutex);
-    }
-    return max_id + 1;
-}
-
-static bool write_track_file(const char* path, const String& body) {
-    if (xSemaphoreTake(spi_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        return false;
-    }
-
-    File f = SD.open(path, FILE_WRITE);
-    if (!f) {
-        xSemaphoreGive(spi_mutex);
-        return false;
-    }
-
-    size_t written = f.print(body);
-    f.flush();
-    f.close();
-    xSemaphoreGive(spi_mutex);
-
-    return (written > 0);
-}
-
 // ============================================================
 // POST /api/tracks/select — set active track
 // ============================================================
 
 void handle_api_tracks_select() {
     // Block track switch during recording to prevent timing/export inconsistency
-    if (session_state.is_recording) {
+    bool recording = false;
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        recording = session_state.is_recording;
+        xSemaphoreGive(session_mutex);
+    }
+    if (recording) {
         server.send(409, "application/json",
                     "{\"error\":\"cannot switch track during recording\"}");
         return;
@@ -338,9 +245,13 @@ void handle_api_tracks_delete() {
     }
 
     extern TrackDefinition active_track;
-    SessionState ss = read_session_state();
+    bool is_rec = false;
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        is_rec = session_state.is_recording;
+        xSemaphoreGive(session_mutex);
+    }
     TrackDeleteDecision delete_decision =
-        track_runtime_evaluate_delete(ss.is_recording, &active_track, id);
+        track_runtime_evaluate_delete(is_rec, &active_track, id);
 
     if (delete_decision == TRACK_DELETE_BLOCK_ACTIVE_RECORDING) {
         server.send(409, "application/json",

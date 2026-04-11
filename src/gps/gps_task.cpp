@@ -12,7 +12,10 @@ static void IRAM_ATTR pps_isr() {
 }
 
 static void pps_init() {
-    pinMode(PIN_GPS_PPS, INPUT);
+    // INPUT_PULLDOWN keeps GPIO16 LOW when PPS is not connected,
+    // preventing noise-triggered ISR calls that cause INT_WDT.
+    // When PPS IS connected, the strong digital pulse still triggers correctly.
+    pinMode(PIN_GPS_PPS, INPUT_PULLDOWN);
     attachInterrupt(digitalPinToInterrupt(PIN_GPS_PPS), pps_isr, RISING);
 }
 

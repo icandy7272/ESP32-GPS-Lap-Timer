@@ -14,11 +14,8 @@
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
-#include <SdFat.h>
+#include "../sdfat_global.h"
 #include <esp_timer.h>
-
-// ---- External shared resource for SD free space query -------
-extern SdFat sd;
 
 // Speed thresholds for screen lock (km/h)
 static constexpr float SPEED_LOCK_THRESHOLD   = 15.0f;
@@ -189,13 +186,18 @@ bool s_status_needs_clear = true;
 bool s_laplist_needs_clear = true;
 bool s_laplist_header_drawn = false;
 
+// Sticky flag: if a full_redraw clear pass completed but the content draw
+// was skipped (SPI timeout), force full_redraw again next frame.
+static bool s_pending_full_redraw = false;
+
 static void render_frame(bool screen_changed) {
     DirtyFlags df = compute_dirty(s_cached_state, s_prev_state,
                                   screen_changed);
 
-    // Acquire SPI bus with 10ms timeout; skip frame on failure
-    if (xSemaphoreTake(s_spi_mtx, pdMS_TO_TICKS(SPI_TIMEOUT_MS)) != pdTRUE) {
-        return;
+    // Carry forward a pending full redraw from a previous failed frame
+    if (s_pending_full_redraw) {
+        df.full_redraw = true;
+        s_pending_full_redraw = false;
     }
 
     // On screen change, force clear for status/laplist screens
@@ -203,6 +205,27 @@ static void render_frame(bool screen_changed) {
         s_status_needs_clear   = true;
         s_laplist_needs_clear  = true;
         s_laplist_header_drawn = false;
+    }
+
+    // Phase 1: clear pass (if needed) — release SPI between phases
+    // so storage_task can write VBO data and INT_WDT doesn't fire.
+    if (df.full_redraw) {
+        if (xSemaphoreTake(s_spi_mtx, pdMS_TO_TICKS(SPI_TIMEOUT_MS)) != pdTRUE) {
+            return;  // skip entire frame; full_redraw will re-trigger via dirty check
+        }
+        s_tft.fillScreen(TFT_BLACK);
+        xSemaphoreGive(s_spi_mtx);
+        taskYIELD();  // let storage_task / wifi_task run
+    }
+
+    // Phase 2: content draw
+    if (xSemaphoreTake(s_spi_mtx, pdMS_TO_TICKS(SPI_TIMEOUT_MS)) != pdTRUE) {
+        if (df.full_redraw) {
+            // Screen was cleared but content wasn't drawn — mark as pending
+            // so the next frame retries the full redraw.
+            s_pending_full_redraw = true;
+        }
+        return;
     }
 
     switch (s_current_screen) {
@@ -285,9 +308,12 @@ void display_task(void* param) {
     // Force full redraw on first frame
     bool first_frame = true;
 
+    extern int crash_bc_core1;
+
     for (;;) {
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(FRAME_INTERVAL_MS));
 
+        crash_bc_core1 = 60;  // display: frame start
         // 1. Snapshot session state (skip frame if mutex busy)
         if (!snapshot_session_state()) {
             continue;
@@ -319,6 +345,8 @@ void display_task(void* param) {
         update_screen_lock(speed_kmh, now_ms);
 
         // 5. Render the active screen
+        crash_bc_core1 = 61;  // display: about to render
         render_frame(screen_changed);
+        crash_bc_core1 = 62;  // display: frame done
     }
 }

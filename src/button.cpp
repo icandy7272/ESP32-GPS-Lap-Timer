@@ -5,6 +5,7 @@
 #include <Arduino.h>
 
 #include "button.h"
+#include "button_profile.h"
 #include "pins.h"
 #include "types.h"
 
@@ -12,6 +13,7 @@
 
 static QueueHandle_t s_btn_session_q = nullptr;
 static QueueHandle_t s_btn_display_q = nullptr;
+static size_t        s_button_count  = 0;
 
 // Per-button debounce tracking
 
@@ -38,6 +40,7 @@ static constexpr uint32_t POLL_INTERVAL_MS = 10;
 
 static void init_button_state(ButtonState* bs, int pin, uint8_t id,
                               bool latching);
+static void register_button(int pin, uint8_t id);
 static void poll_button(ButtonState* bs);
 static void dispatch_event(uint8_t button_id, uint8_t event_type);
 static void handle_latching_toggle(ButtonState* bs);
@@ -49,14 +52,10 @@ void button_init(QueueHandle_t btn_session_q, QueueHandle_t btn_display_q)
 {
     s_btn_session_q = btn_session_q;
     s_btn_display_q = btn_display_q;
+    s_button_count  = 0;
 
-    pinMode(PIN_BTN_RECORD, INPUT_PULLUP);
-    pinMode(PIN_BTN_SECTOR, INPUT_PULLUP);
-
-    init_button_state(&s_buttons[0], PIN_BTN_RECORD,
-                      BUTTON_RECORD, true);
-    init_button_state(&s_buttons[1], PIN_BTN_SECTOR,
-                      BUTTON_SECTOR, false);
+    register_button(PIN_BTN_RECORD, BUTTON_RECORD);
+    register_button(PIN_BTN_SECTOR, BUTTON_SECTOR);
 }
 
 void button_task(void* param)
@@ -64,8 +63,9 @@ void button_task(void* param)
     (void)param;
 
     for (;;) {
-        poll_button(&s_buttons[0]);
-        poll_button(&s_buttons[1]);
+        for (size_t i = 0; i < s_button_count; i++) {
+            poll_button(&s_buttons[i]);
+        }
         vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
     }
 }
@@ -83,6 +83,18 @@ static void init_button_state(ButtonState* bs, int pin, uint8_t id,
     bs->press_start_ms = 0;
     bs->long_sent      = false;
     bs->is_latching    = latching;
+}
+
+static void register_button(int pin, uint8_t id)
+{
+    if (!button_is_connected(id) || s_button_count >= 2) {
+        return;
+    }
+
+    pinMode(pin, INPUT_PULLUP);
+    init_button_state(&s_buttons[s_button_count], pin, id,
+                      button_is_latching(id));
+    s_button_count++;
 }
 
 static void poll_button(ButtonState* bs)
