@@ -183,6 +183,12 @@ function createHarness() {
           (((call.options || {}).method || "GET").toUpperCase() === "POST");
       }).length;
     },
+    countTrackSelectPostCalls() {
+      return calls.filter((call) => {
+        return call.url === "/api/tracks/select" &&
+          (((call.options || {}).method || "GET").toUpperCase() === "POST");
+      }).length;
+    },
   };
 }
 
@@ -457,13 +463,105 @@ async function testCreateTrackGuardsAgainstDoubleSubmit() {
     "create button should stay disabled while submit is pending",
   );
 
-  pendingCreate.resolve({ ok: true, body: { ok: true } });
+  harness.enqueueResponse("/api/tracks/select", {
+    ok: true,
+    body: { ok: true, name: "Double Tap Raceway" },
+  });
+  pendingCreate.resolve({ ok: true, body: { ok: true, id: "track_122" } });
+  await harness.settle();
   await harness.settle();
 
   assert.equal(harness.getElement("track-name").value, "");
   assert.match(
     harness.getElement("track-create-msg").textContent,
-    /successfully/i,
+    /created and selected/i,
+  );
+}
+
+async function testCreateTrackAutoSelectsNewTrack() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.getElement("track-name").value = "Auto Select Raceway";
+  harness.context._trackDraft.startFinish = {
+    p1: { lat: 31.2300, lon: 121.4700 },
+    p2: { lat: 31.2300, lon: 121.4702 },
+    heading: 90,
+    flipped: false,
+  };
+  harness.context.renderTrackDraft();
+
+  harness.enqueueResponse((url, options) => {
+    return url === "/api/tracks" &&
+      (((options || {}).method || "GET").toUpperCase() === "POST");
+  }, {
+    ok: true,
+    body: { ok: true, id: "track_123", name: "Auto Select Raceway" },
+  });
+  harness.enqueueResponse("/api/tracks/select", {
+    ok: true,
+    body: { ok: true, name: "Auto Select Raceway" },
+  });
+
+  harness.context.addTrack();
+  await harness.settle();
+  await harness.settle();
+
+  assert.equal(
+    harness.countTrackSelectPostCalls(),
+    1,
+    "track creation should auto-select the newly created track",
+  );
+  const selectCall = harness.calls.find((call) => call.url === "/api/tracks/select");
+  assert.ok(selectCall, "expected a follow-up /api/tracks/select call");
+  assert.equal(
+    JSON.parse(selectCall.options.body).id,
+    "track_123",
+    "auto-select should target the id returned by track creation",
+  );
+  assert.match(
+    harness.getElement("track-create-msg").textContent,
+    /created and selected/i,
+  );
+}
+
+async function testCreateTrackSurfacesAutoSelectFailure() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.getElement("track-name").value = "Needs Manual Select";
+  harness.context._trackDraft.startFinish = {
+    p1: { lat: 31.2400, lon: 121.4800 },
+    p2: { lat: 31.2400, lon: 121.4802 },
+    heading: 90,
+    flipped: false,
+  };
+  harness.context.renderTrackDraft();
+
+  harness.enqueueResponse((url, options) => {
+    return url === "/api/tracks" &&
+      (((options || {}).method || "GET").toUpperCase() === "POST");
+  }, {
+    ok: true,
+    body: { ok: true, id: "track_124", name: "Needs Manual Select" },
+  });
+  harness.enqueueResponse("/api/tracks/select", {
+    ok: false,
+    body: { error: "track not found" },
+  });
+
+  harness.context.addTrack();
+  await harness.settle();
+  await harness.settle();
+
+  assert.equal(
+    harness.countTrackSelectPostCalls(),
+    1,
+    "auto-select should still be attempted when create succeeds",
+  );
+  assert.match(
+    harness.getElement("track-create-msg").textContent,
+    /created.*failed to select/i,
   );
 }
 
@@ -474,6 +572,8 @@ async function testCreateTrackGuardsAgainstDoubleSubmit() {
   await testMarkingRequiresGpsStability();
   await testIncompleteSectorBlocksTrackCreation();
   await testCreateTrackGuardsAgainstDoubleSubmit();
+  await testCreateTrackAutoSelectsNewTrack();
+  await testCreateTrackSurfacesAutoSelectFailure();
   console.log("check_firmware_web_ui: PASS");
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);

@@ -709,11 +709,22 @@ function addTrack(){
   }).then(function(result){
     _trackSubmitPending=false;
     if(result.ok&&result.body.ok){
+      var createdId=result.body&&result.body.id;
       if(nameField){nameField.value='';}
       resetTrackDraft();
       renderTrackDraft();
       loadTracks();
-      setTrackMsg('Track created successfully.','ok');
+      if(!createdId){
+        setTrackMsg('Track created, but failed to select it automatically.','err');
+        return;
+      }
+      selectTrack(createdId).then(function(selected){
+        if(selected){
+          setTrackMsg('Track created and selected.','ok');
+        }else{
+          setTrackMsg('Track created, but failed to select it automatically.','err');
+        }
+      });
     }else{
       renderTrackDraft();
       setTrackMsg((result.body&&result.body.error)?result.body.error:'Failed to create track.','err');
@@ -832,16 +843,24 @@ function saveSettings(){
 }
 
 function selectTrack(id){
-  fetch('/api/tracks/select',{
+  return fetch('/api/tracks/select',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id:id})
-  }).then(function(r){return r.json();}).then(function(d){
-    if(d.ok){
+  }).then(function(r){
+    return r.json().then(function(body){
+      return {ok:r.ok,body:body};
+    },function(){
+      return {ok:r.ok,body:{}};
+    });
+  }).then(function(result){
+    if(result.ok&&result.body.ok){
       refreshStatus();
       loadTracks();
+      return true;
     }
-  }).catch(function(){});
+    return false;
+  }).catch(function(){return false;});
 }
 
 function deleteTrack(id,name){

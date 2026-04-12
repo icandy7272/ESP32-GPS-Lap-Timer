@@ -169,6 +169,15 @@ void handle_api_tracks_post() {
 
     // Save through track module (validates, generates ID, writes proper JSON)
     if (track_save(&track)) {
+        const TrackDefinition* saved = track_get(track_count() - 1);
+        if (saved) {
+            char buf[160];
+            snprintf(buf, sizeof(buf),
+                     "{\"ok\":true,\"id\":\"%s\",\"name\":\"%s\"}",
+                     saved->id, saved->name);
+            server.send(201, "application/json", buf);
+            return;
+        }
         server.send(201, "application/json", "{\"ok\":true}");
     } else {
         server.send(500, "application/json", "{\"error\":\"save failed\"}");
