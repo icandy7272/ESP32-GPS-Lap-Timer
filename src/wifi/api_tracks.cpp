@@ -209,10 +209,12 @@ void handle_api_tracks_select() {
     String body = server.arg("plain");
     const char* json = body.c_str();
     char id[32] = {};
+    char source[24] = {};
     if (!json_extract_str(json, "id", id, sizeof(id))) {
         server.send(400, "application/json", "{\"error\":\"missing id\"}");
         return;
     }
+    bool has_source = json_extract_str(json, "source", source, sizeof(source));
 
     const TrackDefinition* track = track_get_by_id(id);
     if (!track) {
@@ -229,6 +231,9 @@ void handle_api_tracks_select() {
                 sizeof(session_state.track_name));
         xSemaphoreGive(session_mutex);
     }
+
+    track_runtime_note_manual_selection(
+        has_source && strcmp(source, "newly_created") == 0);
 
     char buf[128];
     snprintf(buf, sizeof(buf), "{\"ok\":true,\"name\":\"%s\"}", track->name);
@@ -285,6 +290,7 @@ void handle_api_tracks_delete() {
                         sizeof(session_state.track_name));
                 xSemaphoreGive(session_mutex);
             }
+            track_runtime_note_track_cleared();
         }
         server.send(200, "application/json", "{\"ok\":true}");
     } else {

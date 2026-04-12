@@ -565,6 +565,53 @@ async function testCreateTrackSurfacesAutoSelectFailure() {
   );
 }
 
+async function testStatusRendersCurrentTrackAndBlockedRecordingReason() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 8,
+    lat: 31.2304167,
+    lon: 121.4737010,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "No Track",
+    track_id: "",
+    track_source: "Auto-detected",
+    track_locked_manual: false,
+    recording_cta_state: "blocked_no_track",
+    recording_cta_reason: "Select a track before recording.",
+  });
+
+  assert.match(
+    harness.getElement("current-track-name").textContent,
+    /No Track selected/i,
+    "status should render a Current Track banner in the UI",
+  );
+  assert.match(
+    harness.getElement("current-track-source").textContent,
+    /Auto-detected/i,
+    "status should render track source metadata",
+  );
+  assert.equal(
+    harness.getElement("rec-btn").disabled,
+    true,
+    "recording CTA should be disabled when no valid track is selected",
+  );
+  assert.match(
+    harness.getElement("rec-btn").textContent,
+    /Select Track to Record/i,
+    "recording CTA should show a contextual blocked label",
+  );
+  assert.match(
+    harness.getElement("rec-cta-reason").textContent,
+    /Select a track before recording\./i,
+    "recording CTA should include a concrete blocked reason",
+  );
+}
+
 (async function main() {
   await testGpsFixAllowsZeroZeroCoordinates();
   await testMarkingUsesFreshStatusAndRejectsZeroLengthLine();
@@ -574,6 +621,7 @@ async function testCreateTrackSurfacesAutoSelectFailure() {
   await testCreateTrackGuardsAgainstDoubleSubmit();
   await testCreateTrackAutoSelectsNewTrack();
   await testCreateTrackSurfacesAutoSelectFailure();
+  await testStatusRendersCurrentTrackAndBlockedRecordingReason();
   console.log("check_firmware_web_ui: PASS");
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);

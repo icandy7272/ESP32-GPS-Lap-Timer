@@ -92,8 +92,84 @@
     return '<li class="web-console__item web-console__item--empty">' + escapeHtml(label) + "</li>";
   }
 
-  function getRecordingCtaLabel(isRecording) {
-    return isRecording ? "Stop Recording" : "Start Recording";
+  function hasSelectedTrack(status) {
+    return Boolean(status.track && status.track !== "No Track");
+  }
+
+  function normalizeStatus(source, tracks) {
+    var status = source || {};
+    var trackId = status.track_id || "";
+    if (!trackId && Array.isArray(tracks)) {
+      var matchedTrack = tracks.find(function (track) {
+        return track && track.name === status.track;
+      });
+      trackId = matchedTrack ? matchedTrack.id : "";
+    }
+
+    var normalized = {
+      gps_fix: Boolean(status.gps_fix),
+      satellites: Number(status.satellites) || 0,
+      recording: Boolean(status.recording),
+      current_lap: Number(status.current_lap) || 0,
+      best_lap_ms: Number(status.best_lap_ms) || 0,
+      track: String(status.track || ""),
+      track_id: String(trackId || ""),
+      track_source: String(status.track_source || ""),
+      track_locked_manual: Boolean(status.track_locked_manual),
+      recording_cta_state: String(status.recording_cta_state || ""),
+      recording_cta_reason: String(status.recording_cta_reason || ""),
+    };
+
+    if (!normalized.track_source) {
+      normalized.track_source = hasSelectedTrack(normalized)
+        ? "Auto-detected"
+        : "Waiting to select";
+    }
+
+    if (!normalized.recording_cta_state) {
+      normalized.recording_cta_state = normalized.recording
+        ? "recording"
+        : (hasSelectedTrack(normalized) ? "ready" : "blocked_no_track");
+    }
+
+    if (!normalized.recording_cta_reason &&
+        normalized.recording_cta_state === "blocked_no_track") {
+      normalized.recording_cta_reason = "Select a track before recording.";
+    }
+
+    return normalized;
+  }
+
+  function getRecordingCtaConfig(status) {
+    if (status.recording || status.recording_cta_state === "recording") {
+      return {
+        label: "Stop Recording",
+        disabled: false,
+        active: true,
+      };
+    }
+
+    if (status.recording_cta_state === "ready") {
+      return {
+        label: "Ready to Record",
+        disabled: false,
+        active: false,
+      };
+    }
+
+    if (status.recording_cta_state === "blocked_no_track") {
+      return {
+        label: "Select Track to Record",
+        disabled: true,
+        active: false,
+      };
+    }
+
+    return {
+      label: "Start Recording",
+      disabled: false,
+      active: false,
+    };
   }
 
   function renderSessionsMarkup(sessions) {
@@ -115,7 +191,33 @@
       .join("");
   }
 
-  function renderTracksMarkup(tracks) {
+  function renderCurrentTrackMarkup(status) {
+    var currentTrackName = hasSelectedTrack(status)
+      ? escapeHtml(status.track)
+      : "No Track selected";
+    var lockChip = status.track_locked_manual
+      ? '<span class="web-console__track-badge">' +
+        escapeHtml(status.track_source === "Newly created" ? "New" : "Manual") +
+        "</span>"
+      : "";
+
+    return (
+      '<div class="web-console__current-track">' +
+      '<div class="web-console__row web-console__row--tight">' +
+      '<span class="web-console__label">Current Track</span>' +
+      lockChip +
+      "</div>" +
+      '<div class="web-console__current-track-name">' +
+      currentTrackName +
+      "</div>" +
+      '<div class="web-console__helper">' +
+      escapeHtml(status.track_source) +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function renderTracksMarkup(tracks, status) {
     if (!Array.isArray(tracks) || tracks.length === 0) {
       return renderEmptyListItem("No tracks");
     }
@@ -124,13 +226,22 @@
       .map(function (track) {
         var trackId = escapeHtml((track && track.id) || "unknown");
         var trackName = escapeHtml((track && track.name) || "Unknown");
+        var isCurrent = Boolean(track && (
+          (status.track_id && track.id === status.track_id) ||
+          (!status.track_id && track.name === status.track)
+        ));
         return (
           '<li class="web-console__item web-console__item--track">' +
+          '<span class="web-console__track-name-wrap">' +
           '<span class="web-console__track-name">' +
           trackName +
           " (" +
           trackId +
           ")" +
+          "</span>" +
+          (isCurrent
+            ? '<span class="web-console__track-badge web-console__track-badge--current">Current</span>'
+            : "") +
           "</span>" +
           '<span class="web-console__track-actions">' +
           '<button type="button" class="web-console__action-button" disabled>Select</button>' +
@@ -466,20 +577,20 @@
 
   function renderWebConsoleMarkup(scenario) {
     var data = scenario || {};
-    var status = data.status || {};
+    var tracks = Array.isArray(data.tracks) ? data.tracks : [];
+    var status = normalizeStatus(data.status || {}, tracks);
     var settings = data.settings || {};
-    var isRecording = Boolean(status.recording);
     var gpsFix = status.gps_fix ? "Yes" : "No";
-    var recordingState = isRecording ? "REC" : "Idle";
-    var currentLap = Number(status.current_lap) || 0;
-    var satellites = Number(status.satellites) || 0;
+    var recordingState = status.recording ? "REC" : "Idle";
+    var currentLap = status.current_lap;
+    var satellites = status.satellites;
     var bestLap = formatBestLap(status.best_lap_ms);
     var trackName = status.track ? escapeHtml(status.track) : "None";
+    var recordingCta = getRecordingCtaConfig(status);
     var ssid = escapeHtml(settings.wifi_ssid || "");
     var wifiPass = escapeHtml(settings.wifi_pass || "");
     var brightness = Number(settings.brightness);
     var sessions = Array.isArray(data.sessions) ? data.sessions : [];
-    var tracks = Array.isArray(data.tracks) ? data.tracks : [];
 
     return (
       '<div class="web-console-preview">' +
@@ -504,10 +615,15 @@
       trackName +
       "</span></div>" +
       '<button type="button" class="web-console__recording-cta' +
-      (isRecording ? " web-console__recording-cta--active" : "") +
-      '" disabled>' +
-      getRecordingCtaLabel(isRecording) +
+      (recordingCta.active ? " web-console__recording-cta--active" : "") +
+      '"' +
+      (recordingCta.disabled ? " disabled" : "") +
+      ">" +
+      recordingCta.label +
       "</button>" +
+      '<div class="web-console__recording-reason">' +
+      escapeHtml(status.recording_cta_reason) +
+      "</div>" +
       "</div>" +
       '<div class="web-console__card" data-card="sessions">' +
       "<h2>Sessions</h2>" +
@@ -517,8 +633,9 @@
       "</div>" +
       '<div class="web-console__card" data-card="tracks">' +
       "<h2>Tracks</h2>" +
+      renderCurrentTrackMarkup(status) +
       '<ul class="web-console__list">' +
-      renderTracksMarkup(tracks) +
+      renderTracksMarkup(tracks, status) +
       "</ul>" +
       renderTrackCreationMarkup(data) +
       "</div>" +

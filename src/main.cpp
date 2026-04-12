@@ -243,6 +243,7 @@ void setup() {
         } else if (active_track.name[0] == '\0') {
             strncpy(active_track.name, "No Track", sizeof(active_track.name) - 1);
             active_track.name[sizeof(active_track.name) - 1] = '\0';
+            track_runtime_note_track_cleared();
             Serial.println("[BOOT] No track within 5km");
         }
     }

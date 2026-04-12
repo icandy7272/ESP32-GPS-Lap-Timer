@@ -47,6 +47,7 @@ const requiredScenarioIds = [
   "ready-to-drive",
   "track-creation-stabilizing",
   "no-gps-driving",
+  "manual-track-selected",
   "recording",
   "recording-slow",
   "sector-focus",
@@ -138,12 +139,14 @@ assert.equal(
 );
 
 const recordingScenario = getScenarioById("recording");
+const manualTrackSelectedScenario = getScenarioById("manual-track-selected");
 const heavyTrackLibraryScenario = getScenarioById("heavy-track-library");
 const coldBootScenario = getScenarioById("cold-boot");
 const bestLapImprovedScenario = getScenarioById("best-lap-improved");
 const sessionReviewScenario = getScenarioById("session-review");
 const trackCreationStabilizingScenario = getScenarioById("track-creation-stabilizing");
 assert.ok(recordingScenario, "Expected recording scenario to exist");
+assert.ok(manualTrackSelectedScenario, "Expected manual-track-selected scenario to exist");
 assert.ok(recordingScenario.sessions.length > 0, "recording scenario should include at least one session");
 assert.ok(recordingScenario.tracks.length > 0, "recording scenario should include at least one track");
 assert.ok(coldBootScenario, "Expected cold-boot scenario to exist");
@@ -160,6 +163,7 @@ assert.ok(
 );
 
 const markup = webConsoleModule.renderWebConsoleMarkup(recordingScenario);
+const manualTrackMarkup = webConsoleModule.renderWebConsoleMarkup(manualTrackSelectedScenario);
 const browserGlobalMarkup = browserGlobalSandbox.UiPreviewWebConsole.renderWebConsoleMarkup(recordingScenario);
 const heavyTrackLibraryMarkup = webConsoleModule.renderWebConsoleMarkup(heavyTrackLibraryScenario);
 const stabilizingMarkup = webConsoleModule.renderWebConsoleMarkup(trackCreationStabilizingScenario);
@@ -168,11 +172,15 @@ assert.match(markup, /Sessions/);
 assert.match(markup, /Tracks/);
 assert.match(markup, /Settings/);
 assert.match(markup, /Track Creation/);
+assert.match(markup, /Current Track/);
 assert.match(markup, /Mark P1|✓ P1/);
 assert.match(markup, /Mark P2|✓ P2/);
 assert.match(markup, /Sector Splits \(optional\)/);
 assert.match(markup, /Current position:/);
 assert.match(markup, /Stop Recording/);
+assert.match(manualTrackMarkup, /Selected manually/);
+assert.match(manualTrackMarkup, /Ready to Record/);
+assert.match(manualTrackMarkup, /Current/);
 assert.match(stabilizingMarkup, /Hold still\.\.\. stabilizing/i);
 assert.match(stabilizingMarkup, /web-console__gps-bar--warn/);
 assert.match(

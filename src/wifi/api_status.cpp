@@ -5,6 +5,7 @@
 // ============================================================
 
 #include "wifi_internal.h"
+#include "track_runtime.h"
 #include "types.h"
 
 #include <Arduino.h>
@@ -26,6 +27,9 @@ void handle_api_status() {
     int      cur_lap   = 0;
     int32_t  best_ms   = -1;
     char     track[64] = {0};
+    TrackRuntimeStatus runtime_status = {};
+    extern TrackDefinition active_track;
+    TrackDefinition active_track_snapshot = {};
 
     if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         gps_fix   = session_state.gps_fix_ok;
@@ -38,8 +42,11 @@ void handle_api_status() {
         memcpy(track, session_state.track_name, sizeof(track));
         xSemaphoreGive(session_mutex);
     }
+    memcpy(&active_track_snapshot, &active_track, sizeof(active_track_snapshot));
+    track_runtime_fill_status(&active_track_snapshot, track, recording,
+                              &runtime_status);
 
-    char buf[320];
+    char buf[512];
     snprintf(buf, sizeof(buf),
              "{\"gps_fix\":%s,"
              "\"satellites\":%d,"
@@ -48,7 +55,12 @@ void handle_api_status() {
              "\"recording\":%s,"
              "\"current_lap\":%d,"
              "\"best_lap_ms\":%ld,"
-             "\"track\":\"%s\"}",
+             "\"track\":\"%s\","
+             "\"track_id\":\"%s\","
+             "\"track_source\":\"%s\","
+             "\"track_locked_manual\":%s,"
+             "\"recording_cta_state\":\"%s\","
+             "\"recording_cta_reason\":\"%s\"}",
              gps_fix ? "true" : "false",
              sats,
              lat,
@@ -56,7 +68,12 @@ void handle_api_status() {
              recording ? "true" : "false",
              cur_lap,
              (long)best_ms,
-             track);
+             track,
+             runtime_status.track_id,
+             runtime_status.track_source,
+             runtime_status.track_locked_manual ? "true" : "false",
+             runtime_status.recording_cta_state,
+             runtime_status.recording_cta_reason);
 
     server.send(200, "application/json", buf);
 }

@@ -90,6 +90,7 @@ void lap_timer_task(void* param) {
                 strlcpy(session_state.track_name, "No Track",
                         sizeof(session_state.track_name));
                 xSemaphoreGive(s_session_mutex);
+                track_runtime_note_track_cleared();
                 Serial.println("[lap_timer] WARN: No track within 5km — configure via phone");
             }
 

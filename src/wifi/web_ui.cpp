@@ -92,6 +92,19 @@ static String build_style_section() {
            ".collapse-toggle{width:100%;text-align:left;background:#1b2f4c;color:#bcdfff;"
              "border:1px solid #355175;padding:10px 12px;margin-top:8px}"
            ".helper-text{color:#9eb3ca;font-size:12px;line-height:1.4;margin:4px 0}"
+           ".current-track-panel{background:#0f1f32;border:1px solid #2a3c52;"
+             "border-radius:8px;padding:10px;margin:10px 0}"
+           ".current-track-head{align-items:center}"
+           ".current-track-name{font-size:1.05em;font-weight:bold;color:#e8f3ff;"
+             "margin-top:4px}"
+           ".track-chip{display:inline-flex;align-items:center;justify-content:center;"
+             "border:1px solid #355175;border-radius:999px;padding:2px 8px;font-size:11px;"
+             "font-weight:bold;background:#17304d;color:#bcdfff}"
+           ".track-chip.current{background:#12391f;border-color:#2faa5a;color:#7ff5a1}"
+           ".track-row-name{display:flex;align-items:center;gap:8px;flex-wrap:wrap}"
+           ".track-actions{display:flex;align-items:center;gap:4px}"
+           ".track-meta{margin-top:6px}"
+           ".recording-reason{min-height:1.4em}"
            ".primary-btn:disabled{background:#334;color:#889;cursor:not-allowed}"
            ".track-msg-ok{color:#7ff5a1}"
            ".track-msg-err{color:#ff8f8f}"
@@ -121,6 +134,7 @@ static String build_body_section() {
            "<button id=\"rec-btn\" onclick=\"toggleRecording()\" "
              "style=\"width:100%;padding:12px;font-size:1.1em;margin-top:8px\">"
              "Loading...</button>"
+           "<div id=\"rec-cta-reason\" class=\"helper-text recording-reason\"></div>"
            "</div>"
 
            // Sessions card
@@ -132,6 +146,12 @@ static String build_body_section() {
            // Tracks card
            "<div class=\"card\">"
            "<h2>Tracks</h2>"
+           "<div class=\"current-track-panel\">"
+           "<div class=\"row current-track-head\"><span class=\"label\">Current Track</span>"
+             "<span id=\"current-track-lock\" class=\"track-chip\" style=\"display:none\"></span></div>"
+           "<div id=\"current-track-name\" class=\"current-track-name\">Loading...</div>"
+           "<div id=\"current-track-source\" class=\"helper-text track-meta\">--</div>"
+           "</div>"
            "<ul id=\"tracks\"><li>Loading...</li></ul>"
            "<h2 style=\"margin-top:12px\">Track Creation</h2>"
            "<input id=\"track-name\" placeholder=\"Track name\">"
@@ -201,6 +221,15 @@ var _trackDraft={
   sectors:[],
   sectorsExpanded:false
 };
+var _statusSnapshot={
+  track:'',
+  track_id:'',
+  track_source:'',
+  track_locked_manual:false,
+  recording_cta_state:'blocked_no_track',
+  recording_cta_reason:'Select a track before recording.'
+};
+var _trackList=[];
 
 function formatCoord(point){
   if(!point){return 'Not set';}
@@ -354,6 +383,101 @@ function resetTrackDraft(){
   _trackSubmitPending=false;
 }
 
+function hasSelectedTrack(){
+  return !!(_statusSnapshot.track&&_statusSnapshot.track!=='No Track');
+}
+
+function currentTrackName(){
+  return hasSelectedTrack()?_statusSnapshot.track:'No Track selected';
+}
+
+function currentTrackSource(){
+  if(_statusSnapshot.track_source){return _statusSnapshot.track_source;}
+  return hasSelectedTrack()?'Auto-detected':'Waiting to select';
+}
+
+function currentTrackMatches(track){
+  if(!track){return false;}
+  if(_statusSnapshot.track_id){
+    return track.id===_statusSnapshot.track_id;
+  }
+  return !!_statusSnapshot.track&&track.name===_statusSnapshot.track;
+}
+
+function getRecordingCtaConfig(){
+  var state=_statusSnapshot.recording_cta_state||(_isRec?'recording':(hasSelectedTrack()?'ready':'blocked_no_track'));
+  if(_isRec||state==='recording'){
+    return {label:'Stop Recording',disabled:false,background:'#f44',color:'#fff7ed'};
+  }
+  if(state==='ready'){
+    return {label:'Ready to Record',disabled:false,background:'#0af',color:'#000'};
+  }
+  if(state==='blocked_no_track'){
+    return {label:'Select Track to Record',disabled:true,background:'#334',color:'#889'};
+  }
+  return {label:'Start Recording',disabled:false,background:'#0af',color:'#000'};
+}
+
+function renderCurrentTrackSummary(){
+  var name=$('current-track-name');
+  var source=$('current-track-source');
+  var lock=$('current-track-lock');
+  if(name){name.textContent=currentTrackName();}
+  if(source){source.textContent=currentTrackSource();}
+  if(lock){
+    if(_statusSnapshot.track_locked_manual){
+      lock.textContent=_statusSnapshot.track_source==='Newly created'?'New':'Manual';
+      lock.style.display='inline-flex';
+    }else{
+      lock.textContent='';
+      lock.style.display='none';
+    }
+  }
+}
+
+function renderTracksList(){
+  var ul=$('tracks');
+  if(!ul){return;}
+  ul.innerHTML='';
+  if(!_trackList.length){
+    ul.innerHTML='<li>No tracks</li>';
+    return;
+  }
+  _trackList.forEach(function(t){
+    var li=document.createElement('li');
+    li.style.display='flex';
+    li.style.justifyContent='space-between';
+    li.style.alignItems='center';
+    li.style.gap='8px';
+    var nameWrap=document.createElement('span');
+    nameWrap.className='track-row-name';
+    var nameText=document.createElement('span');
+    nameText.textContent=t.name+' ('+t.id+')';
+    nameWrap.appendChild(nameText);
+    if(currentTrackMatches(t)){
+      var chip=document.createElement('span');
+      chip.className='track-chip current';
+      chip.textContent='Current';
+      nameWrap.appendChild(chip);
+    }
+    var bx=document.createElement('span');
+    bx.className='track-actions';
+    var sb=document.createElement('button');
+    sb.textContent='\u9009\u4e3a\u5f53\u524d';
+    sb.style.cssText='padding:4px 8px;margin:0 4px;font-size:0.8em';
+    sb.onclick=function(){selectTrack(t.id,'manual');};
+    var db=document.createElement('button');
+    db.textContent='\u5220\u9664';
+    db.style.cssText='padding:4px 8px;font-size:0.8em;background:#f44';
+    db.onclick=function(){deleteTrack(t.id,t.name);};
+    bx.appendChild(sb);
+    bx.appendChild(db);
+    li.appendChild(nameWrap);
+    li.appendChild(bx);
+    ul.appendChild(li);
+  });
+}
+
 function updateStartFinishHeading(){
   var sf=_trackDraft.startFinish;
   if(sf.p1&&sf.p2){
@@ -411,6 +535,14 @@ function applyStatusData(d){
   _trackDraft.gps.lon=isNaN(lon)?0:lon;
   updateGpsStabilitySamples();
   _isRec=!!d.recording;
+  _statusSnapshot.track=d.track||'';
+  _statusSnapshot.track_id=d.track_id||'';
+  _statusSnapshot.track_source=d.track_source||(d.track&&d.track!=='No Track'?'Auto-detected':'Waiting to select');
+  _statusSnapshot.track_locked_manual=!!d.track_locked_manual;
+  _statusSnapshot.recording_cta_state=d.recording_cta_state||(d.recording?'recording':(d.track&&d.track!=='No Track'?'ready':'blocked_no_track'));
+  _statusSnapshot.recording_cta_reason=d.recording_cta_reason||(_statusSnapshot.recording_cta_state==='blocked_no_track'?'Select a track before recording.':'');
+  renderCurrentTrackSummary();
+  renderTracksList();
   updateRecBtn();
 }
 
@@ -718,7 +850,7 @@ function addTrack(){
         setTrackMsg('Track created, but failed to select it automatically.','err');
         return;
       }
-      selectTrack(createdId).then(function(selected){
+      selectTrack(createdId,'newly_created').then(function(selected){
         if(selected){
           setTrackMsg('Track created and selected.','ok');
         }else{
@@ -788,35 +920,12 @@ function loadSessions(){
 
 function loadTracks(){
   fetch('/api/tracks').then(function(r){return r.json();}).then(function(d){
-    var ul=$('tracks');
-    ul.innerHTML='';
-    if(!d.tracks||!d.tracks.length){
-      ul.innerHTML='<li>No tracks</li>';
-      return;
-    }
-    d.tracks.forEach(function(t){
-      var li=document.createElement('li');
-      li.style.display='flex';
-      li.style.justifyContent='space-between';
-      li.style.alignItems='center';
-      var sp=document.createElement('span');
-      sp.textContent=t.name+' ('+t.id+')';
-      var bx=document.createElement('span');
-      var sb=document.createElement('button');
-      sb.textContent='\u9009\u4e3a\u5f53\u524d';
-      sb.style.cssText='padding:4px 8px;margin:0 4px;font-size:0.8em';
-      sb.onclick=function(){selectTrack(t.id);};
-      var db=document.createElement('button');
-      db.textContent='\u5220\u9664';
-      db.style.cssText='padding:4px 8px;font-size:0.8em;background:#f44';
-      db.onclick=function(){deleteTrack(t.id,t.name);};
-      bx.appendChild(sb);
-      bx.appendChild(db);
-      li.appendChild(sp);
-      li.appendChild(bx);
-      ul.appendChild(li);
-    });
-  }).catch(function(){});
+    _trackList=d.tracks||[];
+    renderTracksList();
+  }).catch(function(){
+    _trackList=[];
+    renderTracksList();
+  });
 }
 
 function loadSettings(){
@@ -842,11 +951,13 @@ function saveSettings(){
   }).catch(function(){});
 }
 
-function selectTrack(id){
+function selectTrack(id,source){
+  var payload={id:id};
+  if(source){payload.source=source;}
   return fetch('/api/tracks/select',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id:id})
+    body:JSON.stringify(payload)
   }).then(function(r){
     return r.json().then(function(body){
       return {ok:r.ok,body:body};
@@ -856,7 +967,6 @@ function selectTrack(id){
   }).then(function(result){
     if(result.ok&&result.body.ok){
       refreshStatus();
-      loadTracks();
       return true;
     }
     return false;
@@ -870,11 +980,16 @@ function deleteTrack(id,name){
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id:id})
   }).then(function(r){return r.json();}).then(function(d){
-    if(d.ok){loadTracks();}
+    if(d.ok){
+      refreshStatus();
+      loadTracks();
+    }
   }).catch(function(){});
 }
 
 function toggleRecording(){
+  var config=getRecordingCtaConfig();
+  if(config.disabled){return;}
   var act=_isRec?'stop':'start';
   fetch('/api/recording',{
     method:'POST',
@@ -883,20 +998,23 @@ function toggleRecording(){
   }).then(function(r){return r.json();}).then(function(d){
     if(d.ok){
       _isRec=d.recording;
+      _statusSnapshot.recording_cta_state=d.recording?'recording':_statusSnapshot.recording_cta_state;
       updateRecBtn();
+      refreshStatus();
     }
   }).catch(function(){});
 }
 
 function updateRecBtn(){
   var b=$('rec-btn');
-  if(_isRec){
-    b.textContent='\u505c\u6b62\u5f55\u5236';
-    b.style.background='#f44';
-  }else{
-    b.textContent='\u5f00\u59cb\u5f55\u5236';
-    b.style.background='#0af';
-  }
+  var reason=$('rec-cta-reason');
+  var config=getRecordingCtaConfig();
+  if(!b){return;}
+  b.textContent=config.label;
+  b.disabled=!!config.disabled;
+  b.style.background=config.background;
+  b.style.color=config.color;
+  if(reason){reason.textContent=_statusSnapshot.recording_cta_reason||'';}
 }
 
 initTrackCreationUi();
