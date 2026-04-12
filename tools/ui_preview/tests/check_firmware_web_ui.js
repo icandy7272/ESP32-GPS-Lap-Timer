@@ -910,6 +910,54 @@ async function testGuidedTrackReviewStageSupportsRemarkingSinglePoints() {
   );
 }
 
+async function testAdvancedSettingsStartCollapsed() {
+  const harness = createHarness();
+  await harness.settle();
+
+  assert.equal(
+    harness.getElement("advanced-settings-panel").style.display,
+    "none",
+    "advanced settings should start collapsed",
+  );
+
+  harness.context.toggleAdvancedSettings();
+  assert.equal(
+    harness.getElement("advanced-settings-panel").style.display,
+    "block",
+    "advanced settings should expand when the affordance is used",
+  );
+}
+
+async function testSessionCardsRenderMetadataAndEncodedDownloads() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.enqueueResponse("/api/sessions", {
+    sessions: [
+      {
+        filename: "20260408_Ningbo Kart Center_140530_001.vbo",
+        date: "2026-04-08 14:05",
+        track: "Ningbo Kart Center",
+        best_lap_ms: 50890,
+      },
+    ],
+  });
+  harness.context.loadSessions();
+  await harness.settle();
+
+  const sessions = harness.getElement("sessions");
+  assert.equal(sessions.children.length, 1, "session list should render one session card");
+  assert.match(sessions.children[0].innerHTML, /Date/);
+  assert.match(sessions.children[0].innerHTML, /Track/);
+  assert.match(sessions.children[0].innerHTML, /Best Lap/);
+  assert.match(sessions.children[0].innerHTML, /50\.890s/);
+  assert.match(
+    sessions.children[0].innerHTML,
+    /\/files\/20260408_Ningbo%20Kart%20Center_140530_001\.vbo/,
+    "download href should URL-encode spaces in session filenames",
+  );
+}
+
 (async function main() {
   await testGpsFixAllowsZeroZeroCoordinates();
   await testMarkingUsesFreshStatusAndRejectsZeroLengthLine();
@@ -922,6 +970,8 @@ async function testGuidedTrackReviewStageSupportsRemarkingSinglePoints() {
   await testStatusRendersCurrentTrackAndBlockedRecordingReason();
   await testNearbyTracksRenderSortedAndSupportSwitching();
   await testGuidedTrackReviewStageSupportsRemarkingSinglePoints();
+  await testAdvancedSettingsStartCollapsed();
+  await testSessionCardsRenderMetadataAndEncodedDownloads();
   console.log("check_firmware_web_ui: PASS");
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);

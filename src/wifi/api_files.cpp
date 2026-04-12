@@ -28,9 +28,10 @@ void handle_not_found() {
 
 static void handle_files() {
     String uri = server.uri();
-    String filename = uri.substring(7); // strip "/files/"
+    String filename = WebServer::urlDecode(uri.substring(7)); // strip "/files/"
 
-    // Validate filename: only alphanumeric, underscore, dot, hyphen
+    // Validate filename after URL-decoding so spaces and other
+    // safe track-name characters continue to work for downloads.
     if (!validate_filename(filename)) {
         server.send(400, "text/plain", "Invalid filename");
         return;
@@ -53,10 +54,10 @@ static bool validate_filename(const String& name) {
     }
     for (unsigned int i = 0; i < name.length(); i++) {
         char c = name.charAt(i);
-        bool ok = (c >= 'a' && c <= 'z') ||
-                  (c >= 'A' && c <= 'Z') ||
-                  (c >= '0' && c <= '9') ||
-                  c == '_' || c == '.' || c == '-';
+        bool ok = c >= 0x20 && c <= 0x7E &&
+                  c != '"' && c != '\\' && c != '/' &&
+                  c != ':' && c != '*' && c != '?' &&
+                  c != '<' && c != '>' && c != '|';
         if (!ok) { return false; }
     }
     return true;
@@ -79,7 +80,7 @@ static void stream_file_from_sd(const char* path,
     uint32_t file_size = f.fileSize();
     xSemaphoreGive(spi_mutex);
 
-    String disposition = "attachment; filename=" + filename;
+    String disposition = "attachment; filename=\"" + filename + "\"";
 
     server.sendHeader("Content-Disposition", disposition);
     server.setContentLength(file_size);

@@ -206,14 +206,47 @@
       return renderEmptyListItem("No sessions");
     }
 
+    function normalizeSession(session) {
+      if (typeof session === "string") {
+        return {
+          filename: session,
+          date: "Unknown date",
+          track: "Unknown track",
+          best_lap_ms: -1,
+        };
+      }
+
+      return {
+        filename: String((session && session.filename) || "session.vbo"),
+        date: String((session && session.date) || "Unknown date"),
+        track: String((session && session.track) || "Unknown track"),
+        best_lap_ms: Number((session && session.best_lap_ms) || -1),
+      };
+    }
+
     return sessions
-      .map(function (sessionName) {
-        var safeSession = escapeHtml(sessionName);
+      .map(function (session) {
+        var item = normalizeSession(session);
         return (
-          '<li class="web-console__item">' +
-          '<span class="web-console__session-link">' +
-          safeSession +
+          '<li class="web-console__item web-console__item--session">' +
+          '<div class="web-console__session-card">' +
+          '<div class="web-console__session-grid">' +
+          '<div><span class="web-console__session-label">Date</span><strong>' +
+          escapeHtml(item.date) +
+          "</strong></div>" +
+          '<div><span class="web-console__session-label">Track</span><strong>' +
+          escapeHtml(item.track) +
+          "</strong></div>" +
+          '<div><span class="web-console__session-label">Best Lap</span><strong>' +
+          escapeHtml(formatBestLap(item.best_lap_ms)) +
+          "</strong></div>" +
+          "</div>" +
+          '<div class="web-console__session-actions">' +
+          '<span class="web-console__session-link">Download ' +
+          escapeHtml(item.filename) +
           "</span>" +
+          "</div>" +
+          "</div>" +
           "</li>"
         );
       })
@@ -854,19 +887,8 @@
       renderTrackCreationMarkup(data) +
       "</div>" +
       '<div class="web-console__card" data-card="settings">' +
-      "<h2>Settings</h2>" +
-      '<form class="web-console__form" aria-label="Settings form shell">' +
-      '<label class="web-console__field">SSID<input class="web-console__input" value="' +
-      ssid +
-      '" disabled /></label>' +
-      '<label class="web-console__field">Password<input class="web-console__input" type="password" value="' +
-      wifiPass +
-      '" disabled /></label>' +
-      '<label class="web-console__field">Brightness<input class="web-console__input" value="' +
-      (Number.isFinite(brightness) ? brightness : 0) +
-      '" disabled /></label>' +
-      '<button type="button" class="web-console__primary-button" disabled>Save Settings</button>' +
-      "</form>" +
+      '<button type="button" class="web-console__secondary-button web-console__advanced-toggle" disabled>Advanced</button>' +
+      '<div class="web-console__hint">Wi-Fi credential changes still require a reboot after saving.</div>' +
       "</div>" +
       "</div>"
     );

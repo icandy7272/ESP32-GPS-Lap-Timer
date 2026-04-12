@@ -74,10 +74,13 @@ for (const scenario of SCENARIOS) {
     Array.isArray(scenario.tracks) && scenario.tracks.every((track) => typeof track.id === "string"),
     `Scenario ${scenario.id} tracks should use string ids`,
   );
-  assert.ok(
-    Array.isArray(scenario.sessions) && scenario.sessions.every((session) => typeof session === "string"),
-    `Scenario ${scenario.id} sessions should be filename strings`,
-  );
+assert.ok(
+  Array.isArray(scenario.sessions) && scenario.sessions.every((session) => {
+    return typeof session === "string" ||
+      (session && typeof session === "object" && typeof session.filename === "string");
+  }),
+  `Scenario ${scenario.id} sessions should be filename strings or metadata objects`,
+);
   if (scenario.device && Object.prototype.hasOwnProperty.call(scenario.device, "laps")) {
     assert.ok(
       Array.isArray(scenario.device.laps),
@@ -174,7 +177,7 @@ const stabilizingMarkup = webConsoleModule.renderWebConsoleMarkup(trackCreationS
 assert.match(markup, /Status/);
 assert.match(markup, /Sessions/);
 assert.match(markup, /Tracks/);
-assert.match(markup, /Settings/);
+assert.match(markup, /Advanced|Settings/);
 assert.match(markup, /Track Creation/);
 assert.match(markup, /Current Track/);
 assert.match(markup, /Mark P1|✓ P1/);
@@ -219,7 +222,11 @@ assert.doesNotMatch(markup, /href="#"/);
 assert.equal(browserGlobalMarkup, markup, "browser-global and CommonJS renderers should match");
 assert.match(
   heavyTrackLibraryMarkup,
-  new RegExp(escapeRegExp(heavyTrackLibraryScenario.sessions[1])),
+  new RegExp(escapeRegExp(
+    typeof heavyTrackLibraryScenario.sessions[1] === "string"
+      ? heavyTrackLibraryScenario.sessions[1]
+      : heavyTrackLibraryScenario.sessions[1].filename,
+  )),
 );
 assert.match(
   heavyTrackLibraryMarkup,
@@ -230,6 +237,14 @@ assert.doesNotMatch(
   /No sessions|No tracks/,
   "heavy-track-library should not render empty-state text",
 );
+const sessionReviewMarkup = webConsoleModule.renderWebConsoleMarkup(sessionReviewScenario);
+assert.match(sessionReviewMarkup, /Date/i);
+assert.match(sessionReviewMarkup, /Track/i);
+assert.match(sessionReviewMarkup, /Best Lap/i);
+assert.match(sessionReviewMarkup, /Ningbo Kart Center/);
+assert.match(sessionReviewMarkup, /50\.890s/);
+assert.match(sessionReviewMarkup, /Advanced/i);
+assert.doesNotMatch(sessionReviewMarkup, /Save Settings/);
 
 const gpsSearchingScenario = getScenarioById("gps-searching");
 const readyBootScenario = {

@@ -555,7 +555,20 @@
         recording_cta_state: "ready",
         recording_cta_reason: "",
       },
-      sessions: ["session_20260408_04.vbo", "session_20260407_02.vbo"],
+      sessions: [
+        {
+          filename: "20260408_Ningbo Kart Center_140530_001.vbo",
+          date: "2026-04-08 14:05",
+          track: "Ningbo Kart Center",
+          best_lap_ms: 50890,
+        },
+        {
+          filename: "20260407_Ningbo Kart Center_174210_001.vbo",
+          date: "2026-04-07 17:42",
+          track: "Ningbo Kart Center",
+          best_lap_ms: 51310,
+        },
+      ],
       tracks: TRACKS_BASE.slice(0, 2),
       settings: { wifi_ssid: "GPS-LapTimer", wifi_pass: "12345678", brightness: 200 },
       device: {

@@ -227,6 +227,38 @@ body {
   color: #bae6fd;
 }
 
+.web-console__item--session {
+  padding: 0;
+  border-bottom: 0;
+}
+
+.web-console__session-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.82);
+}
+
+.web-console__session-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.web-console__session-label {
+  display: block;
+  margin-bottom: 3px;
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+
+.web-console__session-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .web-console__item--track {
   display: flex;
   justify-content: space-between;
@@ -318,6 +350,10 @@ body {
   color: #94a3b8;
   font-size: 0.8rem;
   line-height: 1.4;
+}
+
+.web-console__advanced-toggle {
+  margin-top: 0;
 }
 
 .web-console__action-button {

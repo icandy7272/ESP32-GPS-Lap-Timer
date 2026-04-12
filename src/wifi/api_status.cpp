@@ -44,9 +44,9 @@ void handle_api_status() {
         cur_lap   = session_state.current_lap;
         best_ms   = session_state.best_lap_time_ms;
         memcpy(track, session_state.track_name, sizeof(track));
+        memcpy(&active_track_snapshot, &active_track, sizeof(active_track_snapshot));
         xSemaphoreGive(session_mutex);
     }
-    memcpy(&active_track_snapshot, &active_track, sizeof(active_track_snapshot));
     track_runtime_fill_status(&active_track_snapshot, track, recording,
                               &runtime_status);
     if (gps_fix) {
@@ -69,8 +69,9 @@ void handle_api_status() {
         }
     }
 
-    String json = "{";
-    json += "\"gps_fix\":";
+    String json;
+    json.reserve(512);
+    json += "{\"gps_fix\":";
     json += gps_fix ? "true" : "false";
     json += ",\"satellites\":";
     json += String(sats);
@@ -85,17 +86,17 @@ void handle_api_status() {
     json += ",\"best_lap_ms\":";
     json += String((long)best_ms);
     json += ",\"track\":\"";
-    json += track;
+    json += jsonEscapeString(track);
     json += "\",\"track_id\":\"";
-    json += runtime_status.track_id;
+    json += jsonEscapeString(runtime_status.track_id);
     json += "\",\"track_source\":\"";
-    json += runtime_status.track_source;
+    json += jsonEscapeString(runtime_status.track_source);
     json += "\",\"track_locked_manual\":";
     json += runtime_status.track_locked_manual ? "true" : "false";
     json += ",\"recording_cta_state\":\"";
-    json += runtime_status.recording_cta_state;
+    json += jsonEscapeString(runtime_status.recording_cta_state);
     json += "\",\"recording_cta_reason\":\"";
-    json += runtime_status.recording_cta_reason;
+    json += jsonEscapeString(runtime_status.recording_cta_reason);
     json += "\",\"current_track_distance_m\":";
     json += current_track_distance_m >= 0.0
         ? String((long)(current_track_distance_m + 0.5))
@@ -106,9 +107,9 @@ void handle_api_status() {
             json += ",";
         }
         json += "{\"id\":\"";
-        json += nearby_candidates[i].track->id;
+        json += jsonEscapeString(nearby_candidates[i].track->id);
         json += "\",\"name\":\"";
-        json += nearby_candidates[i].track->name;
+        json += jsonEscapeString(nearby_candidates[i].track->name);
         json += "\",\"distance_m\":";
         json += String((long)(nearby_candidates[i].distance_m + 0.5));
         json += "}";

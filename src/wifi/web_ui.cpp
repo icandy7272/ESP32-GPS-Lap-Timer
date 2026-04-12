@@ -121,6 +121,16 @@ static String build_style_section() {
            ".creation-stage{margin-bottom:12px}"
            ".review-panel svg{width:100%;height:auto;display:block}"
            ".review-copy{margin-top:8px}"
+           ".sessions-list{display:grid;gap:8px}"
+           ".session-card{border:1px solid #2a3c52;border-radius:8px;padding:10px;"
+             "background:#0f1f32;display:grid;gap:6px}"
+           ".session-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));"
+             "gap:8px;font-size:12px;color:#9eb3ca}"
+           ".session-meta strong{display:block;color:#dbeafe;font-size:11px;margin-bottom:2px}"
+           ".session-actions{display:flex;justify-content:flex-end}"
+           ".advanced-toggle{width:100%;text-align:left;background:#0f1f32;color:#dbeafe;"
+             "border:1px solid #2a3c52;padding:10px 12px;margin-top:0}"
+           ".advanced-panel{margin-top:10px}"
            ".primary-btn:disabled{background:#334;color:#889;cursor:not-allowed}"
            ".track-msg-ok{color:#7ff5a1}"
            ".track-msg-err{color:#ff8f8f}"
@@ -156,7 +166,7 @@ static String build_body_section() {
            // Sessions card
            "<div class=\"card\">"
            "<h2>Sessions</h2>"
-           "<ul id=\"sessions\"><li>Loading...</li></ul>"
+           "<div id=\"sessions\" class=\"sessions-list\"><div class=\"helper-text\">Loading...</div></div>"
            "</div>"
 
            // Tracks card
@@ -221,6 +231,8 @@ static String build_body_section() {
 
            // Settings card
            "<div class=\"card\">"
+           "<button type=\"button\" id=\"advanced-toggle\" class=\"advanced-toggle\">Advanced</button>"
+           "<div id=\"advanced-settings-panel\" class=\"advanced-panel\">"
            "<h2>Settings</h2>"
            "<div class=\"row\"><span class=\"label\">SSID</span>"
              "<input id=\"s-ssid\"></div>"
@@ -236,6 +248,7 @@ static String build_body_section() {
              "\xe7\x94\x9f\xe6\x95\x88\xe3\x80\x82"
              "\xe4\xba\xae\xe5\xba\xa6\xe7\xab\x8b\xe5\x8d\xb3\xe7\x94\x9f\xe6\x95\x88\xe3\x80\x82"
            "</p>"
+           "</div>"
            "</div>"
 
            "</body>";
@@ -269,6 +282,7 @@ var _statusSnapshot={
   nearby_tracks:[]
 };
 var _trackList=[];
+var _advancedSettingsOpen=false;
 
 function formatCoord(point){
   if(!point){return 'Not set';}
@@ -457,6 +471,33 @@ function currentTrackSource(){
 function formatDistanceMeters(distanceMeters){
   if(typeof distanceMeters!=='number'||distanceMeters<0){return '';}
   return Math.round(distanceMeters)+' m away';
+}
+
+function formatSessionBestLap(bestLapMs){
+  var value=Number(bestLapMs);
+  return value>0?(value/1000).toFixed(3)+'s':'--';
+}
+
+function escapeHtml(value){
+  return String(value==null?'':value)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
+function normalizeSessionItem(session){
+  if(typeof session==='string'){
+    return {filename:session,date:'Unknown date',track:'Unknown track',best_lap_ms:-1};
+  }
+  session=session||{};
+  return {
+    filename:session.filename||'session.vbo',
+    date:session.date||'Unknown date',
+    track:session.track||'Unknown track',
+    best_lap_ms:Number(session.best_lap_ms)
+  };
 }
 
 function normalizeNearbyTracks(list){
@@ -898,6 +939,17 @@ function renderTrackDraft(){
   renderCreateButton();
 }
 
+function renderAdvancedSettings(){
+  var panel=$('advanced-settings-panel');
+  var toggle=$('advanced-toggle');
+  if(panel){
+    panel.style.display=_advancedSettingsOpen?'block':'none';
+  }
+  if(toggle){
+    toggle.textContent=_advancedSettingsOpen?'Hide Advanced':'Advanced';
+  }
+}
+
 function markStartFinishPoint(which){
   if(which==='p2'&&!_trackDraft.startFinish.p1){
     setTrackMsg('Mark P1 first.','err');
@@ -1134,13 +1186,23 @@ function loadSessions(){
     var ul=$('sessions');
     ul.innerHTML='';
     if(!d.sessions||!d.sessions.length){
-      ul.innerHTML='<li>No sessions</li>';
+      ul.innerHTML='<div class="helper-text">No sessions</div>';
       return;
     }
-    d.sessions.forEach(function(s){
-      var li=document.createElement('li');
-      li.innerHTML='<a href="/files/'+s+'">'+s+'</a>';
-      ul.appendChild(li);
+    d.sessions.forEach(function(rawSession){
+      var session=normalizeSessionItem(rawSession);
+      var card=document.createElement('div');
+      card.className='session-card';
+      var safeFileName=escapeHtml(session.filename);
+      card.innerHTML=
+        '<div class="session-meta">'
+        +'<div><strong>Date</strong>'+escapeHtml(session.date)+'</div>'
+        +'<div><strong>Track</strong>'+escapeHtml(session.track)+'</div>'
+        +'<div><strong>Best Lap</strong>'+escapeHtml(formatSessionBestLap(session.best_lap_ms))+'</div>'
+        +'</div>'
+        +'<div class="session-actions"><a href="/files/'+encodeURIComponent(session.filename)+'">Download '
+        +safeFileName+'</a></div>';
+      ul.appendChild(card);
     });
   }).catch(function(){});
 }
@@ -1176,6 +1238,11 @@ function saveSettings(){
       setTimeout(function(){m.style.display='none';},2000);
     }
   }).catch(function(){});
+}
+
+function toggleAdvancedSettings(){
+  _advancedSettingsOpen=!_advancedSettingsOpen;
+  renderAdvancedSettings();
 }
 
 function selectTrack(id,source){
@@ -1246,10 +1313,12 @@ function updateRecBtn(){
 }
 
 initTrackCreationUi();
+renderAdvancedSettings();
 refreshStatus();
 loadSessions();
 loadTracks();
 loadSettings();
+if($('advanced-toggle')){$('advanced-toggle').onclick=toggleAdvancedSettings;}
 setInterval(refreshStatus,2000);
 </script>)JS";
 }

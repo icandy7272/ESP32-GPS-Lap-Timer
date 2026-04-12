@@ -29,9 +29,9 @@ void handle_api_tracks() {
         if (!t) { continue; }
         if (i > 0) { json += ","; }
         json += "{\"id\":\"";
-        json += t->id;
+        json += jsonEscapeString(t->id);
         json += "\",\"name\":\"";
-        json += t->name;
+        json += jsonEscapeString(t->name);
         json += "\"}";
     }
     json += "]}";
@@ -211,12 +211,11 @@ void handle_api_tracks_select() {
     char id[32] = {};
     char source[24] = {};
     bool has_id = json_extract_str(json, "id", id, sizeof(id));
-    if (!has_id && !json_extract_str(json, "source", source, sizeof(source))) {
+    bool has_source = json_extract_str(json, "source", source, sizeof(source));
+    if (!has_id && !has_source) {
         server.send(400, "application/json", "{\"error\":\"missing id\"}");
         return;
     }
-    bool has_source = source[0] != '\0'
-        || json_extract_str(json, "source", source, sizeof(source));
     bool use_auto = has_source && strcmp(source, "auto") == 0;
 
     const TrackDefinition* track = nullptr;
@@ -266,9 +265,10 @@ void handle_api_tracks_select() {
             has_source && strcmp(source, "newly_created") == 0);
     }
 
-    char buf[128];
-    snprintf(buf, sizeof(buf), "{\"ok\":true,\"name\":\"%s\"}", track->name);
-    server.send(200, "application/json", buf);
+    String resp = "{\"ok\":true,\"name\":\"";
+    resp += jsonEscapeString(track->name);
+    resp += "\"}";
+    server.send(200, "application/json", resp);
 }
 
 // ============================================================

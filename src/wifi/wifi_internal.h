@@ -33,6 +33,26 @@ inline constexpr unsigned long CHUNK_DELAY_MS        = 10;
 // due to recording-mode throttling.
 bool is_throttled();
 
+// Escape a C string for safe embedding inside a JSON string value.
+// Handles " and \ which are the only characters that can break
+// JSON produced from user-entered track names on this device.
+inline String jsonEscapeString(const char* raw) {
+    if (!raw) return String();
+    String escaped;
+    escaped.reserve(strlen(raw) + 8);
+    while (*raw) {
+        if (*raw == '"') {
+            escaped += "\\\"";
+        } else if (*raw == '\\') {
+            escaped += "\\\\";
+        } else {
+            escaped += *raw;
+        }
+        raw++;
+    }
+    return escaped;
+}
+
 // Thread-safe snapshot of the global session_state.
 SessionState read_session_state();
 
