@@ -189,6 +189,7 @@ function $(id){return document.getElementById(id)}
 
 var _isRec=false;
 var _nextSectorId=1;
+var _trackSubmitPending=false;
 var _trackDraft={
   gps:{fix:false,satellites:0,lat:0,lon:0},
   startFinish:{p1:null,p2:null,heading:null,flipped:false},
@@ -233,7 +234,13 @@ function headingArrow(deg){
 }
 
 function hasValidFix(){
-  return _trackDraft.gps.fix&&(_trackDraft.gps.lat!==0||_trackDraft.gps.lon!==0);
+  return !!_trackDraft.gps.fix;
+}
+
+function hasIncompleteSectors(){
+  return _trackDraft.sectors.some(function(sector){
+    return !sectorIsComplete(sector);
+  });
 }
 
 function isCreateReady(){
@@ -241,7 +248,8 @@ function isCreateReady(){
   return !!(nameField&&nameField.value.trim()&&
             _trackDraft.startFinish.p1&&
             _trackDraft.startFinish.p2&&
-            typeof _trackDraft.startFinish.heading==='number');
+            typeof _trackDraft.startFinish.heading==='number'&&
+            !hasIncompleteSectors());
 }
 
 function setTrackMsg(text,kind){
@@ -257,6 +265,18 @@ function currentGpsPoint(){
   return {lat:_trackDraft.gps.lat,lon:_trackDraft.gps.lon};
 }
 
+function distanceMeters(p1,p2){
+  var radiusM=6371000;
+  var lat1=p1.lat*Math.PI/180;
+  var lat2=p2.lat*Math.PI/180;
+  var dLat=(p2.lat-p1.lat)*Math.PI/180;
+  var dLon=(p2.lon-p1.lon)*Math.PI/180;
+  var a=Math.sin(dLat/2)*Math.sin(dLat/2)
+    +Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)*Math.sin(dLon/2);
+  var c=2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+  return radiusM*c;
+}
+
 function resetTrackDraft(){
   var gps=_trackDraft.gps;
   _trackDraft={
@@ -266,6 +286,7 @@ function resetTrackDraft(){
     sectorsExpanded:false
   };
   _nextSectorId=1;
+  _trackSubmitPending=false;
 }
 
 function updateStartFinishHeading(){
@@ -294,6 +315,64 @@ function updateSectorHeading(sector){
 
 function sectorIsComplete(sector){
   return !!(sector&&sector.p1&&sector.p2&&typeof sector.heading==='number');
+}
+
+function applyStatusData(d){
+  var gpsFix=$('gps-fix');
+  var sats=$('sats');
+  var rec=$('rec');
+  var lap=$('lap');
+  var best=$('best');
+  var track=$('track');
+  var lat=Number(d.lat);
+  var lon=Number(d.lon);
+
+  if(gpsFix){
+    gpsFix.textContent=d.gps_fix?'Yes':'No';
+    gpsFix.className='val '+(d.gps_fix?'ok':'err');
+  }
+  if(sats){sats.textContent=d.satellites||0;}
+  if(rec){
+    rec.textContent=d.recording?'REC':'Idle';
+    rec.className='val '+(d.recording?'warn':'ok');
+  }
+  if(lap){lap.textContent=d.current_lap||0;}
+  if(best){best.textContent=d.best_lap_ms>0?(d.best_lap_ms/1000).toFixed(3)+'s':'--';}
+  if(track){track.textContent=d.track||'None';}
+
+  _trackDraft.gps.fix=!!d.gps_fix;
+  _trackDraft.gps.satellites=d.satellites||0;
+  _trackDraft.gps.lat=isNaN(lat)?0:lat;
+  _trackDraft.gps.lon=isNaN(lon)?0:lon;
+  _isRec=!!d.recording;
+  updateRecBtn();
+}
+
+function fetchStatusSnapshot(){
+  return fetch('/api/status').then(function(r){return r.json();}).then(function(d){
+    applyStatusData(d);
+    return d;
+  });
+}
+
+function captureCurrentGpsPoint(){
+  return fetchStatusSnapshot().then(function(){
+    if(!hasValidFix()){
+      throw {code:'no_fix'};
+    }
+    return currentGpsPoint();
+  });
+}
+
+function storeLinePoint(line,which,point,label){
+  var other=which==='p1'?line.p2:line.p1;
+  var minSpanM=2;
+  if(other&&distanceMeters(point,other)<minSpanM){
+    setTrackMsg(label+' points must be at least '+minSpanM+' m apart.','err');
+    return false;
+  }
+  line[which]=point;
+  return true;
 }
 
 function renderGpsBar(){
@@ -372,16 +451,16 @@ function renderSectorRows(){
     if(sectorIsComplete(sector)){
       headingHtml='<div class="heading-bar"><span class="heading-value">'
         +headingArrow(sector.heading)+' '+Math.round(sector.heading)+'° '+compassLabel(sector.heading)
-        +'</span><button type="button" class="mark-btn inline-btn" onclick="flipSectorHeading('+sector.id+')">Flip</button></div>';
+        +'</span><button type="button" class="mark-btn inline-btn" data-sector-action="flip" data-sector-id="'+sector.id+'">Flip</button></div>';
     }
     html+='<div class="sector-card">'
       +'<div class="sector-head"><strong>Sector '+(i+1)+'</strong>'
-      +'<button type="button" class="mark-btn inline-btn" onclick="deleteSectorRow('+sector.id+')">Delete</button></div>'
+      +'<button type="button" class="mark-btn inline-btn" data-sector-action="delete" data-sector-id="'+sector.id+'">Delete</button></div>'
       +'<div class="mark-row">'
-      +'<button type="button" class="mark-btn'+(p1Marked?' marked':'')+'" onclick="markSectorPoint('+sector.id+',\'p1\')"'+(hasValidFix()?'':' disabled')+'>'+(p1Marked?'✓ P1':'Mark P1')+'</button>'
+      +'<button type="button" class="mark-btn'+(p1Marked?' marked':'')+'" data-sector-action="mark-p1" data-sector-id="'+sector.id+'"'+(hasValidFix()?'':' disabled')+'>'+(p1Marked?'✓ P1':'Mark P1')+'</button>'
       +'<div class="coord">'+formatCoord(sector.p1)+'</div></div>'
       +'<div class="mark-row">'
-      +'<button type="button" class="mark-btn'+(p2Marked?' marked':'')+'" onclick="markSectorPoint('+sector.id+',\'p2\')"'+(canMarkP2?'':' disabled')+'>'+(p2Marked?'✓ P2':'Mark P2')+'</button>'
+      +'<button type="button" class="mark-btn'+(p2Marked?' marked':'')+'" data-sector-action="mark-p2" data-sector-id="'+sector.id+'"'+(canMarkP2?'':' disabled')+'>'+(p2Marked?'✓ P2':'Mark P2')+'</button>'
       +'<div class="coord">'+formatCoord(sector.p2)+'</div></div>'
       +headingHtml
       +'</div>';
@@ -392,7 +471,8 @@ function renderSectorRows(){
 function renderCreateButton(){
   var btn=$('create-track-btn');
   if(!btn){return;}
-  btn.disabled=!isCreateReady();
+  btn.textContent=_trackSubmitPending?'Creating Track...':'Create Track';
+  btn.disabled=_trackSubmitPending||!isCreateReady();
 }
 
 function renderTrackDraft(){
@@ -403,20 +483,28 @@ function renderTrackDraft(){
 }
 
 function markStartFinishPoint(which){
-  if(!hasValidFix()){
-    setTrackMsg('Wait for a valid GPS fix before marking points.','err');
-    renderTrackDraft();
-    return;
-  }
   if(which==='p2'&&!_trackDraft.startFinish.p1){
     setTrackMsg('Mark P1 first.','err');
     renderTrackDraft();
     return;
   }
-  _trackDraft.startFinish[which]=currentGpsPoint();
-  updateStartFinishHeading();
-  setTrackMsg('', '');
-  renderTrackDraft();
+  setTrackMsg('Capturing current GPS sample...','');
+  captureCurrentGpsPoint().then(function(point){
+    if(!storeLinePoint(_trackDraft.startFinish,which,point,'Start/Finish')){
+      renderTrackDraft();
+      return;
+    }
+    updateStartFinishHeading();
+    setTrackMsg('', '');
+    renderTrackDraft();
+  }).catch(function(err){
+    if(err&&err.code==='no_fix'){
+      setTrackMsg('Wait for a valid GPS fix before marking points.','err');
+    }else{
+      setTrackMsg('Failed to capture current GPS sample.','err');
+    }
+    renderTrackDraft();
+  });
 }
 
 function flipStartFinishHeading(){
@@ -428,19 +516,19 @@ function flipStartFinishHeading(){
 
 function toggleSectorSection(){
   _trackDraft.sectorsExpanded=!_trackDraft.sectorsExpanded;
-  renderSectorRows();
+  renderTrackDraft();
 }
 
 function addSectorRow(){
   if(_trackDraft.sectors.length>=3){
     setTrackMsg('You can add up to 3 sector splits.','err');
-    renderSectorRows();
+    renderTrackDraft();
     return;
   }
   _trackDraft.sectorsExpanded=true;
   _trackDraft.sectors.push({id:_nextSectorId++,p1:null,p2:null,heading:null,flipped:false});
   setTrackMsg('', '');
-  renderSectorRows();
+  renderTrackDraft();
 }
 
 function deleteSectorRow(id){
@@ -448,26 +536,34 @@ function deleteSectorRow(id){
     return sector.id!==id;
   });
   if(!_trackDraft.sectors.length){_trackDraft.sectorsExpanded=false;}
-  renderSectorRows();
+  renderTrackDraft();
 }
 
 function markSectorPoint(id,which){
   var sector=findSector(id);
   if(!sector){return;}
-  if(!hasValidFix()){
-    setTrackMsg('Wait for a valid GPS fix before marking points.','err');
-    renderSectorRows();
-    return;
-  }
   if(which==='p2'&&!sector.p1){
     setTrackMsg('Mark P1 first for this sector.','err');
-    renderSectorRows();
+    renderTrackDraft();
     return;
   }
-  sector[which]=currentGpsPoint();
-  updateSectorHeading(sector);
-  setTrackMsg('', '');
-  renderSectorRows();
+  setTrackMsg('Capturing current GPS sample...','');
+  captureCurrentGpsPoint().then(function(point){
+    if(!storeLinePoint(sector,which,point,'Sector')){
+      renderTrackDraft();
+      return;
+    }
+    updateSectorHeading(sector);
+    setTrackMsg('', '');
+    renderTrackDraft();
+  }).catch(function(err){
+    if(err&&err.code==='no_fix'){
+      setTrackMsg('Wait for a valid GPS fix before marking points.','err');
+    }else{
+      setTrackMsg('Failed to capture current GPS sample.','err');
+    }
+    renderTrackDraft();
+  });
 }
 
 function flipSectorHeading(id){
@@ -475,7 +571,7 @@ function flipSectorHeading(id){
   if(!sector||!sector.p1||!sector.p2){return;}
   sector.flipped=!sector.flipped;
   updateSectorHeading(sector);
-  renderSectorRows();
+  renderTrackDraft();
 }
 
 function addTrack(){
@@ -483,14 +579,24 @@ function addTrack(){
   var name=nameField?nameField.value.trim():'';
   var payload;
 
-  if(!name){
-    setTrackMsg('Please enter a track name.','err');
-    renderCreateButton();
+  if(_trackSubmitPending){
     return;
   }
-  if(!isCreateReady()){
+  if(!name){
+    setTrackMsg('Please enter a track name.','err');
+    renderTrackDraft();
+    return;
+  }
+  if(!_trackDraft.startFinish.p1||
+     !_trackDraft.startFinish.p2||
+     typeof _trackDraft.startFinish.heading!=='number'){
     setTrackMsg('Mark both Start/Finish points before creating the track.','err');
-    renderCreateButton();
+    renderTrackDraft();
+    return;
+  }
+  if(hasIncompleteSectors()){
+    setTrackMsg('Complete or delete every sector split before creating the track.','err');
+    renderTrackDraft();
     return;
   }
 
@@ -512,6 +618,8 @@ function addTrack(){
     })
   };
 
+  _trackSubmitPending=true;
+  renderTrackDraft();
   setTrackMsg('Creating track...','');
   fetch('/api/tracks',{
     method:'POST',
@@ -524,6 +632,7 @@ function addTrack(){
       return {ok:response.ok,body:{}};
     });
   }).then(function(result){
+    _trackSubmitPending=false;
     if(result.ok&&result.body.ok){
       if(nameField){nameField.value='';}
       resetTrackDraft();
@@ -531,12 +640,13 @@ function addTrack(){
       loadTracks();
       setTrackMsg('Track created successfully.','ok');
     }else{
+      renderTrackDraft();
       setTrackMsg((result.body&&result.body.error)?result.body.error:'Failed to create track.','err');
-      renderCreateButton();
     }
   }).catch(function(){
+    _trackSubmitPending=false;
+    renderTrackDraft();
     setTrackMsg('Failed to create track.','err');
-    renderCreateButton();
   });
 }
 
@@ -546,10 +656,22 @@ function initTrackCreationUi(){
   if($('sf-flip')){$('sf-flip').onclick=flipStartFinishHeading;}
   if($('sector-toggle')){$('sector-toggle').onclick=toggleSectorSection;}
   if($('add-sector-btn')){$('add-sector-btn').onclick=addSectorRow;}
+  if($('sector-list')){
+    $('sector-list').onclick=function(evt){
+      var target=evt&&evt.target;
+      var action=target&&target.getAttribute?target.getAttribute('data-sector-action'):'';
+      var id=+(target&&target.getAttribute?target.getAttribute('data-sector-id'):0);
+      if(!action||!id){return;}
+      if(action==='delete'){deleteSectorRow(id);return;}
+      if(action==='flip'){flipSectorHeading(id);return;}
+      if(action==='mark-p1'){markSectorPoint(id,'p1');return;}
+      if(action==='mark-p2'){markSectorPoint(id,'p2');}
+    };
+  }
   if($('create-track-btn')){$('create-track-btn').onclick=addTrack;}
   if($('track-name')){
     $('track-name').addEventListener('input',function(){
-      renderCreateButton();
+      renderTrackDraft();
       if(this.value.trim()){setTrackMsg('', '');}
     });
   }
@@ -557,21 +679,7 @@ function initTrackCreationUi(){
 }
 
 function refreshStatus(){
-  fetch('/api/status').then(function(r){return r.json();}).then(function(d){
-    $('gps-fix').textContent=d.gps_fix?'Yes':'No';
-    $('gps-fix').className='val '+(d.gps_fix?'ok':'err');
-    $('sats').textContent=d.satellites;
-    $('rec').textContent=d.recording?'REC':'Idle';
-    $('rec').className='val '+(d.recording?'warn':'ok');
-    $('lap').textContent=d.current_lap;
-    $('best').textContent=d.best_lap_ms>0?(d.best_lap_ms/1000).toFixed(3)+'s':'--';
-    $('track').textContent=d.track||'None';
-    _trackDraft.gps.fix=!!d.gps_fix;
-    _trackDraft.gps.satellites=d.satellites||0;
-    _trackDraft.gps.lat=d.lat||0;
-    _trackDraft.gps.lon=d.lon||0;
-    _isRec=d.recording;
-    updateRecBtn();
+  fetchStatusSnapshot().then(function(){
     renderTrackDraft();
   }).catch(function(){});
 }
