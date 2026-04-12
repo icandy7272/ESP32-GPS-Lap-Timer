@@ -72,6 +72,7 @@ static String build_style_section() {
            ".gps-bar{background:#0f1f32;border:1px solid #2a3c52;border-left:4px solid #f44;"
              "border-radius:8px;padding:10px;margin:8px 0}"
            ".gps-bar.ok{border-left-color:#0f0}"
+           ".gps-bar.warn{border-left-color:#fa0}"
            ".gps-bar.err{border-left-color:#f44}"
            ".mark-row{display:flex;flex-direction:column;gap:6px;margin:8px 0}"
            ".mark-btn{width:100%;min-height:44px;padding:10px 12px;font-size:0.95em;"
@@ -190,6 +191,10 @@ function $(id){return document.getElementById(id)}
 var _isRec=false;
 var _nextSectorId=1;
 var _trackSubmitPending=false;
+var _gpsStabilitySamples=[];
+var GPS_STABILITY_MIN_SATS=4;
+var GPS_STABILITY_SAMPLE_COUNT=3;
+var GPS_STABILITY_MAX_SPREAD_M=2.5;
 var _trackDraft={
   gps:{fix:false,satellites:0,lat:0,lon:0},
   startFinish:{p1:null,p2:null,heading:null,flipped:false},
@@ -277,6 +282,66 @@ function distanceMeters(p1,p2){
   return radiusM*c;
 }
 
+function resetGpsStabilitySamples(){
+  _gpsStabilitySamples=[];
+}
+
+function pushGpsStabilitySample(point){
+  _gpsStabilitySamples.push({lat:point.lat,lon:point.lon});
+  if(_gpsStabilitySamples.length>GPS_STABILITY_SAMPLE_COUNT){
+    _gpsStabilitySamples.shift();
+  }
+}
+
+function maxGpsSampleSpreadMeters(){
+  var maxSpread=0;
+  for(var i=0;i<_gpsStabilitySamples.length;i++){
+    for(var j=i+1;j<_gpsStabilitySamples.length;j++){
+      maxSpread=Math.max(maxSpread,distanceMeters(_gpsStabilitySamples[i],_gpsStabilitySamples[j]));
+    }
+  }
+  return maxSpread;
+}
+
+function updateGpsStabilitySamples(){
+  if(!_trackDraft.gps.fix||_trackDraft.gps.satellites<GPS_STABILITY_MIN_SATS){
+    resetGpsStabilitySamples();
+    return;
+  }
+  pushGpsStabilitySample(currentGpsPoint());
+}
+
+function getGpsStatusInfo(){
+  if(!_trackDraft.gps.fix){
+    return {state:'no_fix',ready:false,label:'Waiting for fix',barClass:'err',textClass:'err'};
+  }
+  if(_trackDraft.gps.satellites<GPS_STABILITY_MIN_SATS){
+    return {state:'low_sats',ready:false,label:'Waiting for better GPS',barClass:'err',textClass:'err'};
+  }
+  if(_gpsStabilitySamples.length<GPS_STABILITY_SAMPLE_COUNT){
+    return {state:'stabilizing',ready:false,label:'Hold still... stabilizing',barClass:'warn',textClass:'warn'};
+  }
+  if(maxGpsSampleSpreadMeters()>GPS_STABILITY_MAX_SPREAD_M){
+    return {state:'stabilizing',ready:false,label:'Hold still... stabilizing',barClass:'warn',textClass:'warn'};
+  }
+  return {state:'stable',ready:true,label:'Stable - ready to mark',barClass:'ok',textClass:'ok'};
+}
+
+function canMarkWithCurrentGps(){
+  return getGpsStatusInfo().ready;
+}
+
+function gpsMarkingBlockMessage(){
+  var gpsStatus=getGpsStatusInfo();
+  if(gpsStatus.state==='no_fix'){
+    return 'Wait for a valid GPS fix before marking points.';
+  }
+  if(gpsStatus.state==='low_sats'){
+    return 'Wait for at least '+GPS_STABILITY_MIN_SATS+' satellites before marking points.';
+  }
+  return 'Hold still until GPS stabilizes before marking points.';
+}
+
 function resetTrackDraft(){
   var gps=_trackDraft.gps;
   _trackDraft={
@@ -344,6 +409,7 @@ function applyStatusData(d){
   _trackDraft.gps.satellites=d.satellites||0;
   _trackDraft.gps.lat=isNaN(lat)?0:lat;
   _trackDraft.gps.lon=isNaN(lon)?0:lon;
+  updateGpsStabilitySamples();
   _isRec=!!d.recording;
   updateRecBtn();
 }
@@ -359,6 +425,9 @@ function captureCurrentGpsPoint(){
   return fetchStatusSnapshot().then(function(){
     if(!hasValidFix()){
       throw {code:'no_fix'};
+    }
+    if(!canMarkWithCurrentGps()){
+      throw {code:getGpsStatusInfo().state};
     }
     return currentGpsPoint();
   });
@@ -377,11 +446,12 @@ function storeLinePoint(line,which,point,label){
 
 function renderGpsBar(){
   var bar=$('gps-bar');
+  var gpsStatus=getGpsStatusInfo();
   if(!bar){return;}
   var fixOk=hasValidFix();
-  bar.className='gps-bar '+(fixOk?'ok':'err');
+  bar.className='gps-bar '+gpsStatus.barClass;
   bar.innerHTML=
-    '<div class="row"><span class="label">GPS</span><span class="val '+(fixOk?'ok':'err')+'">'+(fixOk?'Ready to mark':'Waiting for fix')+'</span></div>'+
+    '<div class="row"><span class="label">GPS</span><span class="val '+gpsStatus.textClass+'">'+gpsStatus.label+'</span></div>'+
     '<div class="row"><span class="label">Satellites</span><span class="val">'+_trackDraft.gps.satellites+'</span></div>'+
     '<div class="helper-text">Current position: '+(fixOk?formatCoord(currentGpsPoint()):'--')+'</div>';
 }
@@ -396,7 +466,7 @@ function renderStartFinishSection(){
   var flipBtn=$('sf-flip');
   var p1Marked=!!_trackDraft.startFinish.p1;
   var p2Marked=!!_trackDraft.startFinish.p2;
-  var canMark=hasValidFix();
+  var canMark=canMarkWithCurrentGps();
   var showHeading=p1Marked&&p2Marked&&typeof _trackDraft.startFinish.heading==='number';
 
   if(p1Btn){
@@ -446,7 +516,8 @@ function renderSectorRows(){
     var sector=_trackDraft.sectors[i];
     var p1Marked=!!sector.p1;
     var p2Marked=!!sector.p2;
-    var canMarkP2=hasValidFix()&&p1Marked;
+    var canMark=canMarkWithCurrentGps();
+    var canMarkP2=canMark&&p1Marked;
     var headingHtml='<div class="helper-text">Mark P1 then P2 to calculate heading.</div>';
     if(sectorIsComplete(sector)){
       headingHtml='<div class="heading-bar"><span class="heading-value">'
@@ -457,7 +528,7 @@ function renderSectorRows(){
       +'<div class="sector-head"><strong>Sector '+(i+1)+'</strong>'
       +'<button type="button" class="mark-btn inline-btn" data-sector-action="delete" data-sector-id="'+sector.id+'">Delete</button></div>'
       +'<div class="mark-row">'
-      +'<button type="button" class="mark-btn'+(p1Marked?' marked':'')+'" data-sector-action="mark-p1" data-sector-id="'+sector.id+'"'+(hasValidFix()?'':' disabled')+'>'+(p1Marked?'✓ P1':'Mark P1')+'</button>'
+      +'<button type="button" class="mark-btn'+(p1Marked?' marked':'')+'" data-sector-action="mark-p1" data-sector-id="'+sector.id+'"'+(canMark?'':' disabled')+'>'+(p1Marked?'✓ P1':'Mark P1')+'</button>'
       +'<div class="coord">'+formatCoord(sector.p1)+'</div></div>'
       +'<div class="mark-row">'
       +'<button type="button" class="mark-btn'+(p2Marked?' marked':'')+'" data-sector-action="mark-p2" data-sector-id="'+sector.id+'"'+(canMarkP2?'':' disabled')+'>'+(p2Marked?'✓ P2':'Mark P2')+'</button>'
@@ -500,6 +571,8 @@ function markStartFinishPoint(which){
   }).catch(function(err){
     if(err&&err.code==='no_fix'){
       setTrackMsg('Wait for a valid GPS fix before marking points.','err');
+    }else if(err&&(err.code==='low_sats'||err.code==='stabilizing')){
+      setTrackMsg(gpsMarkingBlockMessage(),'err');
     }else{
       setTrackMsg('Failed to capture current GPS sample.','err');
     }
@@ -559,6 +632,8 @@ function markSectorPoint(id,which){
   }).catch(function(err){
     if(err&&err.code==='no_fix'){
       setTrackMsg('Wait for a valid GPS fix before marking points.','err');
+    }else if(err&&(err.code==='low_sats'||err.code==='stabilizing')){
+      setTrackMsg(gpsMarkingBlockMessage(),'err');
     }else{
       setTrackMsg('Failed to capture current GPS sample.','err');
     }

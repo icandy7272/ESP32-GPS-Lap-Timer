@@ -26,6 +26,11 @@ function formatLapTimeForExpectation(timeMs) {
 assert.match(indexHtml, /id="web-console-root"/);
 assert.match(indexHtml, /id="device-screen-root"/);
 assert.match(indexHtml, /id="scenario-controls-root"/);
+assert.match(stylesSource, /\.web-console__gps-bar\s*\{/);
+assert.match(stylesSource, /\.web-console__gps-bar--ok\s*\{/);
+assert.match(stylesSource, /\.web-console__gps-bar--warn\s*\{/);
+assert.match(stylesSource, /\.web-console__mark-button--marked\s*\{/);
+assert.match(stylesSource, /\.web-console__sector-card\s*\{/);
 assert.match(stylesSource, /\.device-panel__description\s*\{[\s\S]*font-size: 0\.78rem;/);
 assert.match(stylesSource, /\.device-preview--polished \.device-status\s*\{[\s\S]*font-size: 0\.88rem;/);
 assert.match(stylesSource, /\.device-preview--polished \.device-driving__delta\s*\{[\s\S]*font-size: clamp\(3\.1rem, 11vw, 4\.1rem\);/);
@@ -40,6 +45,7 @@ const requiredScenarioIds = [
   "cold-boot",
   "gps-searching",
   "ready-to-drive",
+  "track-creation-stabilizing",
   "no-gps-driving",
   "recording",
   "recording-slow",
@@ -136,12 +142,14 @@ const heavyTrackLibraryScenario = getScenarioById("heavy-track-library");
 const coldBootScenario = getScenarioById("cold-boot");
 const bestLapImprovedScenario = getScenarioById("best-lap-improved");
 const sessionReviewScenario = getScenarioById("session-review");
+const trackCreationStabilizingScenario = getScenarioById("track-creation-stabilizing");
 assert.ok(recordingScenario, "Expected recording scenario to exist");
 assert.ok(recordingScenario.sessions.length > 0, "recording scenario should include at least one session");
 assert.ok(recordingScenario.tracks.length > 0, "recording scenario should include at least one track");
 assert.ok(coldBootScenario, "Expected cold-boot scenario to exist");
 assert.ok(bestLapImprovedScenario, "Expected best-lap-improved scenario to exist");
 assert.ok(sessionReviewScenario, "Expected session-review scenario to exist");
+assert.ok(trackCreationStabilizingScenario, "Expected track-creation-stabilizing scenario to exist");
 assert.ok(
   heavyTrackLibraryScenario.sessions.length > 1,
   "heavy-track-library should include multiple sessions",
@@ -154,13 +162,27 @@ assert.ok(
 const markup = webConsoleModule.renderWebConsoleMarkup(recordingScenario);
 const browserGlobalMarkup = browserGlobalSandbox.UiPreviewWebConsole.renderWebConsoleMarkup(recordingScenario);
 const heavyTrackLibraryMarkup = webConsoleModule.renderWebConsoleMarkup(heavyTrackLibraryScenario);
+const stabilizingMarkup = webConsoleModule.renderWebConsoleMarkup(trackCreationStabilizingScenario);
 assert.match(markup, /Status/);
 assert.match(markup, /Sessions/);
 assert.match(markup, /Tracks/);
 assert.match(markup, /Settings/);
+assert.match(markup, /Track Creation/);
+assert.match(markup, /Mark P1|✓ P1/);
+assert.match(markup, /Mark P2|✓ P2/);
+assert.match(markup, /Sector Splits \(optional\)/);
+assert.match(markup, /Current position:/);
 assert.match(markup, /Stop Recording/);
+assert.match(stabilizingMarkup, /Hold still\.\.\. stabilizing/i);
+assert.match(stabilizingMarkup, /web-console__gps-bar--warn/);
+assert.match(
+  stabilizingMarkup,
+  /web-console__mark-button web-console__mark-button--disabled" disabled>Mark P1</,
+);
 assert.match(markup, new RegExp(escapeRegExp(recordingScenario.sessions[0])));
 assert.match(markup, new RegExp(escapeRegExp(recordingScenario.tracks[0].name)));
+assert.doesNotMatch(markup, /Add Track/);
+assert.doesNotMatch(markup, /SF lat1|SF lon1|SF lat2|SF lon2|SF heading/);
 assert.doesNotMatch(markup, /href="#"/);
 assert.equal(browserGlobalMarkup, markup, "browser-global and CommonJS renderers should match");
 assert.match(

@@ -293,6 +293,213 @@ body {
   font-size: 0.8rem;
 }
 
+.web-console__track-creation {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.web-console__gps-bar {
+  display: grid;
+  gap: 7px;
+  border: 1px solid rgba(120, 53, 15, 0.55);
+  border-left: 4px solid #f87171;
+  border-radius: 14px;
+  padding: 11px 12px;
+  background: linear-gradient(180deg, rgba(31, 41, 55, 0.92), rgba(15, 23, 42, 0.9));
+}
+
+.web-console__gps-bar--ok {
+  border-left-color: #22c55e;
+  border-color: rgba(22, 101, 52, 0.55);
+  background: linear-gradient(180deg, rgba(16, 35, 30, 0.96), rgba(15, 23, 42, 0.92));
+}
+
+.web-console__gps-bar--warn {
+  border-left-color: #f59e0b;
+  border-color: rgba(180, 83, 9, 0.58);
+  background: linear-gradient(180deg, rgba(67, 40, 4, 0.96), rgba(15, 23, 42, 0.92));
+}
+
+.web-console__gps-bar--err {
+  border-left-color: #f87171;
+}
+
+.web-console__gps-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.web-console__gps-status-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.web-console__gps-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #f87171;
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.14);
+}
+
+.web-console__gps-bar--ok .web-console__gps-indicator {
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.14);
+}
+
+.web-console__gps-bar--warn .web-console__gps-indicator {
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16);
+}
+
+.web-console__gps-text {
+  color: #e2e8f0;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.web-console__gps-sats {
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.web-console__track-group {
+  display: grid;
+  gap: 8px;
+}
+
+.web-console__helper {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.web-console__helper--section {
+  color: #cbd5e1;
+}
+
+.web-console__mark-row {
+  display: grid;
+  gap: 6px;
+}
+
+.web-console__mark-button,
+.web-console__inline-action,
+.web-console__collapse-toggle {
+  border: 1px solid rgba(125, 211, 252, 0.36);
+  border-radius: 12px;
+  font-weight: 700;
+}
+
+.web-console__mark-button {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  font-size: 0.88rem;
+  color: #082f49;
+  background: linear-gradient(180deg, #38bdf8, #0ea5e9);
+}
+
+.web-console__mark-button--marked {
+  color: #bbf7d0;
+  border-color: rgba(74, 222, 128, 0.42);
+  background: linear-gradient(180deg, rgba(20, 83, 45, 0.96), rgba(22, 101, 52, 0.92));
+}
+
+.web-console__mark-button--disabled,
+.web-console__primary-button--disabled,
+.web-console__secondary-button--disabled {
+  color: #94a3b8;
+  border-color: rgba(71, 85, 105, 0.44);
+  background: rgba(51, 65, 85, 0.92);
+}
+
+.web-console__coord {
+  color: #93c5fd;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  font-family: "Menlo", "Consolas", "SFMono-Regular", monospace;
+  word-break: break-word;
+}
+
+.web-console__heading-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(51, 65, 85, 0.9);
+  border-radius: 14px;
+  padding: 9px 10px;
+  background: rgba(15, 23, 42, 0.82);
+}
+
+.web-console__heading-value {
+  color: #e0f2fe;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.web-console__inline-action {
+  width: auto;
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 0.76rem;
+  color: #bae6fd;
+  background: rgba(14, 165, 233, 0.14);
+}
+
+.web-console__collapse-toggle {
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+  color: #bfdbfe;
+  background: linear-gradient(180deg, rgba(30, 64, 175, 0.34), rgba(30, 41, 59, 0.82));
+  border-color: rgba(96, 165, 250, 0.32);
+}
+
+.web-console__sector-list {
+  display: grid;
+  gap: 10px;
+}
+
+.web-console__sector-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(51, 65, 85, 0.88);
+  border-radius: 14px;
+  padding: 10px;
+  background: rgba(15, 23, 42, 0.76);
+}
+
+.web-console__sector-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  color: #e2e8f0;
+  font-size: 0.86rem;
+}
+
+.web-console__track-msg {
+  min-height: 1.2em;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.web-console__track-msg--success {
+  color: #86efac;
+}
+
+.web-console__track-msg--error {
+  color: #fca5a5;
+}
+
 #device-screen-root {
   display: flex;
   align-items: flex-start;

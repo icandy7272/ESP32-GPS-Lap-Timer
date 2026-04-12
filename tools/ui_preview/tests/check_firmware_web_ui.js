@@ -203,14 +203,31 @@ async function testMarkingUsesFreshStatusAndRejectsZeroLengthLine() {
   const harness = createHarness();
   await harness.settle();
 
-  harness.context._trackDraft.gps.fix = true;
-  harness.context._trackDraft.gps.lat = 31.1000000;
-  harness.context._trackDraft.gps.lon = 121.1000000;
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 4,
+    lat: 31.2304160,
+    lon: 121.4737004,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "",
+  });
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 4,
+    lat: 31.2304163,
+    lon: 121.4737007,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "",
+  });
 
   const statusCallsBefore = harness.calls.filter((call) => call.url === "/api/status").length;
   harness.enqueueResponse("/api/status", {
     gps_fix: true,
-    satellites: 9,
+    satellites: 4,
     lat: 31.2304167,
     lon: 121.4737010,
     recording: false,
@@ -232,7 +249,7 @@ async function testMarkingUsesFreshStatusAndRejectsZeroLengthLine() {
 
   harness.enqueueResponse("/api/status", {
     gps_fix: true,
-    satellites: 9,
+    satellites: 4,
     lat: 31.2304167,
     lon: 121.4737010,
     recording: false,
@@ -251,6 +268,124 @@ async function testMarkingUsesFreshStatusAndRejectsZeroLengthLine() {
   assert.match(
     harness.getElement("track-create-msg").textContent,
     /at least 2 m|too close/i,
+  );
+}
+
+async function testGpsStabilityControlsMarkingState() {
+  const harness = createHarness();
+  await harness.settle();
+
+  function applyStatus(sample) {
+    harness.context.applyStatusData({
+      gps_fix: false,
+      satellites: 0,
+      lat: 0,
+      lon: 0,
+      recording: false,
+      current_lap: 0,
+      best_lap_ms: -1,
+      track: "",
+      ...sample,
+    });
+    harness.context.renderTrackDraft();
+  }
+
+  applyStatus({
+    gps_fix: true,
+    satellites: 3,
+    lat: 31.2304167,
+    lon: 121.4737010,
+  });
+  assert.match(
+    harness.getElement("gps-bar").innerHTML,
+    /Waiting for better GPS/i,
+  );
+  assert.equal(
+    harness.getElement("sf-p1-btn").disabled,
+    true,
+    "marking should stay disabled below the minimum satellite threshold",
+  );
+
+  applyStatus({
+    gps_fix: true,
+    satellites: 4,
+    lat: 31.2304167,
+    lon: 121.4737010,
+  });
+  assert.match(
+    harness.getElement("gps-bar").innerHTML,
+    /Hold still\.\.\. stabilizing/i,
+  );
+  assert.equal(
+    harness.getElement("sf-p1-btn").disabled,
+    true,
+    "marking should wait for several stable samples before enabling buttons",
+  );
+
+  applyStatus({
+    gps_fix: true,
+    satellites: 4,
+    lat: 31.2304174,
+    lon: 121.4737017,
+  });
+  applyStatus({
+    gps_fix: true,
+    satellites: 4,
+    lat: 31.2304181,
+    lon: 121.4737014,
+  });
+  assert.match(
+    harness.getElement("gps-bar").innerHTML,
+    /Stable - ready to mark/i,
+  );
+  assert.equal(
+    harness.getElement("sf-p1-btn").disabled,
+    false,
+    "marking should enable once the recent GPS samples converge",
+  );
+
+  applyStatus({
+    gps_fix: true,
+    satellites: 4,
+    lat: 31.2304700,
+    lon: 121.4737600,
+  });
+  assert.match(
+    harness.getElement("gps-bar").innerHTML,
+    /Hold still\.\.\. stabilizing/i,
+  );
+  assert.equal(
+    harness.getElement("sf-p1-btn").disabled,
+    true,
+    "marking should disable again if the latest sample jumps too far",
+  );
+}
+
+async function testMarkingRequiresGpsStability() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.enqueueResponse("/api/status", {
+    gps_fix: true,
+    satellites: 4,
+    lat: 31.2304167,
+    lon: 121.4737010,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "",
+  });
+  harness.context.markStartFinishPoint("p1");
+  await harness.settle();
+
+  assert.equal(
+    harness.context._trackDraft.startFinish.p1,
+    null,
+    "marking should reject fresh fixes until the GPS samples are stable",
+  );
+  assert.match(
+    harness.getElement("track-create-msg").textContent,
+    /stabil/i,
   );
 }
 
@@ -335,6 +470,8 @@ async function testCreateTrackGuardsAgainstDoubleSubmit() {
 (async function main() {
   await testGpsFixAllowsZeroZeroCoordinates();
   await testMarkingUsesFreshStatusAndRejectsZeroLengthLine();
+  await testGpsStabilityControlsMarkingState();
+  await testMarkingRequiresGpsStability();
   await testIncompleteSectorBlocksTrackCreation();
   await testCreateTrackGuardsAgainstDoubleSubmit();
   console.log("check_firmware_web_ui: PASS");

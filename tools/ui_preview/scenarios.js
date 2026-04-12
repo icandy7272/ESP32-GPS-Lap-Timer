@@ -23,6 +23,8 @@
       status: {
         gps_fix: false,
         satellites: 0,
+        lat: 0,
+        lon: 0,
         recording: false,
         current_lap: 0,
         best_lap_ms: 0,
@@ -50,6 +52,8 @@
       status: {
         gps_fix: false,
         satellites: 4,
+        lat: 0,
+        lon: 0,
         recording: false,
         current_lap: 0,
         best_lap_ms: 0,
@@ -77,6 +81,8 @@
       status: {
         gps_fix: true,
         satellites: 10,
+        lat: 29.8243561,
+        lon: 121.5584237,
         recording: false,
         current_lap: 1,
         best_lap_ms: 52380,
@@ -85,6 +91,10 @@
       sessions: [],
       tracks: TRACKS_BASE.slice(0, 2),
       settings: { wifi_ssid: "GPS-LapTimer", wifi_pass: "12345678", brightness: 200 },
+      track_creation: {
+        name: "",
+        sectorsExpanded: false,
+      },
       device: {
         screen: "driving",
         delta_ms: 0,
@@ -100,11 +110,58 @@
       },
     },
     {
+      id: "track-creation-stabilizing",
+      label: "Track Creation Stabilizing",
+      status: {
+        gps_fix: true,
+        satellites: 4,
+        lat: 29.8243561,
+        lon: 121.5584237,
+        recording: false,
+        current_lap: 1,
+        best_lap_ms: 52380,
+        track: "Ningbo Kart Center",
+      },
+      sessions: [],
+      tracks: TRACKS_BASE.slice(0, 2),
+      settings: { wifi_ssid: "GPS-LapTimer", wifi_pass: "12345678", brightness: 200 },
+      track_creation: {
+        name: "Ningbo Pit Exit",
+        gps: {
+          fix: true,
+          satellites: 4,
+          lat: 29.8243561,
+          lon: 121.5584237,
+          stability: "stabilizing",
+        },
+        sectorsExpanded: false,
+        message: {
+          kind: "",
+          text: "Stand still for a few seconds before marking P1.",
+        },
+      },
+      device: {
+        screen: "driving",
+        delta_ms: 0,
+        delta_valid: false,
+        off_track: false,
+        lap_count: 0,
+        best_lap_number: -1,
+        current_lap_time_ms: 0,
+        boot_state: "ready",
+        firmware_version: "v1.0.0",
+        uptime_seconds: 102,
+        sd_free_gb: 13.7,
+      },
+    },
+    {
       id: "no-gps-driving",
       label: "No GPS",
       status: {
         gps_fix: false,
         satellites: 0,
+        lat: 0,
+        lon: 0,
         recording: true,
         current_lap: 3,
         best_lap_ms: 52380,
@@ -133,6 +190,8 @@
       status: {
         gps_fix: true,
         satellites: 11,
+        lat: 29.824462,
+        lon: 121.5589322,
         recording: true,
         current_lap: 4,
         best_lap_ms: 51230,
@@ -141,6 +200,33 @@
       sessions: ["session_20260408_01.vbo"],
       tracks: TRACKS_BASE.slice(0, 2),
       settings: { wifi_ssid: "GPS-LapTimer", wifi_pass: "12345678", brightness: 200 },
+      track_creation: {
+        name: "Ningbo Practice Loop",
+        startFinish: {
+          p1: { lat: 29.8243521, lon: 121.5585123 },
+          p2: { lat: 29.8244421, lon: 121.5587048 },
+          flipped: false,
+        },
+        sectorsExpanded: true,
+        sectors: [
+          {
+            id: "sector_1",
+            p1: { lat: 29.8246721, lon: 121.5589922 },
+            p2: { lat: 29.8247041, lon: 121.5592028 },
+            flipped: false,
+          },
+          {
+            id: "sector_2",
+            p1: { lat: 29.824812, lon: 121.5594321 },
+            p2: null,
+            flipped: false,
+          },
+        ],
+        message: {
+          kind: "error",
+          text: "Complete or delete every sector split before creating the track.",
+        },
+      },
       device: {
         screen: "driving",
         delta_ms: -130,
@@ -161,6 +247,8 @@
       status: {
         gps_fix: true,
         satellites: 11,
+        lat: 29.8245871,
+        lon: 121.5591046,
         recording: true,
         current_lap: 5,
         best_lap_ms: 51230,
@@ -189,6 +277,8 @@
       status: {
         gps_fix: true,
         satellites: 11,
+        lat: 29.8246202,
+        lon: 121.5592459,
         recording: true,
         current_lap: 6,
         best_lap_ms: 50890,
@@ -222,6 +312,8 @@
       status: {
         gps_fix: true,
         satellites: 12,
+        lat: 29.8246911,
+        lon: 121.559318,
         recording: true,
         current_lap: 7,
         best_lap_ms: 50120,
@@ -230,6 +322,23 @@
       sessions: ["session_20260408_02.vbo"],
       tracks: TRACKS_BASE.slice(0, 1),
       settings: { wifi_ssid: "GPS-LapTimer", wifi_pass: "12345678", brightness: 200 },
+      track_creation: {
+        name: "Ningbo Sprint Layout",
+        startFinish: {
+          p1: { lat: 29.8245801, lon: 121.5590284 },
+          p2: { lat: 29.8246489, lon: 121.5592411 },
+          flipped: false,
+        },
+        sectorsExpanded: true,
+        sectors: [
+          {
+            id: "sector_1",
+            p1: { lat: 29.8248203, lon: 121.5595133 },
+            p2: { lat: 29.8248592, lon: 121.5597048 },
+            flipped: false,
+          },
+        ],
+      },
       device: {
         screen: "driving",
         delta_ms: -280,
@@ -250,6 +359,8 @@
       status: {
         gps_fix: true,
         satellites: 9,
+        lat: 29.8261501,
+        lon: 121.5610401,
         recording: true,
         current_lap: 5,
         best_lap_ms: 51540,
@@ -278,6 +389,8 @@
       status: {
         gps_fix: true,
         satellites: 10,
+        lat: 29.824301,
+        lon: 121.5582014,
         recording: false,
         current_lap: 0,
         best_lap_ms: 50890,
@@ -317,6 +430,8 @@
       status: {
         gps_fix: true,
         satellites: 11,
+        lat: 29.824301,
+        lon: 121.5582014,
         recording: false,
         current_lap: 0,
         best_lap_ms: 0,
