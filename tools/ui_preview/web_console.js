@@ -388,6 +388,7 @@
 
     return {
       name: String(source.name || ""),
+      stage: String(source.stage || ""),
       gps: gps,
       startFinish: normalizeLine(source.start_finish || source.startFinish),
       sectors: sectors,
@@ -474,6 +475,16 @@
     );
   }
 
+  function currentTrackCreationStage(draft) {
+    if (!draft.name.trim()) {
+      return "name";
+    }
+    if (!isCreateReady(draft)) {
+      return "start_finish";
+    }
+    return "review";
+  }
+
   function renderGpsBar(draft) {
     var gpsStatus = getGpsStatusInfo(draft);
     var fixOk = hasValidFix(draft);
@@ -503,7 +514,7 @@
     );
   }
 
-  function renderMarkRow(label, point, isMarked, isDisabled) {
+  function renderMarkRow(label, point, isMarked, isDisabled, markedLabel) {
     return (
       '<div class="web-console__mark-row">' +
       '<button type="button" class="web-console__mark-button' +
@@ -512,7 +523,7 @@
       '"' +
       (isDisabled ? " disabled" : "") +
       ">" +
-      escapeHtml(isMarked ? "✓ " + label : "Mark " + label) +
+      escapeHtml(isMarked ? (markedLabel || ("✓ " + label)) : "Mark " + label) +
       "</button>" +
       '<div class="web-console__coord">' +
       escapeHtml(formatCoord(point, "Not set")) +
@@ -542,8 +553,8 @@
     return (
       '<div class="web-console__track-group">' +
       '<p class="web-console__helper web-console__helper--section">Start/Finish</p>' +
-      renderMarkRow("P1", startFinish.p1, p1Marked, !canMark) +
-      renderMarkRow("P2", startFinish.p2, p2Marked, !canMark || !p1Marked) +
+      renderMarkRow("P1", startFinish.p1, p1Marked, !canMark, "Re-mark P1") +
+      renderMarkRow("P2", startFinish.p2, p2Marked, !canMark || !p1Marked, "Re-mark P2") +
       (showHeading ? renderHeadingBar(startFinish.heading) : "") +
       "</div>"
     );
@@ -608,8 +619,117 @@
     return '<div class="' + className + '">' + escapeHtml(message.text) + "</div>";
   }
 
+  function renderTrackCreationSteps(stage) {
+    var steps = [
+      { label: "1. Name", state: stage === "name" ? "active" : "done" },
+      {
+        label: "2. Start/Finish",
+        state: stage === "start_finish" ? "active" : (stage === "review" ? "done" : ""),
+      },
+      { label: "3. Review", state: stage === "review" ? "active" : "" },
+    ];
+
+    return (
+      '<div class="web-console__creation-steps">' +
+      steps.map(function (step) {
+        return (
+          '<div class="web-console__creation-step' +
+          (step.state ? " web-console__creation-step--" + step.state : "") +
+          '">' +
+          escapeHtml(step.label) +
+          "</div>"
+        );
+      }).join("") +
+      "</div>"
+    );
+  }
+
+  function reviewLineLengthMeters(line) {
+    if (!line || !line.p1 || !line.p2) {
+      return 0;
+    }
+    return haversineApproxMeters(line.p1, line.p2);
+  }
+
+  function haversineApproxMeters(p1, p2) {
+    var radiusM = 6371000;
+    var lat1 = p1.lat * Math.PI / 180;
+    var lat2 = p2.lat * Math.PI / 180;
+    var dLat = (p2.lat - p1.lat) * Math.PI / 180;
+    var dLon = (p2.lon - p1.lon) * Math.PI / 180;
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return radiusM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function projectReviewPoint(point, bounds, width, height, padding) {
+    var spanX = bounds.maxLon - bounds.minLon;
+    var spanY = bounds.maxLat - bounds.minLat;
+    if (spanX === 0) {
+      spanX = 0.0001;
+    }
+    if (spanY === 0) {
+      spanY = 0.0001;
+    }
+
+    return {
+      x: padding + ((point.lon - bounds.minLon) / spanX) * (width - padding * 2),
+      y: height - padding - ((point.lat - bounds.minLat) / spanY) * (height - padding * 2),
+    };
+  }
+
+  function renderGeometryReviewMarkup(draft) {
+    if (!isCreateReady(draft)) {
+      return '<div class="web-console__helper">Complete the name and geometry to unlock review.</div>';
+    }
+
+    var lines = [
+      { label: "Start/Finish", line: draft.startFinish, color: "#38bdf8" },
+    ];
+    draft.sectors.filter(sectorIsComplete).forEach(function (sector, index) {
+      lines.push({ label: "S" + String(index + 1), line: sector, color: "#f59e0b" });
+    });
+
+    var bounds = {
+      minLat: Infinity,
+      maxLat: -Infinity,
+      minLon: Infinity,
+      maxLon: -Infinity,
+    };
+    lines.forEach(function (entry) {
+      [entry.line.p1, entry.line.p2].forEach(function (point) {
+        bounds.minLat = Math.min(bounds.minLat, point.lat);
+        bounds.maxLat = Math.max(bounds.maxLat, point.lat);
+        bounds.minLon = Math.min(bounds.minLon, point.lon);
+        bounds.maxLon = Math.max(bounds.maxLon, point.lon);
+      });
+    });
+
+    var width = 240;
+    var height = 160;
+    var padding = 18;
+    var svg = '<svg viewBox="0 0 ' + width + " " + height + '" aria-label="Track geometry review">';
+    svg += '<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="14" fill="#0b1827" stroke="#2a3c52"></rect>';
+    lines.forEach(function (entry) {
+      var start = projectReviewPoint(entry.line.p1, bounds, width, height, padding);
+      var end = projectReviewPoint(entry.line.p2, bounds, width, height, padding);
+      svg += '<line x1="' + start.x.toFixed(1) + '" y1="' + start.y.toFixed(1) + '" x2="' + end.x.toFixed(1) + '" y2="' + end.y.toFixed(1) + '" stroke="' + entry.color + '" stroke-width="4" stroke-linecap="round"></line>';
+      svg += '<circle cx="' + start.x.toFixed(1) + '" cy="' + start.y.toFixed(1) + '" r="4" fill="' + entry.color + '"></circle>';
+      svg += '<circle cx="' + end.x.toFixed(1) + '" cy="' + end.y.toFixed(1) + '" r="4" fill="' + entry.color + '"></circle>';
+      svg += '<text x="' + ((start.x + end.x) / 2).toFixed(1) + '" y="' + ((start.y + end.y) / 2 - 8).toFixed(1) + '" fill="#dbeafe" font-size="11" text-anchor="middle">' + escapeHtml(entry.label) + "</text>";
+    });
+    svg += "</svg>";
+
+    if (reviewLineLengthMeters(draft.startFinish) < 5) {
+      svg += '<div class="web-console__helper web-console__track-msg--error">Start/finish looks very short.</div>';
+    }
+
+    return svg;
+  }
+
   function renderTrackCreationMarkup(data) {
     var draft = normalizeTrackCreationState(data || {});
+    var stage = currentTrackCreationStage(draft);
     var canCreate = isCreateReady(draft);
     var showAddSectorButton = draft.sectorsExpanded;
     var createLabel = draft.submitPending ? "Creating Track..." : "Create Track";
@@ -617,29 +737,52 @@
     return (
       '<div class="web-console__track-creation">' +
       '<h3 class="web-console__subheading">Track Creation</h3>' +
+      renderTrackCreationSteps(stage) +
+      '<div class="web-console__creation-stage">' +
+      '<p class="web-console__helper web-console__helper--section">Name</p>' +
       '<input class="web-console__input" placeholder="Track name" value="' +
       escapeHtml(draft.name) +
       '" readonly />' +
-      renderGpsBar(draft) +
-      renderStartFinishSection(draft) +
-      '<button type="button" class="web-console__collapse-toggle">' +
-      escapeHtml(draft.sectorsExpanded ? "Hide Sector Splits (optional)" : "Show Sector Splits (optional)") +
-      "</button>" +
-      renderSectorList(draft) +
-      (showAddSectorButton
-        ? '<button type="button" class="web-console__secondary-button' +
-          (draft.sectors.length >= 3 ? " web-console__secondary-button--disabled" : "") +
-          '"' +
-          (draft.sectors.length >= 3 ? " disabled" : "") +
-          '>+ Add Sector</button>'
+      "</div>" +
+      (draft.name.trim()
+        ? (
+          '<div class="web-console__creation-stage">' +
+          '<p class="web-console__helper web-console__helper--section">Start/Finish</p>' +
+          '<div class="web-console__helper">Name the track, then mark start/finish only when GPS is stable.</div>' +
+          renderGpsBar(draft) +
+          renderStartFinishSection(draft) +
+          '<button type="button" class="web-console__collapse-toggle">' +
+          escapeHtml(draft.sectorsExpanded ? "Hide Sector Splits (optional)" : "Show Sector Splits (optional)") +
+          "</button>" +
+          renderSectorList(draft) +
+          (showAddSectorButton
+            ? '<button type="button" class="web-console__secondary-button' +
+              (draft.sectors.length >= 3 ? " web-console__secondary-button--disabled" : "") +
+              '"' +
+              (draft.sectors.length >= 3 ? " disabled" : "") +
+              '>+ Add Sector</button>'
+            : "") +
+          "</div>"
+        )
         : "") +
-      '<button type="button" class="web-console__primary-button' +
-      (canCreate ? "" : " web-console__primary-button--disabled") +
-      '"' +
-      (canCreate ? "" : " disabled") +
-      ">" +
-      escapeHtml(createLabel) +
-      "</button>" +
+      (stage === "review"
+        ? (
+          '<div class="web-console__creation-stage">' +
+          '<p class="web-console__helper web-console__helper--section">Review</p>' +
+          '<div class="web-console__current-track web-console__current-track--nearby review-panel">' +
+          renderGeometryReviewMarkup(draft) +
+          "</div>" +
+          '<div class="web-console__helper">A new track becomes current immediately after creation.</div>' +
+          '<button type="button" class="web-console__primary-button' +
+          (canCreate ? "" : " web-console__primary-button--disabled") +
+          '"' +
+          (canCreate ? "" : " disabled") +
+          ">" +
+          escapeHtml(createLabel) +
+          "</button>" +
+          "</div>"
+        )
+        : "") +
       renderTrackMessage(draft.message) +
       "</div>"
     );

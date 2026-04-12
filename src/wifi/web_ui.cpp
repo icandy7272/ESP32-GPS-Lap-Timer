@@ -112,6 +112,15 @@ static String build_style_section() {
            ".nearby-track-info{display:grid;gap:2px}"
            ".nearby-track-name{font-weight:bold;color:#e8f3ff}"
            ".nearby-track-distance{color:#9eb3ca;font-size:12px}"
+           ".creation-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));"
+             "gap:8px;margin:8px 0 12px}"
+           ".creation-step{border:1px solid #2a3c52;border-radius:999px;padding:8px 10px;"
+             "text-align:center;font-size:12px;color:#9eb3ca;background:#10233a}"
+           ".creation-step.done{border-color:#2faa5a;color:#7ff5a1;background:#12391f}"
+           ".creation-step.active{border-color:#60a5fa;color:#dbeafe;background:#17304d}"
+           ".creation-stage{margin-bottom:12px}"
+           ".review-panel svg{width:100%;height:auto;display:block}"
+           ".review-copy{margin-top:8px}"
            ".primary-btn:disabled{background:#334;color:#889;cursor:not-allowed}"
            ".track-msg-ok{color:#7ff5a1}"
            ".track-msg-err{color:#ff8f8f}"
@@ -167,7 +176,17 @@ static String build_body_section() {
            "</div>"
            "<ul id=\"tracks\"><li>Loading...</li></ul>"
            "<h2 style=\"margin-top:12px\">Track Creation</h2>"
+           "<div id=\"creation-steps\" class=\"creation-steps\">"
+           "<div id=\"creation-step-name\" class=\"creation-step\">1. Name</div>"
+           "<div id=\"creation-step-start-finish\" class=\"creation-step\">2. Start/Finish</div>"
+           "<div id=\"creation-step-review\" class=\"creation-step\">3. Review</div>"
+           "</div>"
+           "<div id=\"creation-stage-name\" class=\"creation-stage\">"
+           "<p class=\"helper-text\">Name</p>"
            "<input id=\"track-name\" placeholder=\"Track name\">"
+           "</div>"
+           "<div id=\"creation-stage-start-finish\" class=\"creation-stage\">"
+           "<div id=\"creation-guidance\" class=\"helper-text\"></div>"
            "<div id=\"gps-bar\" class=\"gps-bar err\">"
            "<div class=\"helper-text\">GPS status unavailable</div>"
            "</div>"
@@ -190,9 +209,14 @@ static String build_body_section() {
              "Sector Splits (optional)</button>"
            "<div id=\"sector-list\"></div>"
            "<button type=\"button\" id=\"add-sector-btn\" class=\"mark-btn\">+ Add Sector</button>"
+           "</div>"
+           "<div id=\"creation-stage-review\" class=\"creation-stage\">"
+           "<div id=\"geometry-review\" class=\"current-track-panel review-panel\"></div>"
+           "<div id=\"review-copy\" class=\"helper-text review-copy\"></div>"
            "<button type=\"button\" id=\"create-track-btn\" class=\"primary-btn\" disabled>"
              "Create Track</button>"
            "<div id=\"track-create-msg\" class=\"helper-text\"></div>"
+           "</div>"
            "</div>"
 
            // Settings card
@@ -386,6 +410,25 @@ function gpsMarkingBlockMessage(){
   return 'Hold still until GPS stabilizes before marking points.';
 }
 
+function isNameReady(){
+  var nameField=$('track-name');
+  return !!(nameField&&nameField.value.trim());
+}
+
+function isReviewReady(){
+  return isNameReady()
+    && _trackDraft.startFinish.p1
+    && _trackDraft.startFinish.p2
+    && typeof _trackDraft.startFinish.heading==='number'
+    && !hasIncompleteSectors();
+}
+
+function currentCreationStage(){
+  if(!isNameReady()){return 'name';}
+  if(!isReviewReady()){return 'start_finish';}
+  return 'review';
+}
+
 function resetTrackDraft(){
   var gps=_trackDraft.gps;
   _trackDraft={
@@ -554,6 +597,101 @@ function updateStartFinishHeading(){
   }
 }
 
+function setCreationStepState(id,label,state){
+  var step=$(id);
+  if(!step){return;}
+  step.textContent=label;
+  step.className='creation-step';
+  if(state){step.className+=' '+state;}
+}
+
+function renderCreationStages(){
+  var stage=currentCreationStage();
+  var nameStage=$('creation-stage-name');
+  var sfStage=$('creation-stage-start-finish');
+  var reviewStage=$('creation-stage-review');
+  var guidance=$('creation-guidance');
+  setCreationStepState('creation-step-name','1. Name',stage==='name'?'active':'done');
+  setCreationStepState('creation-step-start-finish','2. Start/Finish',
+    stage==='start_finish'?'active':(stage==='review'?'done':''));
+  setCreationStepState('creation-step-review','3. Review',stage==='review'?'active':'');
+  if(nameStage){nameStage.style.display='block';}
+  if(sfStage){sfStage.style.display=isNameReady()?'block':'none';}
+  if(reviewStage){reviewStage.style.display=isReviewReady()?'block':'none';}
+  if(guidance){
+    guidance.textContent=isNameReady()
+      ? 'Name the track, then mark start/finish only when GPS is stable.'
+      : 'Start by entering a track name.';
+  }
+}
+
+function reviewLineLengthMeters(line){
+  if(!line||!line.p1||!line.p2){return 0;}
+  return distanceMeters(line.p1,line.p2);
+}
+
+function projectReviewPoint(point,bounds,width,height,padding){
+  var spanX=bounds.maxLon-bounds.minLon;
+  var spanY=bounds.maxLat-bounds.minLat;
+  if(spanX===0){spanX=0.0001;}
+  if(spanY===0){spanY=0.0001;}
+  return {
+    x: padding+((point.lon-bounds.minLon)/spanX)*(width-padding*2),
+    y: height-padding-((point.lat-bounds.minLat)/spanY)*(height-padding*2)
+  };
+}
+
+function renderGeometryReview(){
+  var panel=$('geometry-review');
+  var copy=$('review-copy');
+  if(!panel||!copy){return;}
+  copy.textContent='A new track becomes current immediately after creation.';
+  if(!isReviewReady()){
+    panel.innerHTML='<div class="helper-text">Complete the name and geometry to unlock review.</div>';
+    return;
+  }
+
+  var lines=[{label:'Start/Finish',line:_trackDraft.startFinish,color:'#38bdf8'}];
+  _trackDraft.sectors.filter(sectorIsComplete).forEach(function(sector,index){
+    lines.push({label:'S'+(index+1),line:sector,color:'#f59e0b'});
+  });
+
+  var minLat=Infinity;
+  var maxLat=-Infinity;
+  var minLon=Infinity;
+  var maxLon=-Infinity;
+  lines.forEach(function(entry){
+    [entry.line.p1,entry.line.p2].forEach(function(point){
+      minLat=Math.min(minLat,point.lat);
+      maxLat=Math.max(maxLat,point.lat);
+      minLon=Math.min(minLon,point.lon);
+      maxLon=Math.max(maxLon,point.lon);
+    });
+  });
+
+  var bounds={minLat:minLat,maxLat:maxLat,minLon:minLon,maxLon:maxLon};
+  var width=240;
+  var height=160;
+  var padding=18;
+  var svg='<svg viewBox="0 0 '+width+' '+height+'" aria-label="Track geometry review">';
+  svg+='<rect x="0" y="0" width="'+width+'" height="'+height+'" rx="14" fill="#0b1827" stroke="#2a3c52"></rect>';
+  lines.forEach(function(entry){
+    var start=projectReviewPoint(entry.line.p1,bounds,width,height,padding);
+    var end=projectReviewPoint(entry.line.p2,bounds,width,height,padding);
+    svg+='<line x1="'+start.x.toFixed(1)+'" y1="'+start.y.toFixed(1)+'" x2="'+end.x.toFixed(1)+'" y2="'+end.y.toFixed(1)+'" stroke="'+entry.color+'" stroke-width="4" stroke-linecap="round"></line>';
+    svg+='<circle cx="'+start.x.toFixed(1)+'" cy="'+start.y.toFixed(1)+'" r="4" fill="'+entry.color+'"></circle>';
+    svg+='<circle cx="'+end.x.toFixed(1)+'" cy="'+end.y.toFixed(1)+'" r="4" fill="'+entry.color+'"></circle>';
+    svg+='<text x="'+((start.x+end.x)/2).toFixed(1)+'" y="'+((start.y+end.y)/2-8).toFixed(1)+'" fill="#dbeafe" font-size="11" text-anchor="middle">'+entry.label+'</text>';
+  });
+  svg+='</svg>';
+
+  var warning='';
+  if(reviewLineLengthMeters(_trackDraft.startFinish)<5){
+    warning='<div class="helper-text track-msg-err">Start/finish looks very short. Re-mark if this was accidental.</div>';
+  }
+  panel.innerHTML=svg+warning;
+}
+
 function findSector(id){
   for(var i=0;i<_trackDraft.sectors.length;i++){
     if(_trackDraft.sectors[i].id===id){return _trackDraft.sectors[i];}
@@ -675,12 +813,12 @@ function renderStartFinishSection(){
   var showHeading=p1Marked&&p2Marked&&typeof _trackDraft.startFinish.heading==='number';
 
   if(p1Btn){
-    p1Btn.textContent=p1Marked?'✓ P1':'Mark P1';
+    p1Btn.textContent=p1Marked?'Re-mark P1':'Mark P1';
     p1Btn.className='mark-btn'+(p1Marked?' marked':'');
     p1Btn.disabled=!canMark;
   }
   if(p2Btn){
-    p2Btn.textContent=p2Marked?'✓ P2':'Mark P2';
+    p2Btn.textContent=p2Marked?'Re-mark P2':'Mark P2';
     p2Btn.className='mark-btn'+(p2Marked?' marked':'');
     p2Btn.disabled=!canMark||!p1Marked;
   }
@@ -752,9 +890,11 @@ function renderCreateButton(){
 }
 
 function renderTrackDraft(){
+  renderCreationStages();
   renderGpsBar();
   renderStartFinishSection();
   renderSectorRows();
+  renderGeometryReview();
   renderCreateButton();
 }
 

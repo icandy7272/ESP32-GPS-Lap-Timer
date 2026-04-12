@@ -723,6 +723,193 @@ async function testNearbyTracksRenderSortedAndSupportSwitching() {
   );
 }
 
+async function testGuidedTrackReviewStageSupportsRemarkingSinglePoints() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 9,
+    lat: 31.2304167,
+    lon: 121.4737010,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "No Track",
+    track_id: "",
+    track_source: "Waiting to select",
+    track_locked_manual: false,
+    recording_cta_state: "blocked_no_track",
+    recording_cta_reason: "Select a track before recording.",
+  });
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 9,
+    lat: 31.2304168,
+    lon: 121.4737011,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "No Track",
+  });
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 9,
+    lat: 31.2304169,
+    lon: 121.4737012,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "No Track",
+  });
+
+  harness.getElement("track-name").value = "Sprint Layout";
+  harness.context.renderTrackDraft();
+
+  harness.enqueueResponse("/api/status", {
+    gps_fix: true,
+    satellites: 9,
+    lat: 31.2304167,
+    lon: 121.4737010,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "No Track",
+  });
+  harness.context.markStartFinishPoint("p1");
+  await harness.settle();
+
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 9,
+    lat: 31.2304366,
+    lon: 121.4737407,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "No Track",
+  });
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 9,
+    lat: 31.2304367,
+    lon: 121.4737408,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "No Track",
+  });
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 9,
+    lat: 31.2304368,
+    lon: 121.4737409,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "No Track",
+  });
+
+  harness.enqueueResponse("/api/status", {
+    gps_fix: true,
+    satellites: 9,
+    lat: 31.2304367,
+    lon: 121.4737408,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "No Track",
+  });
+  harness.context.markStartFinishPoint("p2");
+  await harness.settle();
+
+  assert.match(
+    harness.getElement("creation-step-name").className,
+    /done/i,
+    "name step should be marked complete once a name is entered",
+  );
+  assert.match(
+    harness.getElement("creation-step-start-finish").className,
+    /done/i,
+    "start/finish step should be marked complete once both points exist",
+  );
+  assert.match(
+    harness.getElement("creation-step-review").className,
+    /active/i,
+    "review step should become active once geometry is ready",
+  );
+  assert.match(
+    harness.getElement("geometry-review").innerHTML,
+    /<svg/i,
+    "review stage should render a geometry preview before submit",
+  );
+  assert.match(
+    harness.getElement("review-copy").textContent,
+    /becomes current/i,
+    "review stage should explain that a new track becomes current",
+  );
+  assert.match(harness.getElement("sf-p1-btn").textContent, /Re-mark P1/i);
+  assert.match(harness.getElement("sf-p2-btn").textContent, /Re-mark P2/i);
+
+  const originalP2Lat = harness.context._trackDraft.startFinish.p2.lat;
+  const originalP2Lon = harness.context._trackDraft.startFinish.p2.lon;
+
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 9,
+    lat: 31.2304100,
+    lon: 121.4736923,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "No Track",
+  });
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 9,
+    lat: 31.2304101,
+    lon: 121.4736924,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "No Track",
+  });
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 9,
+    lat: 31.2304102,
+    lon: 121.4736925,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "No Track",
+  });
+
+  harness.enqueueResponse("/api/status", {
+    gps_fix: true,
+    satellites: 9,
+    lat: 31.2304101,
+    lon: 121.4736924,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "No Track",
+  });
+  harness.context.markStartFinishPoint("p1");
+  await harness.settle();
+
+  assert.equal(
+    harness.context._trackDraft.startFinish.p2.lat,
+    originalP2Lat,
+    "re-marking P1 should not clear P2",
+  );
+  assert.equal(
+    harness.context._trackDraft.startFinish.p2.lon,
+    originalP2Lon,
+    "re-marking P1 should preserve the other endpoint",
+  );
+}
+
 (async function main() {
   await testGpsFixAllowsZeroZeroCoordinates();
   await testMarkingUsesFreshStatusAndRejectsZeroLengthLine();
@@ -734,6 +921,7 @@ async function testNearbyTracksRenderSortedAndSupportSwitching() {
   await testCreateTrackSurfacesAutoSelectFailure();
   await testStatusRendersCurrentTrackAndBlockedRecordingReason();
   await testNearbyTracksRenderSortedAndSupportSwitching();
+  await testGuidedTrackReviewStageSupportsRemarkingSinglePoints();
   console.log("check_firmware_web_ui: PASS");
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);
