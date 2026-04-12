@@ -2,6 +2,7 @@
 
 #include "../config.h"
 #include "../session.h"
+#include "time_format.h"
 
 #include <Arduino.h>
 #include <string.h>
@@ -72,15 +73,16 @@ void write_vbo_header(const char* track_name) {
 
 void format_vbo_line(const VboEntry* entry, char* buf, int buf_len) {
     double secs = timestamp_us_to_secs_since_midnight(entry->timestamp_us);
-    double hhmmss = secs_to_hhmmss(secs);
+    char time_buf[16];
+    format_hhmmss_thousandths(time_buf, sizeof(time_buf), secs);
 
     double lat_amin = entry->lat_deg * 60.0;
     double lon_amin = entry->lon_deg * -60.0;
 
     snprintf(buf, buf_len,
-             "%03d %09.2f %+012.5f %+012.5f %07.3f %06.2f %+09.2f\r\n",
+             "%03d %s %+012.5f %+012.5f %07.3f %06.2f %+09.2f\r\n",
              entry->satellites,
-             hhmmss,
+             time_buf,
              lat_amin,
              lon_amin,
              (double)entry->speed_kmh,
@@ -110,15 +112,6 @@ double timestamp_us_to_secs_since_midnight(int64_t timestamp_us) {
         tod += 86400.0;
     }
     return tod;
-}
-
-double secs_to_hhmmss(double total_secs) {
-    int total_int = (int)total_secs;
-    int hh = total_int / 3600;
-    int mm = (total_int % 3600) / 60;
-    int ss = total_int % 60;
-    double frac = total_secs - (double)total_int;
-    return (double)(hh * 10000 + mm * 100 + ss) + frac;
 }
 
 void write_laptiming_lines() {

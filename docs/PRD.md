@@ -303,7 +303,7 @@ Split  +MMMMM.MMMMM +MMMMM.MMMMM +MMMMM.MMMMM +MMMMM.MMMMM Split 1\r\n
 sats time lat long velocity heading height\r\n
 \r\n
 [data]\r\n
-008 143000.00 +01874.12345 -07258.67890 045.200 128.50 +00032.10\r\n
+008 143000.000 +01874.12345 -07258.67890 045.200 128.50 +00032.10\r\n
 ...
 ```
 
@@ -312,7 +312,7 @@ sats time lat long velocity heading height\r\n
 | 列 | 格式 | 示例 | 说明 |
 |----|------|------|------|
 | sats | `%03d` | `008` | 3 位零填充 |
-| time | `HHMMSS.SS` | `143000.00` | UTC，无冒号 |
+| time | `HHMMSS.SSS` | `143000.000` | UTC，无冒号，毫秒分辨率 |
 | lat | `%+012.5f` | `+01874.12345` | 角分，+ 北 |
 | long | `%+012.5f` | `-07258.67890` | 角分，- 东 |
 | velocity | `%07.3f` | `045.200` | km/h |

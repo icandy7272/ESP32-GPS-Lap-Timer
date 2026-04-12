@@ -1,5 +1,6 @@
 #include "display_internal.h"
 #include "types.h"
+#include "time_format.h"
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
@@ -36,21 +37,10 @@ uint16_t lap_status_colour(uint8_t status) {
 
 // Format milliseconds as "m:ss.xx" into buf (must be >= 12 chars).
 void format_lap_time(char* buf, size_t len, int32_t time_ms) {
-    if (time_ms < 0) {
-        snprintf(buf, len, "--:--.--");
-        return;
-    }
-    int mins    = time_ms / 60000;
-    int secs    = (time_ms % 60000) / 1000;
-    int hundths = (time_ms % 1000) / 10;
-    snprintf(buf, len, "%d:%02d.%02d", mins, secs, hundths);
+    format_lap_time_hundredths(buf, len, time_ms);
 }
 
 // Format delta_ms as "+0.35" or "-1.22" into buf (must be >= 10 chars).
 void format_delta(char* buf, size_t len, int32_t delta_ms) {
-    const char sign = (delta_ms >= 0) ? '+' : '-';
-    int abs_ms = abs(delta_ms);
-    int secs   = abs_ms / 1000;
-    int hundr  = (abs_ms % 1000) / 10;
-    snprintf(buf, len, "%c%d.%02d", sign, secs, hundr);
+    format_delta_hundredths(buf, len, delta_ms);
 }

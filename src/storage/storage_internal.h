@@ -42,7 +42,6 @@ void flush_and_sync();
 void sync_directory(const char* dir_path);
 void build_final_path(char* path, int path_len);
 double timestamp_us_to_secs_since_midnight(int64_t timestamp_us);
-double secs_to_hhmmss(double total_secs);
 void set_session_epoch(int64_t first_timestamp_us);
 void write_laptiming_lines();
 void write_session_metadata_json(const char* vbo_path);
