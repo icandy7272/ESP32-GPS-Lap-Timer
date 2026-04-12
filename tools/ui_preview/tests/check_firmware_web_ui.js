@@ -612,6 +612,117 @@ async function testStatusRendersCurrentTrackAndBlockedRecordingReason() {
   );
 }
 
+async function testNearbyTracksRenderSortedAndSupportSwitching() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 9,
+    lat: 31.2304167,
+    lon: 121.4737010,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "Shanghai International Circuit",
+    track_id: "track_002",
+    track_source: "Selected manually",
+    track_locked_manual: true,
+    recording_cta_state: "ready",
+    recording_cta_reason: "",
+    current_track_distance_m: 36,
+    nearby_tracks: [
+      { id: "track_001", name: "Ningbo Kart Center", distance_m: 96 },
+      { id: "track_003", name: "Zhuhai International Circuit", distance_m: 18 },
+    ],
+  });
+
+  assert.match(
+    harness.getElement("current-track-distance").textContent,
+    /36 m/i,
+    "current track should show distance from the current position",
+  );
+
+  const nearbyMarkup = harness.getElement("nearby-tracks").innerHTML;
+  assert.match(nearbyMarkup, /Nearby Tracks/i);
+  assert.match(nearbyMarkup, /Resume Auto/i);
+  assert.match(nearbyMarkup, /Use This Track/i);
+  assert.ok(
+    nearbyMarkup.indexOf("Zhuhai International Circuit") <
+      nearbyMarkup.indexOf("Ningbo Kart Center"),
+    "nearby candidates should be sorted by ascending distance",
+  );
+
+  harness.enqueueResponse("/api/tracks/select", {
+    ok: true,
+    body: { ok: true, name: "Zhuhai International Circuit" },
+  });
+  harness.getElement("nearby-tracks").onclick({
+    target: {
+      getAttribute(name) {
+        if (name === "data-nearby-action") { return "select"; }
+        if (name === "data-track-id") { return "track_003"; }
+        return null;
+      },
+    },
+  });
+  await harness.settle();
+
+  const manualSwitchCall = harness.calls.find((call) => {
+    return call.url === "/api/tracks/select" &&
+      /track_003/.test((call.options || {}).body || "");
+  });
+  assert.ok(manualSwitchCall, "nearby switch action should post to /api/tracks/select");
+  assert.match(manualSwitchCall.options.body, /"source":"manual"/);
+
+  harness.enqueueResponse("/api/tracks/select", {
+    ok: true,
+    body: { ok: true, name: "Ningbo Kart Center" },
+  });
+  harness.getElement("nearby-tracks").onclick({
+    target: {
+      getAttribute(name) {
+        if (name === "data-nearby-action") { return "auto"; }
+        return null;
+      },
+    },
+  });
+  await harness.settle();
+
+  const autoResumeCall = harness.calls.find((call) => {
+    return call.url === "/api/tracks/select" &&
+      /"source":"auto"/.test((call.options || {}).body || "");
+  });
+  assert.ok(autoResumeCall, "resume auto action should post auto selection intent");
+
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 10,
+    lat: 31.2304192,
+    lon: 121.4737032,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "Shanghai International Circuit",
+    track_id: "track_002",
+    track_source: "Selected manually",
+    track_locked_manual: true,
+    recording_cta_state: "ready",
+    recording_cta_reason: "",
+    current_track_distance_m: 42,
+    nearby_tracks: [
+      { id: "track_003", name: "Zhuhai International Circuit", distance_m: 22 },
+      { id: "track_001", name: "Ningbo Kart Center", distance_m: 88 },
+    ],
+  });
+
+  assert.match(
+    harness.getElement("current-track-name").textContent,
+    /Shanghai International Circuit/i,
+    "manual selection should survive later idle GPS refreshes until auto mode is resumed",
+  );
+}
+
 (async function main() {
   await testGpsFixAllowsZeroZeroCoordinates();
   await testMarkingUsesFreshStatusAndRejectsZeroLengthLine();
@@ -622,6 +733,7 @@ async function testStatusRendersCurrentTrackAndBlockedRecordingReason() {
   await testCreateTrackAutoSelectsNewTrack();
   await testCreateTrackSurfacesAutoSelectFailure();
   await testStatusRendersCurrentTrackAndBlockedRecordingReason();
+  await testNearbyTracksRenderSortedAndSupportSwitching();
   console.log("check_firmware_web_ui: PASS");
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);

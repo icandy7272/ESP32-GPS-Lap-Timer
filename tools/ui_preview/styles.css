@@ -291,6 +291,27 @@ body {
   font-weight: 700;
 }
 
+.web-console__current-track--nearby {
+  gap: 10px;
+}
+
+.web-console__nearby-track {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(10, 25, 47, 0.56);
+}
+
+.web-console__nearby-track-copy {
+  display: grid;
+  gap: 2px;
+  color: #e2e8f0;
+}
+
 .web-console__recording-reason {
   min-height: 1.2em;
   margin-top: 8px;

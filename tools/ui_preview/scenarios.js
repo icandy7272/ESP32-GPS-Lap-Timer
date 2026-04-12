@@ -229,6 +229,11 @@
       },
       sessions: ["session_20260408_08.vbo"],
       tracks: TRACKS_BASE.slice(0, 3),
+      nearby_tracks: [
+        { id: "track_003", name: "Zhuhai International Circuit", distance_m: 18 },
+        { id: "track_001", name: "Ningbo Kart Center", distance_m: 96 },
+      ],
+      current_track_distance_m: 36,
       settings: { wifi_ssid: "GPS-LapTimer", wifi_pass: "12345678", brightness: 200 },
       device: {
         screen: "status",

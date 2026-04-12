@@ -16,6 +16,12 @@
 
 // Maximum number of tracks held in memory.
 static constexpr int MAX_TRACKS = 20;
+static constexpr int MAX_NEARBY_TRACKS = 3;
+
+typedef struct {
+    const TrackDefinition* track;
+    double distance_m;
+} NearbyTrackCandidate;
 
 // --- Initialization ---
 // Scan SD:/tracks/ for track_*.json files, parse each into
@@ -37,6 +43,15 @@ const TrackDefinition* track_get_by_id(const char* id);
 // Find the nearest track whose center is within 5 km of (lat, lon).
 // Returns nullptr if no track is within range.
 const TrackDefinition* track_auto_detect(double lat, double lon);
+
+// Return up to max_results nearby tracks sorted by ascending distance.
+// Distances are measured to each track center.
+int track_find_nearby(double lat, double lon,
+                      NearbyTrackCandidate* out, int max_results);
+
+// Distance from the current position to a track center in meters.
+double track_distance_to_center_m(const TrackDefinition* track,
+                                  double lat, double lon);
 
 // Load the first available track into *out.
 // Returns true if at least one track exists.

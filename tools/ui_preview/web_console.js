@@ -96,7 +96,7 @@
     return Boolean(status.track && status.track !== "No Track");
   }
 
-  function normalizeStatus(source, tracks) {
+  function normalizeStatus(source, tracks, scenario) {
     var status = source || {};
     var trackId = status.track_id || "";
     if (!trackId && Array.isArray(tracks)) {
@@ -118,6 +118,16 @@
       track_locked_manual: Boolean(status.track_locked_manual),
       recording_cta_state: String(status.recording_cta_state || ""),
       recording_cta_reason: String(status.recording_cta_reason || ""),
+      current_track_distance_m: Number(
+        status.current_track_distance_m != null
+          ? status.current_track_distance_m
+          : (scenario && scenario.current_track_distance_m)
+      ),
+      nearby_tracks: Array.isArray(status.nearby_tracks)
+        ? status.nearby_tracks.slice()
+        : (Array.isArray(scenario && scenario.nearby_tracks)
+            ? scenario.nearby_tracks.slice()
+            : []),
     };
 
     if (!normalized.track_source) {
@@ -136,6 +146,25 @@
         normalized.recording_cta_state === "blocked_no_track") {
       normalized.recording_cta_reason = "Select a track before recording.";
     }
+
+    if (!Number.isFinite(normalized.current_track_distance_m)) {
+      normalized.current_track_distance_m = -1;
+    }
+
+    normalized.nearby_tracks = normalized.nearby_tracks
+      .filter(function (track) {
+        return Boolean(track && track.id && track.name && Number.isFinite(Number(track.distance_m)));
+      })
+      .map(function (track) {
+        return {
+          id: String(track.id),
+          name: String(track.name),
+          distance_m: Number(track.distance_m),
+        };
+      })
+      .sort(function (left, right) {
+        return left.distance_m - right.distance_m;
+      });
 
     return normalized;
   }
@@ -195,6 +224,9 @@
     var currentTrackName = hasSelectedTrack(status)
       ? escapeHtml(status.track)
       : "No Track selected";
+    var distanceText = status.current_track_distance_m >= 0
+      ? Math.round(status.current_track_distance_m) + " m away"
+      : "";
     var lockChip = status.track_locked_manual
       ? '<span class="web-console__track-badge">' +
         escapeHtml(status.track_source === "Newly created" ? "New" : "Manual") +
@@ -213,6 +245,44 @@
       '<div class="web-console__helper">' +
       escapeHtml(status.track_source) +
       "</div>" +
+      '<div class="web-console__helper">' +
+      escapeHtml(distanceText) +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function renderNearbyTracksMarkup(status) {
+    var headerAction = status.track_locked_manual
+      ? '<button type="button" class="web-console__inline-action">Resume Auto</button>'
+      : "";
+    var nearbyMarkup = "";
+
+    if (!status.nearby_tracks.length) {
+      nearbyMarkup = '<div class="web-console__helper">No nearby alternatives right now.</div>';
+    } else {
+      nearbyMarkup = status.nearby_tracks
+        .map(function (track) {
+          return (
+            '<div class="web-console__nearby-track">' +
+            '<div class="web-console__nearby-track-copy">' +
+            '<strong>' + escapeHtml(track.name) + "</strong>" +
+            '<span class="web-console__helper">' + escapeHtml(String(Math.round(track.distance_m))) + ' m away</span>' +
+            "</div>" +
+            '<button type="button" class="web-console__inline-action">Use This Track</button>' +
+            "</div>"
+          );
+        })
+        .join("");
+    }
+
+    return (
+      '<div class="web-console__current-track web-console__current-track--nearby">' +
+      '<div class="web-console__row web-console__row--tight">' +
+      '<span class="web-console__label">Nearby Tracks</span>' +
+      headerAction +
+      "</div>" +
+      nearbyMarkup +
       "</div>"
     );
   }
@@ -578,7 +648,7 @@
   function renderWebConsoleMarkup(scenario) {
     var data = scenario || {};
     var tracks = Array.isArray(data.tracks) ? data.tracks : [];
-    var status = normalizeStatus(data.status || {}, tracks);
+    var status = normalizeStatus(data.status || {}, tracks, data);
     var settings = data.settings || {};
     var gpsFix = status.gps_fix ? "Yes" : "No";
     var recordingState = status.recording ? "REC" : "Idle";
@@ -634,6 +704,7 @@
       '<div class="web-console__card" data-card="tracks">' +
       "<h2>Tracks</h2>" +
       renderCurrentTrackMarkup(status) +
+      renderNearbyTracksMarkup(status) +
       '<ul class="web-console__list">' +
       renderTracksMarkup(tracks, status) +
       "</ul>" +

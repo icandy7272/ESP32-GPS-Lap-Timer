@@ -105,6 +105,13 @@ static String build_style_section() {
            ".track-actions{display:flex;align-items:center;gap:4px}"
            ".track-meta{margin-top:6px}"
            ".recording-reason{min-height:1.4em}"
+           ".nearby-track-list{display:grid;gap:8px}"
+           ".nearby-track-row{display:flex;justify-content:space-between;align-items:center;"
+             "gap:8px;border:1px solid #2a3c52;border-radius:8px;padding:8px;"
+             "background:#12263d}"
+           ".nearby-track-info{display:grid;gap:2px}"
+           ".nearby-track-name{font-weight:bold;color:#e8f3ff}"
+           ".nearby-track-distance{color:#9eb3ca;font-size:12px}"
            ".primary-btn:disabled{background:#334;color:#889;cursor:not-allowed}"
            ".track-msg-ok{color:#7ff5a1}"
            ".track-msg-err{color:#ff8f8f}"
@@ -151,6 +158,12 @@ static String build_body_section() {
              "<span id=\"current-track-lock\" class=\"track-chip\" style=\"display:none\"></span></div>"
            "<div id=\"current-track-name\" class=\"current-track-name\">Loading...</div>"
            "<div id=\"current-track-source\" class=\"helper-text track-meta\">--</div>"
+           "<div id=\"current-track-distance\" class=\"helper-text track-meta\"></div>"
+           "</div>"
+           "<div class=\"current-track-panel\">"
+           "<div id=\"nearby-tracks\" class=\"nearby-track-list\">"
+             "<div class=\"helper-text\">Nearby tracks unavailable.</div>"
+           "</div>"
            "</div>"
            "<ul id=\"tracks\"><li>Loading...</li></ul>"
            "<h2 style=\"margin-top:12px\">Track Creation</h2>"
@@ -227,7 +240,9 @@ var _statusSnapshot={
   track_source:'',
   track_locked_manual:false,
   recording_cta_state:'blocked_no_track',
-  recording_cta_reason:'Select a track before recording.'
+  recording_cta_reason:'Select a track before recording.',
+  current_track_distance_m:-1,
+  nearby_tracks:[]
 };
 var _trackList=[];
 
@@ -396,6 +411,26 @@ function currentTrackSource(){
   return hasSelectedTrack()?'Auto-detected':'Waiting to select';
 }
 
+function formatDistanceMeters(distanceMeters){
+  if(typeof distanceMeters!=='number'||distanceMeters<0){return '';}
+  return Math.round(distanceMeters)+' m away';
+}
+
+function normalizeNearbyTracks(list){
+  if(!Array.isArray(list)){return [];}
+  return list.filter(function(track){
+    return !!(track&&track.id&&track.name&&!isNaN(Number(track.distance_m)));
+  }).map(function(track){
+    return {
+      id:track.id,
+      name:track.name,
+      distance_m:Number(track.distance_m)
+    };
+  }).sort(function(a,b){
+    return a.distance_m-b.distance_m;
+  });
+}
+
 function currentTrackMatches(track){
   if(!track){return false;}
   if(_statusSnapshot.track_id){
@@ -421,9 +456,15 @@ function getRecordingCtaConfig(){
 function renderCurrentTrackSummary(){
   var name=$('current-track-name');
   var source=$('current-track-source');
+  var distance=$('current-track-distance');
   var lock=$('current-track-lock');
   if(name){name.textContent=currentTrackName();}
   if(source){source.textContent=currentTrackSource();}
+  if(distance){
+    distance.textContent=hasSelectedTrack()
+      ? formatDistanceMeters(_statusSnapshot.current_track_distance_m)
+      : '';
+  }
   if(lock){
     if(_statusSnapshot.track_locked_manual){
       lock.textContent=_statusSnapshot.track_source==='Newly created'?'New':'Manual';
@@ -433,6 +474,32 @@ function renderCurrentTrackSummary(){
       lock.style.display='none';
     }
   }
+}
+
+function renderNearbyTrackChooser(){
+  var nearby=$('nearby-tracks');
+  if(!nearby){return;}
+  var html='<div class="row current-track-head"><span class="label">Nearby Tracks</span>';
+  if(_statusSnapshot.track_locked_manual&&!_isRec&&_trackDraft.gps.fix){
+    html+='<button type="button" class="mark-btn inline-btn" data-nearby-action="auto">Resume Auto</button>';
+  }
+  html+='</div>';
+
+  if(!_statusSnapshot.nearby_tracks.length){
+    html+='<div class="helper-text">No nearby alternatives right now.</div>';
+    nearby.innerHTML=html;
+    return;
+  }
+
+  for(var i=0;i<_statusSnapshot.nearby_tracks.length;i++){
+    var candidate=_statusSnapshot.nearby_tracks[i];
+    html+='<div class="nearby-track-row">'
+      +'<div class="nearby-track-info"><span class="nearby-track-name">'+candidate.name+'</span>'
+      +'<span class="nearby-track-distance">'+Math.round(candidate.distance_m)+' m away</span></div>'
+      +'<button type="button" class="mark-btn inline-btn" data-nearby-action="select" data-track-id="'+candidate.id+'">Use This Track</button>'
+      +'</div>';
+  }
+  nearby.innerHTML=html;
 }
 
 function renderTracksList(){
@@ -541,7 +608,13 @@ function applyStatusData(d){
   _statusSnapshot.track_locked_manual=!!d.track_locked_manual;
   _statusSnapshot.recording_cta_state=d.recording_cta_state||(d.recording?'recording':(d.track&&d.track!=='No Track'?'ready':'blocked_no_track'));
   _statusSnapshot.recording_cta_reason=d.recording_cta_reason||(_statusSnapshot.recording_cta_state==='blocked_no_track'?'Select a track before recording.':'');
+  _statusSnapshot.current_track_distance_m=Number(d.current_track_distance_m);
+  if(isNaN(_statusSnapshot.current_track_distance_m)){
+    _statusSnapshot.current_track_distance_m=-1;
+  }
+  _statusSnapshot.nearby_tracks=normalizeNearbyTracks(d.nearby_tracks);
   renderCurrentTrackSummary();
+  renderNearbyTrackChooser();
   renderTracksList();
   updateRecBtn();
 }
@@ -887,6 +960,20 @@ function initTrackCreationUi(){
     };
   }
   if($('create-track-btn')){$('create-track-btn').onclick=addTrack;}
+  if($('nearby-tracks')){
+    $('nearby-tracks').onclick=function(evt){
+      var target=evt&&evt.target;
+      var action=target&&target.getAttribute?target.getAttribute('data-nearby-action'):'';
+      var id=target&&target.getAttribute?target.getAttribute('data-track-id'):'';
+      if(action==='select'&&id){
+        selectTrack(id,'manual');
+        return;
+      }
+      if(action==='auto'){
+        selectTrack('', 'auto');
+      }
+    };
+  }
   if($('track-name')){
     $('track-name').addEventListener('input',function(){
       renderTrackDraft();
@@ -952,7 +1039,8 @@ function saveSettings(){
 }
 
 function selectTrack(id,source){
-  var payload={id:id};
+  var payload={};
+  if(id){payload.id=id;}
   if(source){payload.source=source;}
   return fetch('/api/tracks/select',{
     method:'POST',

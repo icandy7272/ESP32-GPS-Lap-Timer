@@ -181,6 +181,19 @@ assert.match(markup, /Stop Recording/);
 assert.match(manualTrackMarkup, /Selected manually/);
 assert.match(manualTrackMarkup, /Ready to Record/);
 assert.match(manualTrackMarkup, /Current/);
+assert.match(manualTrackMarkup, /Nearby Tracks/);
+assert.match(manualTrackMarkup, /Resume Auto/);
+assert.match(manualTrackMarkup, /36 m/);
+assert.match(manualTrackMarkup, /18 m/);
+assert.match(manualTrackMarkup, /96 m/);
+{
+  const nearbySection = manualTrackMarkup.slice(manualTrackMarkup.indexOf("Nearby Tracks"));
+  assert.ok(
+    nearbySection.indexOf("Zhuhai International Circuit") <
+      nearbySection.indexOf("Ningbo Kart Center"),
+    "nearby alternatives should be sorted by distance",
+  );
+}
 assert.match(stabilizingMarkup, /Hold still\.\.\. stabilizing/i);
 assert.match(stabilizingMarkup, /web-console__gps-bar--warn/);
 assert.match(

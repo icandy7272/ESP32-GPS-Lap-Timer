@@ -210,16 +210,43 @@ void handle_api_tracks_select() {
     const char* json = body.c_str();
     char id[32] = {};
     char source[24] = {};
-    if (!json_extract_str(json, "id", id, sizeof(id))) {
+    bool has_id = json_extract_str(json, "id", id, sizeof(id));
+    if (!has_id && !json_extract_str(json, "source", source, sizeof(source))) {
         server.send(400, "application/json", "{\"error\":\"missing id\"}");
         return;
     }
-    bool has_source = json_extract_str(json, "source", source, sizeof(source));
+    bool has_source = source[0] != '\0'
+        || json_extract_str(json, "source", source, sizeof(source));
+    bool use_auto = has_source && strcmp(source, "auto") == 0;
 
-    const TrackDefinition* track = track_get_by_id(id);
-    if (!track) {
-        server.send(404, "application/json", "{\"error\":\"track not found\"}");
-        return;
+    const TrackDefinition* track = nullptr;
+    if (use_auto) {
+        bool gps_fix = false;
+        double lat = 0.0;
+        double lon = 0.0;
+        if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            gps_fix = session_state.gps_fix_ok;
+            lat = session_state.gps_lat_deg;
+            lon = session_state.gps_lon_deg;
+            xSemaphoreGive(session_mutex);
+        }
+        if (!gps_fix) {
+            server.send(409, "application/json",
+                        "{\"error\":\"gps fix required for auto mode\"}");
+            return;
+        }
+        track = track_auto_detect(lat, lon);
+        if (!track) {
+            server.send(404, "application/json",
+                        "{\"error\":\"no nearby track for auto mode\"}");
+            return;
+        }
+    } else {
+        track = track_get_by_id(id);
+        if (!track) {
+            server.send(404, "application/json", "{\"error\":\"track not found\"}");
+            return;
+        }
     }
 
     // Update lap timer with new track (copies data, resets state)
@@ -232,8 +259,12 @@ void handle_api_tracks_select() {
         xSemaphoreGive(session_mutex);
     }
 
-    track_runtime_note_manual_selection(
-        has_source && strcmp(source, "newly_created") == 0);
+    if (use_auto) {
+        track_runtime_note_auto_detect();
+    } else {
+        track_runtime_note_manual_selection(
+            has_source && strcmp(source, "newly_created") == 0);
+    }
 
     char buf[128];
     snprintf(buf, sizeof(buf), "{\"ok\":true,\"name\":\"%s\"}", track->name);
