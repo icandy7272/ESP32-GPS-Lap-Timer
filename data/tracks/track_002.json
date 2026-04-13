@@ -1,0 +1,15 @@
+{
+  "id": "track_002",
+  "name": "Test Track",
+  "center_lat": 40.0060655,
+  "center_lon": 116.4585152,
+  "approx_length_m": 0,
+  "start_finish": {
+    "lat1": 40.0061112,
+    "lon1": 116.4585263,
+    "lat2": 40.0060197,
+    "lon2": 116.4585040,
+    "heading": 281.0
+  },
+  "sectors": []
+}
