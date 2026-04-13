@@ -40,6 +40,7 @@ void handle_finish_crossing(int64_t crossing_us) {
         s_current_sector = 0;
         delta_set_lap_start(crossing_us);
         delta_reset_elapsed();
+        Serial.printf("[lap] first crossing — timer started\n");
 
         if (!session_state.is_recording) {
             const char* tname = session_state.track_name[0] != '\0'
@@ -62,9 +63,13 @@ void handle_finish_crossing(int64_t crossing_us) {
 
     int64_t elapsed_us = crossing_us - s_lap_start_us;
     int32_t lap_time_ms = (int32_t)(elapsed_us / 1000);
+    bool valid = is_lap_valid(lap_time_ms);
+
+    Serial.printf("[lap] finish crossing — lap_ms=%d valid=%d best=%d\n",
+                  lap_time_ms, valid, s_best_lap_time_ms);
 
     bool is_new_best = false;
-    if (is_lap_valid(lap_time_ms)) {
+    if (valid) {
         if (s_best_lap_time_ms < 0 || lap_time_ms < s_best_lap_time_ms) {
             s_best_lap_time_ms = lap_time_ms;
             is_new_best = true;

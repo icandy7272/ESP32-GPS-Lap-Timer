@@ -9,7 +9,7 @@
 namespace lap_timer_internal {
 
 static constexpr float HEADING_WINDOW = 60.0f;
-static constexpr double ARM_DISTANCE_M = 50.0;
+static constexpr double ARM_DISTANCE_M = 10.0;  // TODO: restore to 50.0 after testing
 static constexpr int DEBOUNCE_SAMPLES = 2;
 static constexpr int32_t MIN_LAP_TIME_MS = 15000;
 static constexpr float MAX_LAP_RATIO = 1.5f;

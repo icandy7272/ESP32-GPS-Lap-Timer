@@ -321,11 +321,18 @@ int32_t delta_calculate(const GpsPoint* current) {
         return s_frozen_delta_ms;
     }
 
+    // Guard against start/finish ambiguity: at the very start of a lap,
+    // the GPS position near the start/finish line can project to the
+    // END of the reference polyline (which is at the same location),
+    // producing a huge negative delta.  Reject high-progress matches
+    // in the first few seconds.
+    int64_t current_elapsed_us = current->timestamp_us - s_lap_start_us;
+    if (current_elapsed_us < 5000000 && proj.progress > 0.75) {
+        return 0;
+    }
+
     // Look up reference time at the same progress
     int64_t ref_elapsed_us = ref_time_at_progress(proj.progress);
-
-    // Current elapsed time
-    int64_t current_elapsed_us = current->timestamp_us - s_lap_start_us;
 
     // Delta = current - reference (positive = slower)
     int64_t delta_us = current_elapsed_us - ref_elapsed_us;

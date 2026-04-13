@@ -1,5 +1,6 @@
 #include "lap_timer_internal.h"
 
+#include <Arduino.h>
 #include <math.h>
 
 namespace lap_timer_internal {
@@ -119,8 +120,10 @@ static void update_arm_distance(int line_idx,
     double dist = haversine_m(prev->lat_deg, prev->lon_deg,
                               curr->lat_deg, curr->lon_deg);
     s_arm_distance[line_idx] += dist;
-    if (s_arm_distance[line_idx] > ARM_DISTANCE_M) {
+    if (s_arm_distance[line_idx] > ARM_DISTANCE_M && !s_arm_ready[line_idx]) {
         s_arm_ready[line_idx] = true;
+        Serial.printf("[xing] L%d ARMED at %.1fm\n",
+                      line_idx, s_arm_distance[line_idx]);
     }
 }
 
@@ -170,6 +173,8 @@ void process_line(int line_idx,
         if (debounce_feed(line_idx, curr, line)) {
             int64_t crossing_us = s_debounce_crossing_us[line_idx];
             reset_arm(line_idx);
+            Serial.printf("[xing] L%d CROSSED arm=%.1f\n",
+                          line_idx, s_arm_distance[line_idx]);
 
             if (line_idx == 0) {
                 handle_finish_crossing(crossing_us);
@@ -183,12 +188,27 @@ void process_line(int line_idx,
     if (!s_arm_ready[line_idx]) {
         return;
     }
+
+    double s_prev_val = side_of_line(prev->lat_deg, prev->lon_deg, line);
+    double s_curr_val = side_of_line(curr->lat_deg, curr->lon_deg, line);
+    bool side_changed = (s_prev_val > 0.0) != (s_curr_val > 0.0);
+
+    if (side_changed) {
+        float hdiff = heading_diff(curr->heading_deg, line->valid_heading_deg);
+        if (fabsf(hdiff) > HEADING_WINDOW) {
+            Serial.printf("[xing] L%d side_flip hdiff=%.0f REJECTED\n",
+                          line_idx, hdiff);
+        }
+    }
+
     if (!has_crossed_line(prev, curr, line)) {
         return;
     }
 
     int64_t crossing_us = compute_crossing_time(line);
     double crossed_side = side_of_line(curr->lat_deg, curr->lon_deg, line);
+    Serial.printf("[xing] L%d debounce_start side=%.2e\n",
+                  line_idx, crossed_side);
     debounce_start(line_idx, crossing_us, crossed_side);
 }
 
