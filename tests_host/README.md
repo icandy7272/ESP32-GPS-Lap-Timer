@@ -11,6 +11,8 @@ extracted from the firmware specifically to be testable.
 |---|---|---|
 | `test_track_runtime.cpp` | `src/track_runtime.cpp` | Track lifecycle decisions (boot detection sync, delete-while-recording guard, late auto-detect guard) — pure functions over `TrackDefinition` and primitive types, no Arduino/FreeRTOS deps |
 | `test_storage_naming.cpp` | `src/storage_naming.cpp` | Final session VBO path layout — pure string formatting |
+| `test_button_profile.cpp` | `src/button_profile.cpp` | Button event classification and profile lookup logic over plain enums/structs with no hardware dependencies |
+| `test_time_format.cpp` | `src/time_format.cpp` | Lap/delta time string formatting using pure integer and buffer logic |
 
 ## Running
 
