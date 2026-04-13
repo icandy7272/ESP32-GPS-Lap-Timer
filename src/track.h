@@ -13,6 +13,7 @@
 
 #include <stdbool.h>
 #include "types.h"
+#include "track_creation_feedback.h"
 
 // Maximum number of tracks held in memory.
 static constexpr int MAX_TRACKS = 20;
@@ -63,6 +64,7 @@ bool track_load_first(TrackDefinition* out);
 // The track ID is auto-generated (max existing NNN + 1).
 // Returns true on success.
 bool track_save(const TrackDefinition* track);
+TrackSaveResult track_save_detailed(const TrackDefinition* track);
 
 // Delete a track by ID from both SD card and memory.
 // Returns true if found and deleted.

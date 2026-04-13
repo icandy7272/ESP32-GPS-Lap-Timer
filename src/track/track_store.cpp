@@ -1,6 +1,7 @@
 #include "track_internal.h"
 
 #include "../track_runtime.h"
+#include "../track_creation_feedback.h"
 
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
@@ -110,9 +111,12 @@ bool track_load_first(TrackDefinition* out) {
     return true;
 }
 
-bool track_save(const TrackDefinition* track) {
-    if (!track || s_track_count >= MAX_TRACKS) {
-        return false;
+TrackSaveResult track_save_detailed(const TrackDefinition* track) {
+    if (!track) {
+        return TRACK_SAVE_RESULT_INVALID_ARGUMENT;
+    }
+    if (s_track_count >= MAX_TRACKS) {
+        return TRACK_SAVE_RESULT_CAPACITY_REACHED;
     }
 
     int next_num = find_max_track_number() + 1;
@@ -122,7 +126,7 @@ bool track_save(const TrackDefinition* track) {
 
     char json_buf[JSON_BUF_SIZE];
     if (!track_format_track_json(&new_track, json_buf, sizeof(json_buf))) {
-        return false;
+        return TRACK_SAVE_RESULT_FORMAT_FAILED;
     }
 
     char path[PATH_BUF_LEN];
@@ -131,38 +135,55 @@ bool track_save(const TrackDefinition* track) {
     xSemaphoreTake(spi_mutex, portMAX_DELAY);
 
     bool dir_ok = sd.exists(TRACKS_DIR);
+    bool dir_recreated = false;
     if (!dir_ok) {
         Serial.printf("[track] directory missing: %s — recreating\n", TRACKS_DIR);
         dir_ok = sd.mkdir(TRACKS_DIR);
+        dir_recreated = dir_ok;
+    }
+    if (!dir_ok) {
+        xSemaphoreGive(spi_mutex);
+        Serial.printf("[track] failed to create directory: %s\n", TRACKS_DIR);
+        return TRACK_SAVE_RESULT_DIRECTORY_CREATE_FAILED;
     }
 
     FsFile file;
-    bool ok = dir_ok && file.open(path, O_WRONLY | O_CREAT | O_TRUNC);
-    if (ok) {
-        size_t len = strlen(json_buf);
-        size_t written = file.write(json_buf, len);
-        file.flush();
-        file.sync();
-        file.close();
-        if (written != len) {
-            Serial.printf("[track] partial write: %u/%u bytes to %s\n",
-                          (unsigned)written, (unsigned)len, path);
-            ok = false;
-        }
+    if (!file.open(path, O_WRONLY | O_CREAT | O_TRUNC)) {
+        xSemaphoreGive(spi_mutex);
+        Serial.printf("[track] failed to open: %s\n", path);
+        return TRACK_SAVE_RESULT_FILE_OPEN_FAILED;
     }
+
+    size_t len = strlen(json_buf);
+    size_t written = file.write(json_buf, len);
+    file.flush();
+    if (written != len) {
+        file.close();
+        xSemaphoreGive(spi_mutex);
+        Serial.printf("[track] partial write: %u/%u bytes to %s\n",
+                      (unsigned)written, (unsigned)len, path);
+        return TRACK_SAVE_RESULT_FILE_WRITE_SHORT;
+    }
+    if (!file.sync()) {
+        file.close();
+        xSemaphoreGive(spi_mutex);
+        Serial.printf("[track] sync failed: %s\n", path);
+        return TRACK_SAVE_RESULT_FILE_SYNC_FAILED;
+    }
+    file.close();
 
     xSemaphoreGive(spi_mutex);
-
-    if (!ok) {
-        Serial.printf("[track] failed to write: %s (dir_ok=%d)\n", path, dir_ok);
-        return false;
-    }
 
     s_tracks[s_track_count] = new_track;
     s_track_count++;
 
     Serial.printf("[track] saved: %s (%s)\n", new_track.id, new_track.name);
-    return true;
+    return dir_recreated ? TRACK_SAVE_RESULT_SUCCESS_DIR_RECREATED
+                         : TRACK_SAVE_RESULT_SUCCESS;
+}
+
+bool track_save(const TrackDefinition* track) {
+    return track_creation_save_result_succeeded(track_save_detailed(track));
 }
 
 bool track_delete(const char* id) {

@@ -445,6 +445,43 @@ body {
   gap: 10px;
 }
 
+.web-console__review-metrics {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.web-console__review-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: max-content;
+  max-width: 100%;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 165, 250, 0.3);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.web-console__review-badge--high {
+  color: #bbf7d0;
+  background: rgba(20, 83, 45, 0.92);
+  border-color: rgba(74, 222, 128, 0.42);
+}
+
+.web-console__review-badge--medium {
+  color: #fde68a;
+  background: rgba(113, 63, 18, 0.88);
+  border-color: rgba(245, 158, 11, 0.42);
+}
+
+.web-console__review-badge--low {
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.88);
+  border-color: rgba(248, 113, 113, 0.42);
+}
+
 .web-console__gps-bar {
   display: grid;
   gap: 7px;

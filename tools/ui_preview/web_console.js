@@ -78,7 +78,14 @@
     if (lat == null || lon == null) {
       return null;
     }
-    return { lat: lat, lon: lon };
+    return {
+      lat: lat,
+      lon: lon,
+      sampleCount: hasOwn(point, "sampleCount") ? toFiniteNumber(point.sampleCount, 6) : 6,
+      spreadM: hasOwn(point, "spreadM") ? toFiniteNumber(point.spreadM, 0) : 0,
+      captureAgeMs: hasOwn(point, "captureAgeMs") ? toFiniteNumber(point.captureAgeMs, 0) : 0,
+      confidence: hasOwn(point, "confidence") ? String(point.confidence || "") : "",
+    };
   }
 
   function formatCoord(point, fallback) {
@@ -86,6 +93,40 @@
       return fallback || "Not set";
     }
     return point.lat.toFixed(7) + ", " + point.lon.toFixed(7);
+  }
+
+  function pointSampleCount(point) {
+    return hasOwn(point, "sampleCount") ? toFiniteNumber(point.sampleCount, 6) : 6;
+  }
+
+  function pointSpreadMeters(point) {
+    return hasOwn(point, "spreadM") ? toFiniteNumber(point.spreadM, 0) : 0;
+  }
+
+  function pointConfidenceTier(point) {
+    if (point && point.confidence) {
+      return String(point.confidence);
+    }
+    var sampleCount = pointSampleCount(point);
+    var spreadM = pointSpreadMeters(point);
+    if (sampleCount >= 5 && spreadM <= 1.2) {
+      return "high";
+    }
+    if (sampleCount >= 3 && spreadM <= 2.5) {
+      return "medium";
+    }
+    return "low";
+  }
+
+  function pointConfidenceActionLabel(point) {
+    var tier = typeof point === "string" ? point : pointConfidenceTier(point);
+    if (tier === "high") {
+      return "Good - ready to save";
+    }
+    if (tier === "medium") {
+      return "Acceptable - short lines may drift";
+    }
+    return "Noisy - try again";
   }
 
   function renderEmptyListItem(label) {
@@ -497,13 +538,91 @@
     });
   }
 
-  function isCreateReady(draft) {
+  function lineConfidenceInfo(line) {
+    if (!line || !line.p1 || !line.p2) {
+      return {
+        ready: false,
+        tier: "low",
+        label: "Mark both points to review",
+        lineLengthM: 0,
+        shortThresholdM: 5,
+        maxSpreadM: 0,
+        isShort: false,
+      };
+    }
+
+    var lineLengthM = haversineApproxMeters(line.p1, line.p2);
+    var maxSpreadM = Math.max(pointSpreadMeters(line.p1), pointSpreadMeters(line.p2));
+    var shortThresholdM = Math.max(5, 4 * maxSpreadM);
+    var isShort = lineLengthM < shortThresholdM;
+    var p1Tier = pointConfidenceTier(line.p1);
+    var p2Tier = pointConfidenceTier(line.p2);
+    var minTier = Math.min(
+      p1Tier === "high" ? 3 : (p1Tier === "medium" ? 2 : 1),
+      p2Tier === "high" ? 3 : (p2Tier === "medium" ? 2 : 1),
+    );
+
+    if (isShort && (p1Tier !== "high" || p2Tier !== "high")) {
+      return {
+        ready: false,
+        tier: "low",
+        label: "Short line: higher confidence required",
+        lineLengthM: lineLengthM,
+        shortThresholdM: shortThresholdM,
+        maxSpreadM: maxSpreadM,
+        isShort: true,
+      };
+    }
+
+    if (minTier >= 3) {
+      return {
+        ready: true,
+        tier: "high",
+        label: "Good - ready to save",
+        lineLengthM: lineLengthM,
+        shortThresholdM: shortThresholdM,
+        maxSpreadM: maxSpreadM,
+        isShort: isShort,
+      };
+    }
+
+    if (minTier >= 2) {
+      return {
+        ready: true,
+        tier: "medium",
+        label: "Acceptable - short lines may drift",
+        lineLengthM: lineLengthM,
+        shortThresholdM: shortThresholdM,
+        maxSpreadM: maxSpreadM,
+        isShort: isShort,
+      };
+    }
+
+    return {
+      ready: false,
+      tier: "low",
+      label: "Noisy - try again",
+      lineLengthM: lineLengthM,
+      shortThresholdM: shortThresholdM,
+      maxSpreadM: maxSpreadM,
+      isShort: isShort,
+    };
+  }
+
+  function isReviewReady(draft) {
     return Boolean(
       draft.name.trim() &&
       draft.startFinish.p1 &&
       draft.startFinish.p2 &&
       draft.startFinish.heading != null &&
-      !hasIncompleteSectors(draft) &&
+      !hasIncompleteSectors(draft)
+    );
+  }
+
+  function isCreateReady(draft) {
+    return Boolean(
+      isReviewReady(draft) &&
+      lineConfidenceInfo(draft.startFinish).ready &&
       !draft.submitPending
     );
   }
@@ -512,7 +631,7 @@
     if (!draft.name.trim()) {
       return "name";
     }
-    if (!isCreateReady(draft)) {
+    if (!isReviewReady(draft)) {
       return "start_finish";
     }
     return "review";
@@ -695,27 +814,125 @@
     return radiusM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
-  function projectReviewPoint(point, bounds, width, height, padding) {
-    var spanX = bounds.maxLon - bounds.minLon;
-    var spanY = bounds.maxLat - bounds.minLat;
-    if (spanX === 0) {
-      spanX = 0.0001;
-    }
-    if (spanY === 0) {
-      spanY = 0.0001;
-    }
-
+  function localOriginPoint(points) {
+    var lat = 0;
+    var lon = 0;
+    points.forEach(function (point) {
+      lat += point.lat;
+      lon += point.lon;
+    });
     return {
-      x: padding + ((point.lon - bounds.minLon) / spanX) * (width - padding * 2),
-      y: height - padding - ((point.lat - bounds.minLat) / spanY) * (height - padding * 2),
+      lat: lat / points.length,
+      lon: lon / points.length,
     };
   }
 
+  function projectPointMeters(point, origin) {
+    var lonScale = 111320 * Math.cos(origin.lat * Math.PI / 180);
+    if (Math.abs(lonScale) < 0.000001) {
+      lonScale = 0.000001;
+    }
+    return {
+      x: (point.lon - origin.lon) * lonScale,
+      y: (point.lat - origin.lat) * 110540,
+    };
+  }
+
+  function reviewProjection(lines, width, height, padding) {
+    var points = [];
+    lines.forEach(function (entry) {
+      points.push(entry.line.p1);
+      points.push(entry.line.p2);
+    });
+    var origin = localOriginPoint(points);
+    var bounds = {
+      minX: Infinity,
+      maxX: -Infinity,
+      minY: Infinity,
+      maxY: -Infinity,
+    };
+
+    points.forEach(function (point) {
+      var projected = projectPointMeters(point, origin);
+      bounds.minX = Math.min(bounds.minX, projected.x);
+      bounds.maxX = Math.max(bounds.maxX, projected.x);
+      bounds.minY = Math.min(bounds.minY, projected.y);
+      bounds.maxY = Math.max(bounds.maxY, projected.y);
+    });
+
+    if (bounds.minX === bounds.maxX) {
+      bounds.minX -= 0.5;
+      bounds.maxX += 0.5;
+    }
+    if (bounds.minY === bounds.maxY) {
+      bounds.minY -= 0.5;
+      bounds.maxY += 0.5;
+    }
+
+    var innerW = width - padding * 2;
+    var innerH = height - padding * 2;
+    var spanX = bounds.maxX - bounds.minX;
+    var spanY = bounds.maxY - bounds.minY;
+    var scale = Math.min(innerW / spanX, innerH / spanY);
+    var usedW = spanX * scale;
+    var usedH = spanY * scale;
+
+    return {
+      origin: origin,
+      bounds: bounds,
+      width: width,
+      height: height,
+      padding: padding,
+      scale: scale,
+      ox: padding + (innerW - usedW) / 2,
+      oy: padding + (innerH - usedH) / 2,
+    };
+  }
+
+  function projectReviewPoint(point, projection) {
+    var local = projectPointMeters(point, projection.origin);
+    return {
+      x: projection.ox + (local.x - projection.bounds.minX) * projection.scale,
+      y: projection.height - projection.oy - (local.y - projection.bounds.minY) * projection.scale,
+    };
+  }
+
+  function reviewScaleMeters(projection) {
+    var candidates = [1, 2, 5, 10, 20, 50, 100, 200];
+    var maxMeters = (projection.width - projection.padding * 2) * 0.32 / projection.scale;
+    var chosen = candidates[0];
+    candidates.forEach(function (candidate) {
+      if (candidate <= maxMeters) {
+        chosen = candidate;
+      }
+    });
+    return chosen;
+  }
+
+  function renderReviewMetric(label, value) {
+    return (
+      '<div class="web-console__helper">' +
+      "<strong>" + escapeHtml(label) + ":</strong> " + escapeHtml(value) +
+      "</div>"
+    );
+  }
+
+  function renderReviewConfidenceBadge(lineInfo) {
+    return (
+      '<div class="web-console__review-badge web-console__review-badge--' +
+      escapeHtml(lineInfo.tier) +
+      '">' +
+      escapeHtml(lineInfo.label) +
+      "</div>"
+    );
+  }
+
   function renderGeometryReviewMarkup(draft) {
-    if (!isCreateReady(draft)) {
+    if (!isReviewReady(draft)) {
       return '<div class="web-console__helper">Complete the name and geometry to unlock review.</div>';
     }
 
+    var lineInfo = lineConfidenceInfo(draft.startFinish);
     var lines = [
       { label: "Start/Finish", line: draft.startFinish, color: "#38bdf8" },
     ];
@@ -723,38 +940,53 @@
       lines.push({ label: "S" + String(index + 1), line: sector, color: "#f59e0b" });
     });
 
-    var bounds = {
-      minLat: Infinity,
-      maxLat: -Infinity,
-      minLon: Infinity,
-      maxLon: -Infinity,
-    };
-    lines.forEach(function (entry) {
-      [entry.line.p1, entry.line.p2].forEach(function (point) {
-        bounds.minLat = Math.min(bounds.minLat, point.lat);
-        bounds.maxLat = Math.max(bounds.maxLat, point.lat);
-        bounds.minLon = Math.min(bounds.minLon, point.lon);
-        bounds.maxLon = Math.max(bounds.maxLon, point.lon);
-      });
-    });
-
     var width = 240;
     var height = 160;
     var padding = 18;
+    var projection = reviewProjection(lines, width, height, padding);
+    var scaleMeters = reviewScaleMeters(projection);
+    var scalePixels = scaleMeters * projection.scale;
     var svg = '<svg viewBox="0 0 ' + width + " " + height + '" aria-label="Track geometry review">';
     svg += '<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="14" fill="#0b1827" stroke="#2a3c52"></rect>';
+    svg += '<g class="review-north">';
+    svg += '<line x1="' + (width - 24) + '" y1="42" x2="' + (width - 24) + '" y2="20" stroke="#dbeafe" stroke-width="2.5" stroke-linecap="round"></line>';
+    svg += '<polygon points="' + (width - 24) + ',14 ' + (width - 29) + ',24 ' + (width - 19) + ',24" fill="#dbeafe"></polygon>';
+    svg += '<text x="' + (width - 24) + '" y="56" fill="#dbeafe" font-size="10" text-anchor="middle">North</text>';
+    svg += "</g>";
     lines.forEach(function (entry) {
-      var start = projectReviewPoint(entry.line.p1, bounds, width, height, padding);
-      var end = projectReviewPoint(entry.line.p2, bounds, width, height, padding);
-      svg += '<line x1="' + start.x.toFixed(1) + '" y1="' + start.y.toFixed(1) + '" x2="' + end.x.toFixed(1) + '" y2="' + end.y.toFixed(1) + '" stroke="' + entry.color + '" stroke-width="4" stroke-linecap="round"></line>';
+      var start = projectReviewPoint(entry.line.p1, projection);
+      var end = projectReviewPoint(entry.line.p2, projection);
+      var startRadius = Math.max(6, pointSpreadMeters(entry.line.p1) * projection.scale);
+      var endRadius = Math.max(6, pointSpreadMeters(entry.line.p2) * projection.scale);
+      svg += '<circle class="review-uncertainty" cx="' + start.x.toFixed(1) + '" cy="' + start.y.toFixed(1) + '" r="' + startRadius.toFixed(1) + '" fill="' + entry.color + '" fill-opacity="0.16" stroke="' + entry.color + '" stroke-opacity="0.35"></circle>';
+      svg += '<circle class="review-uncertainty" cx="' + end.x.toFixed(1) + '" cy="' + end.y.toFixed(1) + '" r="' + endRadius.toFixed(1) + '" fill="' + entry.color + '" fill-opacity="0.16" stroke="' + entry.color + '" stroke-opacity="0.35"></circle>';
+      svg += '<line data-review-label="' + escapeHtml(entry.label) + '" x1="' + start.x.toFixed(1) + '" y1="' + start.y.toFixed(1) + '" x2="' + end.x.toFixed(1) + '" y2="' + end.y.toFixed(1) + '" stroke="' + entry.color + '" stroke-width="4" stroke-linecap="round"></line>';
       svg += '<circle cx="' + start.x.toFixed(1) + '" cy="' + start.y.toFixed(1) + '" r="4" fill="' + entry.color + '"></circle>';
       svg += '<circle cx="' + end.x.toFixed(1) + '" cy="' + end.y.toFixed(1) + '" r="4" fill="' + entry.color + '"></circle>';
       svg += '<text x="' + ((start.x + end.x) / 2).toFixed(1) + '" y="' + ((start.y + end.y) / 2 - 8).toFixed(1) + '" fill="#dbeafe" font-size="11" text-anchor="middle">' + escapeHtml(entry.label) + "</text>";
     });
+    svg += '<line class="review-scale-bar" x1="' + padding + '" y1="' + (height - padding) + '" x2="' + (padding + scalePixels).toFixed(1) + '" y2="' + (height - padding) + '" stroke="#dbeafe" stroke-width="3" stroke-linecap="round"></line>';
+    svg += '<text x="' + (padding + scalePixels / 2).toFixed(1) + '" y="' + (height - padding - 8) + '" fill="#dbeafe" font-size="10" text-anchor="middle">Scale ' + escapeHtml(String(scaleMeters)) + " m</text>";
     svg += "</svg>";
 
-    if (reviewLineLengthMeters(draft.startFinish) < 5) {
-      svg += '<div class="web-console__helper web-console__track-msg--error">Start/finish looks very short.</div>';
+    svg += '<div class="web-console__review-metrics">';
+    svg += renderReviewConfidenceBadge(lineInfo);
+    svg += renderReviewMetric("Line length", lineInfo.lineLengthM.toFixed(1) + " m");
+    svg += renderReviewMetric(
+      "Crossing",
+      headingArrow(draft.startFinish.heading) +
+      " " +
+      Math.round(draft.startFinish.heading) +
+      "° " +
+      compassLabel(draft.startFinish.heading),
+    );
+    svg += renderReviewMetric("Scale", String(scaleMeters) + " m");
+    svg += "</div>";
+
+    if (lineInfo.isShort && !lineInfo.ready) {
+      svg += '<div class="web-console__helper web-console__track-msg--error">' +
+        escapeHtml(lineInfo.label + ". Re-mark with a longer line or steadier GPS.") +
+        "</div>";
     }
 
     return svg;
@@ -805,7 +1037,7 @@
           '<div class="web-console__current-track web-console__current-track--nearby review-panel">' +
           renderGeometryReviewMarkup(draft) +
           "</div>" +
-          '<div class="web-console__helper">A new track becomes current immediately after creation.</div>' +
+          '<div class="web-console__helper">A new track becomes current immediately after creation. Do not close or refresh this page during track creation.</div>' +
           '<button type="button" class="web-console__primary-button' +
           (canCreate ? "" : " web-console__primary-button--disabled") +
           '"' +

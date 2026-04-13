@@ -78,6 +78,7 @@ static String build_style_section() {
            ".mark-btn{width:100%;min-height:44px;padding:10px 12px;font-size:0.95em;"
              "margin-top:0}"
            ".mark-btn.marked{background:#12391f;color:#7ff5a1;border:1px solid #2faa5a}"
+           ".mark-btn.cancel-btn{background:#45556f;color:#eef4ff}"
            ".coord{font-family:monospace;font-size:12px;color:#8ec5ff;"
              "word-break:break-word;padding:2px 0}"
            ".heading-bar{display:flex;align-items:center;justify-content:space-between;"
@@ -120,6 +121,13 @@ static String build_style_section() {
            ".creation-step.active{border-color:#60a5fa;color:#dbeafe;background:#17304d}"
            ".creation-stage{margin-bottom:12px}"
            ".review-panel svg{width:100%;height:auto;display:block}"
+           ".review-metrics{display:grid;gap:6px;margin-top:10px}"
+           ".review-badge{display:inline-flex;align-items:center;justify-content:center;"
+             "width:max-content;max-width:100%;padding:4px 10px;border-radius:999px;"
+             "font-size:12px;font-weight:bold;border:1px solid #355175}"
+           ".review-badge.high{background:#12391f;border-color:#2faa5a;color:#7ff5a1}"
+           ".review-badge.medium{background:#3a2d12;border-color:#f59e0b;color:#fde68a}"
+           ".review-badge.low{background:#3b1720;border-color:#ef4444;color:#fecaca}"
            ".review-copy{margin-top:8px}"
            ".sessions-list{display:grid;gap:8px}"
            ".session-card{border:1px solid #2a3c52;border-radius:8px;padding:10px;"
@@ -219,10 +227,15 @@ static String build_body_section() {
              "Sector Splits (optional)</button>"
            "<div id=\"sector-list\"></div>"
            "<button type=\"button\" id=\"add-sector-btn\" class=\"mark-btn\">+ Add Sector</button>"
+           "<button type=\"button\" id=\"sample-cancel-btn\" class=\"mark-btn cancel-btn\" style=\"display:none\">"
+             "Cancel Sample</button>"
            "</div>"
            "<div id=\"creation-stage-review\" class=\"creation-stage\">"
            "<div id=\"geometry-review\" class=\"current-track-panel review-panel\"></div>"
            "<div id=\"review-copy\" class=\"helper-text review-copy\"></div>"
+           "<button type=\"button\" id=\"repeatability-btn\" class=\"mark-btn\" style=\"display:none\">"
+             "Repeatability Check</button>"
+           "<div id=\"repeatability-summary\" class=\"helper-text\"></div>"
            "<button type=\"button\" id=\"create-track-btn\" class=\"primary-btn\" disabled>"
              "Create Track</button>"
            "<div id=\"track-create-msg\" class=\"helper-text\"></div>"
@@ -265,11 +278,21 @@ var _gpsStabilitySamples=[];
 var GPS_STABILITY_MIN_SATS=4;
 var GPS_STABILITY_SAMPLE_COUNT=3;
 var GPS_STABILITY_MAX_SPREAD_M=2.5;
+var POINT_SAMPLE_WINDOW_MS=2400;
+var POINT_SAMPLE_INTERVAL_MS=400;
+var POINT_SAMPLE_MIN_VALID_COUNT=3;
+var POINT_SAMPLE_HIGH_SPREAD_M=1.2;
+var POINT_SAMPLE_MEDIUM_SPREAD_M=2.5;
+var SHORT_LINE_MIN_LENGTH_M=5;
+var SHORT_LINE_SPREAD_FACTOR=4;
+var REPEATABILITY_CHECK_ENABLED=false;
+var _pointSampling=null;
 var _trackDraft={
   gps:{fix:false,satellites:0,lat:0,lon:0},
   startFinish:{p1:null,p2:null,heading:null,flipped:false},
   sectors:[],
-  sectorsExpanded:false
+  sectorsExpanded:false,
+  repeatability:makeRepeatabilityState(false)
 };
 var _statusSnapshot={
   track:'',
@@ -283,6 +306,23 @@ var _statusSnapshot={
 };
 var _trackList=[];
 var _advancedSettingsOpen=false;
+var _statusRefreshTimer=0;
+var _statusRefreshInFlight=false;
+var _gpsLastUpdateMs=-1;
+var _statusRequestSeq=0;
+
+function makeRepeatabilityState(flipped){
+  return {
+    active:false,
+    status:'idle',
+    candidate:{p1:null,p2:null,heading:null,flipped:!!flipped},
+    result:null
+  };
+}
+
+function resetRepeatabilityState(){
+  _trackDraft.repeatability=makeRepeatabilityState(_trackDraft.startFinish.flipped);
+}
 
 function formatCoord(point){
   if(!point){return 'Not set';}
@@ -331,11 +371,14 @@ function hasIncompleteSectors(){
 }
 
 function isCreateReady(){
+  var lineInfo=lineConfidenceInfo(_trackDraft.startFinish);
   var nameField=$('track-name');
   return !!(nameField&&nameField.value.trim()&&
             _trackDraft.startFinish.p1&&
             _trackDraft.startFinish.p2&&
             typeof _trackDraft.startFinish.heading==='number'&&
+            lineInfo.ready&&
+            !_trackDraft.repeatability.active&&
             !hasIncompleteSectors());
 }
 
@@ -352,6 +395,10 @@ function currentGpsPoint(){
   return {lat:_trackDraft.gps.lat,lon:_trackDraft.gps.lon};
 }
 
+function sampleTargetCount(){
+  return Math.max(1,Math.floor(POINT_SAMPLE_WINDOW_MS/POINT_SAMPLE_INTERVAL_MS));
+}
+
 function distanceMeters(p1,p2){
   var radiusM=6371000;
   var lat1=p1.lat*Math.PI/180;
@@ -362,6 +409,211 @@ function distanceMeters(p1,p2){
     +Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)*Math.sin(dLon/2);
   var c=2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
   return radiusM*c;
+}
+
+function sortNumericAsc(a,b){
+  return a-b;
+}
+
+function medianValue(values){
+  var sorted=values.slice().sort(sortNumericAsc);
+  var mid=Math.floor(sorted.length/2);
+  if(!sorted.length){return 0;}
+  if(sorted.length%2){return sorted[mid];}
+  return (sorted[mid-1]+sorted[mid])/2;
+}
+
+function localOriginPoint(points){
+  var lat=0;
+  var lon=0;
+  points.forEach(function(point){
+    lat+=point.lat;
+    lon+=point.lon;
+  });
+  return {
+    lat:lat/points.length,
+    lon:lon/points.length
+  };
+}
+
+function lonMetersPerDegree(lat){
+  return 111320*Math.cos(lat*Math.PI/180);
+}
+
+function projectPointMeters(point,origin){
+  var lonScale=lonMetersPerDegree(origin.lat);
+  if(Math.abs(lonScale)<0.000001){lonScale=0.000001;}
+  return {
+    x:(point.lon-origin.lon)*lonScale,
+    y:(point.lat-origin.lat)*110540
+  };
+}
+
+function unprojectPointMeters(point,origin){
+  var lonScale=lonMetersPerDegree(origin.lat);
+  if(Math.abs(lonScale)<0.000001){lonScale=0.000001;}
+  return {
+    lat:origin.lat+point.y/110540,
+    lon:origin.lon+point.x/lonScale
+  };
+}
+
+function pointSampleCount(point){
+  return typeof point.sampleCount==='number'?point.sampleCount:sampleTargetCount();
+}
+
+function pointSpreadMeters(point){
+  return typeof point.spreadM==='number'?point.spreadM:0;
+}
+
+function pointConfidenceTier(point){
+  var sampleCount=pointSampleCount(point);
+  var spreadM=pointSpreadMeters(point);
+  if(sampleCount>=5&&spreadM<=POINT_SAMPLE_HIGH_SPREAD_M){
+    return 'high';
+  }
+  if(sampleCount>=POINT_SAMPLE_MIN_VALID_COUNT&&spreadM<=POINT_SAMPLE_MEDIUM_SPREAD_M){
+    return 'medium';
+  }
+  return 'low';
+}
+
+function pointConfidenceActionLabel(point){
+  var tier=typeof point==='string'?point:pointConfidenceTier(point);
+  if(tier==='high'){return 'Good - ready to save';}
+  if(tier==='medium'){return 'Acceptable - short lines may drift';}
+  return 'Noisy - try again';
+}
+
+function lineConfidenceInfo(line){
+  if(!line||!line.p1||!line.p2){
+    return {
+      ready:false,
+      tier:'low',
+      label:'Mark both points to review',
+      lineLengthM:0,
+      shortThresholdM:SHORT_LINE_MIN_LENGTH_M,
+      maxSpreadM:0,
+      isShort:false
+    };
+  }
+  var lineLengthM=distanceMeters(line.p1,line.p2);
+  var maxSpreadM=Math.max(pointSpreadMeters(line.p1),pointSpreadMeters(line.p2));
+  var shortThresholdM=Math.max(SHORT_LINE_MIN_LENGTH_M,SHORT_LINE_SPREAD_FACTOR*maxSpreadM);
+  var isShort=lineLengthM<shortThresholdM;
+  var p1Tier=pointConfidenceTier(line.p1);
+  var p2Tier=pointConfidenceTier(line.p2);
+  var tierRank=Math.min(
+    p1Tier==='high'?3:(p1Tier==='medium'?2:1),
+    p2Tier==='high'?3:(p2Tier==='medium'?2:1)
+  );
+  if(isShort&&(p1Tier!=='high'||p2Tier!=='high')){
+    if(REPEATABILITY_CHECK_ENABLED&&_trackDraft.repeatability.status==='passed'){
+      return {
+        ready:true,
+        tier:'high',
+        label:'Good - ready to save',
+        lineLengthM:lineLengthM,
+        shortThresholdM:shortThresholdM,
+        maxSpreadM:maxSpreadM,
+        isShort:true
+      };
+    }
+    if(REPEATABILITY_CHECK_ENABLED&&_trackDraft.repeatability.status==='failed'){
+      return {
+        ready:false,
+        tier:'low',
+        label:'Repeatability mismatch - remeasure line',
+        lineLengthM:lineLengthM,
+        shortThresholdM:shortThresholdM,
+        maxSpreadM:maxSpreadM,
+        isShort:true
+      };
+    }
+    return {
+      ready:false,
+      tier:'low',
+      label:'Short line: higher confidence required',
+      lineLengthM:lineLengthM,
+      shortThresholdM:shortThresholdM,
+      maxSpreadM:maxSpreadM,
+      isShort:true
+    };
+  }
+  if(tierRank>=3){
+    return {
+      ready:true,
+      tier:'high',
+      label:'Good - ready to save',
+      lineLengthM:lineLengthM,
+      shortThresholdM:shortThresholdM,
+      maxSpreadM:maxSpreadM,
+      isShort:isShort
+    };
+  }
+  if(tierRank>=2){
+    return {
+      ready:true,
+      tier:'medium',
+      label:'Acceptable - short lines may drift',
+      lineLengthM:lineLengthM,
+      shortThresholdM:shortThresholdM,
+      maxSpreadM:maxSpreadM,
+      isShort:isShort
+    };
+  }
+  return {
+    ready:false,
+    tier:'low',
+    label:'Noisy - try again',
+    lineLengthM:lineLengthM,
+    shortThresholdM:shortThresholdM,
+    maxSpreadM:maxSpreadM,
+    isShort:isShort
+  };
+}
+
+function repeatabilityThresholds(line){
+  var lineLengthM=distanceMeters(line.p1,line.p2);
+  if(lineLengthM<8){
+    return {midpointM:1.5,headingDeg:12};
+  }
+  return {midpointM:3,headingDeg:20};
+}
+
+function normalizeAngleDelta(a,b){
+  var delta=Math.abs(normalizeHeading(a)-normalizeHeading(b));
+  return delta>180?360-delta:delta;
+}
+
+function lineMidpoint(line){
+  return {
+    lat:(line.p1.lat+line.p2.lat)/2,
+    lon:(line.p1.lon+line.p2.lon)/2
+  };
+}
+
+function compareRepeatabilityLines(baseLine,checkLine){
+  var thresholds=repeatabilityThresholds(baseLine);
+  var midpointDeltaM=distanceMeters(lineMidpoint(baseLine),lineMidpoint(checkLine));
+  var headingDeltaDeg=normalizeAngleDelta(baseLine.heading,checkLine.heading);
+  return {
+    passed:midpointDeltaM<=thresholds.midpointM&&headingDeltaDeg<=thresholds.headingDeg,
+    midpointDeltaM:midpointDeltaM,
+    headingDeltaDeg:headingDeltaDeg,
+    thresholds:thresholds
+  };
+}
+
+function activeStartFinishLine(){
+  if(_trackDraft.repeatability.active){
+    return _trackDraft.repeatability.candidate;
+  }
+  return _trackDraft.startFinish;
+}
+
+function isPointSamplingActive(){
+  return !!(_pointSampling&&_pointSampling.active);
 }
 
 function resetGpsStabilitySamples(){
@@ -385,6 +637,10 @@ function maxGpsSampleSpreadMeters(){
   return maxSpread;
 }
 
+function nowMs(){
+  return Date.now?Date.now():0;
+}
+
 function updateGpsStabilitySamples(){
   if(!_trackDraft.gps.fix||_trackDraft.gps.satellites<GPS_STABILITY_MIN_SATS){
     resetGpsStabilitySamples();
@@ -395,10 +651,10 @@ function updateGpsStabilitySamples(){
 
 function getGpsStatusInfo(){
   if(!_trackDraft.gps.fix){
-    return {state:'no_fix',ready:false,label:'Waiting for fix',barClass:'err',textClass:'err'};
+    return {state:'no_fix',ready:false,label:'Need GPS fix',barClass:'err',textClass:'err'};
   }
   if(_trackDraft.gps.satellites<GPS_STABILITY_MIN_SATS){
-    return {state:'low_sats',ready:false,label:'Waiting for better GPS',barClass:'err',textClass:'err'};
+    return {state:'low_sats',ready:false,label:'Need better GPS',barClass:'err',textClass:'err'};
   }
   if(_gpsStabilitySamples.length<GPS_STABILITY_SAMPLE_COUNT){
     return {state:'stabilizing',ready:false,label:'Hold still... stabilizing',barClass:'warn',textClass:'warn'};
@@ -406,7 +662,7 @@ function getGpsStatusInfo(){
   if(maxGpsSampleSpreadMeters()>GPS_STABILITY_MAX_SPREAD_M){
     return {state:'stabilizing',ready:false,label:'Hold still... stabilizing',barClass:'warn',textClass:'warn'};
   }
-  return {state:'stable',ready:true,label:'Stable - ready to mark',barClass:'ok',textClass:'ok'};
+  return {state:'stable',ready:true,label:'Good - ready to mark',barClass:'ok',textClass:'ok'};
 }
 
 function canMarkWithCurrentGps(){
@@ -429,6 +685,54 @@ function isNameReady(){
   return !!(nameField&&nameField.value.trim());
 }
 
+function gpsFreshnessLabel(){
+  if(_gpsLastUpdateMs<0){
+    return 'Stale - refresh before trusting';
+  }
+  var ageMs=nowMs()-_gpsLastUpdateMs;
+  if(ageMs<1000){
+    return 'Live';
+  }
+  if(ageMs<2000){
+    return '1s ago';
+  }
+  if(ageMs<3000){
+    return '2s ago';
+  }
+  return 'Stale - refresh before trusting';
+}
+
+function isTrackCreationPollingActive(){
+  return isNameReady()
+    || !!_trackDraft.startFinish.p1
+    || !!_trackDraft.startFinish.p2
+    || _trackDraft.sectors.length>0
+    || _trackDraft.sectorsExpanded
+    || _trackSubmitPending;
+}
+
+function getStatusRefreshIntervalMs(){
+  if(isPointSamplingActive()){
+    return POINT_SAMPLE_INTERVAL_MS;
+  }
+  return isTrackCreationPollingActive()?1000:2000;
+}
+
+function scheduleStatusRefresh(){
+  var intervalMs=getStatusRefreshIntervalMs();
+  if(_statusRefreshTimer){
+    clearInterval(_statusRefreshTimer);
+    _statusRefreshTimer=0;
+  }
+  _statusRefreshTimer=setInterval(function(){
+    if(isPointSamplingActive()&&nowMs()-_pointSampling.startedAtMs>=POINT_SAMPLE_WINDOW_MS){
+      return;
+    }
+    if(_statusRefreshInFlight){return;}
+    refreshStatus();
+  },intervalMs);
+}
+
 function isReviewReady(){
   return isNameReady()
     && _trackDraft.startFinish.p1
@@ -445,11 +749,13 @@ function currentCreationStage(){
 
 function resetTrackDraft(){
   var gps=_trackDraft.gps;
+  _pointSampling=null;
   _trackDraft={
     gps:{fix:gps.fix,satellites:gps.satellites,lat:gps.lat,lon:gps.lon},
     startFinish:{p1:null,p2:null,heading:null,flipped:false},
     sectors:[],
-    sectorsExpanded:false
+    sectorsExpanded:false,
+    repeatability:makeRepeatabilityState(false)
   };
   _nextSectorId=1;
   _trackSubmitPending=false;
@@ -629,13 +935,16 @@ function renderTracksList(){
   });
 }
 
-function updateStartFinishHeading(){
-  var sf=_trackDraft.startFinish;
-  if(sf.p1&&sf.p2){
-    sf.heading=crossingHeadingDeg(sf.p1,sf.p2,sf.flipped);
+function updateLineHeading(line){
+  if(line.p1&&line.p2){
+    line.heading=crossingHeadingDeg(line.p1,line.p2,line.flipped);
   }else{
-    sf.heading=null;
+    line.heading=null;
   }
+}
+
+function updateStartFinishHeading(){
+  updateLineHeading(_trackDraft.startFinish);
 }
 
 function setCreationStepState(id,label,state){
@@ -671,75 +980,137 @@ function reviewLineLengthMeters(line){
   return distanceMeters(line.p1,line.p2);
 }
 
-function projectReviewPoint(point,bounds,width,height,padding){
-  var midLat=(bounds.minLat+bounds.maxLat)/2;
-  var cosLat=Math.cos(midLat*Math.PI/180);
-  var spanX=(bounds.maxLon-bounds.minLon)*cosLat;
-  var spanY=bounds.maxLat-bounds.minLat;
-  if(spanX===0){spanX=0.0001;}
-  if(spanY===0){spanY=0.0001;}
+function reviewProjection(lines,width,height,padding){
+  var points=[];
+  lines.forEach(function(entry){
+    points.push(entry.line.p1);
+    points.push(entry.line.p2);
+  });
+  var origin=localOriginPoint(points);
+  var bounds={
+    minX:Infinity,
+    maxX:-Infinity,
+    minY:Infinity,
+    maxY:-Infinity
+  };
+  points.forEach(function(point){
+    var projected=projectPointMeters(point,origin);
+    bounds.minX=Math.min(bounds.minX,projected.x);
+    bounds.maxX=Math.max(bounds.maxX,projected.x);
+    bounds.minY=Math.min(bounds.minY,projected.y);
+    bounds.maxY=Math.max(bounds.maxY,projected.y);
+  });
+  if(bounds.minX===bounds.maxX){
+    bounds.minX-=0.5;
+    bounds.maxX+=0.5;
+  }
+  if(bounds.minY===bounds.maxY){
+    bounds.minY-=0.5;
+    bounds.maxY+=0.5;
+  }
   var innerW=width-padding*2;
   var innerH=height-padding*2;
+  var spanX=bounds.maxX-bounds.minX;
+  var spanY=bounds.maxY-bounds.minY;
   var scale=Math.min(innerW/spanX,innerH/spanY);
   var usedW=spanX*scale;
   var usedH=spanY*scale;
-  var ox=padding+(innerW-usedW)/2;
-  var oy=padding+(innerH-usedH)/2;
   return {
-    x: ox+((point.lon-bounds.minLon)*cosLat)/spanX*usedW,
-    y: height-oy-((point.lat-bounds.minLat)/spanY)*usedH
+    origin:origin,
+    bounds:bounds,
+    width:width,
+    height:height,
+    padding:padding,
+    scale:scale,
+    ox:padding+(innerW-usedW)/2,
+    oy:padding+(innerH-usedH)/2
   };
+}
+
+function projectReviewPoint(point,projection){
+  var local=projectPointMeters(point,projection.origin);
+  return {
+    x: projection.ox+(local.x-projection.bounds.minX)*projection.scale,
+    y: projection.height-projection.oy-(local.y-projection.bounds.minY)*projection.scale
+  };
+}
+
+function reviewScaleMeters(projection){
+  var candidates=[1,2,5,10,20,50,100,200];
+  var maxMeters=(projection.width-projection.padding*2)*0.32/projection.scale;
+  var chosen=candidates[0];
+  for(var i=0;i<candidates.length;i++){
+    if(candidates[i]<=maxMeters){
+      chosen=candidates[i];
+    }
+  }
+  return chosen;
+}
+
+function reviewMetricHtml(label,value){
+  return '<div class="helper-text"><strong>'+label+':</strong> '+value+'</div>';
+}
+
+function reviewConfidenceBadgeHtml(lineInfo){
+  return '<div class="review-badge '+lineInfo.tier+'">'+lineInfo.label+'</div>';
 }
 
 function renderGeometryReview(){
   var panel=$('geometry-review');
   var copy=$('review-copy');
   if(!panel||!copy){return;}
-  copy.textContent='A new track becomes current immediately after creation.';
+  copy.textContent='A new track becomes current immediately after creation. Do not close or refresh this page during track creation.';
   if(!isReviewReady()){
     panel.innerHTML='<div class="helper-text">Complete the name and geometry to unlock review.</div>';
     return;
   }
 
+  var lineInfo=lineConfidenceInfo(_trackDraft.startFinish);
   var lines=[{label:'Start/Finish',line:_trackDraft.startFinish,color:'#38bdf8'}];
   _trackDraft.sectors.filter(sectorIsComplete).forEach(function(sector,index){
     lines.push({label:'S'+(index+1),line:sector,color:'#f59e0b'});
   });
 
-  var minLat=Infinity;
-  var maxLat=-Infinity;
-  var minLon=Infinity;
-  var maxLon=-Infinity;
-  lines.forEach(function(entry){
-    [entry.line.p1,entry.line.p2].forEach(function(point){
-      minLat=Math.min(minLat,point.lat);
-      maxLat=Math.max(maxLat,point.lat);
-      minLon=Math.min(minLon,point.lon);
-      maxLon=Math.max(maxLon,point.lon);
-    });
-  });
-
-  var bounds={minLat:minLat,maxLat:maxLat,minLon:minLon,maxLon:maxLon};
   var width=240;
   var height=160;
   var padding=18;
+  var projection=reviewProjection(lines,width,height,padding);
+  var scaleMeters=reviewScaleMeters(projection);
+  var scalePixels=scaleMeters*projection.scale;
   var svg='<svg viewBox="0 0 '+width+' '+height+'" aria-label="Track geometry review">';
   svg+='<rect x="0" y="0" width="'+width+'" height="'+height+'" rx="14" fill="#0b1827" stroke="#2a3c52"></rect>';
+  svg+='<g class="review-north">';
+  svg+='<line x1="'+(width-24)+'" y1="42" x2="'+(width-24)+'" y2="20" stroke="#dbeafe" stroke-width="2.5" stroke-linecap="round"></line>';
+  svg+='<polygon points="'+(width-24)+',14 '+(width-29)+',24 '+(width-19)+',24" fill="#dbeafe"></polygon>';
+  svg+='<text x="'+(width-24)+'" y="56" fill="#dbeafe" font-size="10" text-anchor="middle">North</text>';
+  svg+='</g>';
   lines.forEach(function(entry){
-    var start=projectReviewPoint(entry.line.p1,bounds,width,height,padding);
-    var end=projectReviewPoint(entry.line.p2,bounds,width,height,padding);
-    svg+='<line x1="'+start.x.toFixed(1)+'" y1="'+start.y.toFixed(1)+'" x2="'+end.x.toFixed(1)+'" y2="'+end.y.toFixed(1)+'" stroke="'+entry.color+'" stroke-width="4" stroke-linecap="round"></line>';
+    var start=projectReviewPoint(entry.line.p1,projection);
+    var end=projectReviewPoint(entry.line.p2,projection);
+    var startRadius=Math.max(6,pointSpreadMeters(entry.line.p1)*projection.scale);
+    var endRadius=Math.max(6,pointSpreadMeters(entry.line.p2)*projection.scale);
+    svg+='<circle class="review-uncertainty" cx="'+start.x.toFixed(1)+'" cy="'+start.y.toFixed(1)+'" r="'+startRadius.toFixed(1)+'" fill="'+entry.color+'" fill-opacity="0.16" stroke="'+entry.color+'" stroke-opacity="0.35"></circle>';
+    svg+='<circle class="review-uncertainty" cx="'+end.x.toFixed(1)+'" cy="'+end.y.toFixed(1)+'" r="'+endRadius.toFixed(1)+'" fill="'+entry.color+'" fill-opacity="0.16" stroke="'+entry.color+'" stroke-opacity="0.35"></circle>';
+    svg+='<line data-review-label="'+entry.label+'" x1="'+start.x.toFixed(1)+'" y1="'+start.y.toFixed(1)+'" x2="'+end.x.toFixed(1)+'" y2="'+end.y.toFixed(1)+'" stroke="'+entry.color+'" stroke-width="4" stroke-linecap="round"></line>';
     svg+='<circle cx="'+start.x.toFixed(1)+'" cy="'+start.y.toFixed(1)+'" r="4" fill="'+entry.color+'"></circle>';
     svg+='<circle cx="'+end.x.toFixed(1)+'" cy="'+end.y.toFixed(1)+'" r="4" fill="'+entry.color+'"></circle>';
     svg+='<text x="'+((start.x+end.x)/2).toFixed(1)+'" y="'+((start.y+end.y)/2-8).toFixed(1)+'" fill="#dbeafe" font-size="11" text-anchor="middle">'+entry.label+'</text>';
   });
+  svg+='<line class="review-scale-bar" x1="'+padding+'" y1="'+(height-padding)+'" x2="'+(padding+scalePixels).toFixed(1)+'" y2="'+(height-padding)+'" stroke="#dbeafe" stroke-width="3" stroke-linecap="round"></line>';
+  svg+='<text x="'+(padding+scalePixels/2).toFixed(1)+'" y="'+(height-padding-8)+'" fill="#dbeafe" font-size="10" text-anchor="middle">Scale '+scaleMeters+' m</text>';
   svg+='</svg>';
 
+  var summary='<div class="review-metrics">'
+    +reviewConfidenceBadgeHtml(lineInfo)
+    +reviewMetricHtml('Line length',lineInfo.lineLengthM.toFixed(1)+' m')
+    +reviewMetricHtml('Crossing',headingArrow(_trackDraft.startFinish.heading)+' '+Math.round(_trackDraft.startFinish.heading)+'° '+compassLabel(_trackDraft.startFinish.heading))
+    +reviewMetricHtml('Scale',scaleMeters+' m')
+    +'</div>';
   var warning='';
-  if(reviewLineLengthMeters(_trackDraft.startFinish)<5){
-    warning='<div class="helper-text track-msg-err">Start/finish looks very short. Re-mark if this was accidental.</div>';
+  if(lineInfo.isShort&&!lineInfo.ready){
+    warning='<div class="helper-text track-msg-err">'+lineInfo.label+'. Re-mark with a longer line or steadier GPS.</div>';
   }
-  panel.innerHTML=svg+warning;
+  panel.innerHTML=svg+summary+warning;
 }
 
 function findSector(id){
@@ -750,11 +1121,7 @@ function findSector(id){
 }
 
 function updateSectorHeading(sector){
-  if(sector.p1&&sector.p2){
-    sector.heading=crossingHeadingDeg(sector.p1,sector.p2,sector.flipped);
-  }else{
-    sector.heading=null;
-  }
+  updateLineHeading(sector);
 }
 
 function sectorIsComplete(sector){
@@ -788,7 +1155,9 @@ function applyStatusData(d){
   _trackDraft.gps.satellites=d.satellites||0;
   _trackDraft.gps.lat=isNaN(lat)?0:lat;
   _trackDraft.gps.lon=isNaN(lon)?0:lon;
+  _gpsLastUpdateMs=nowMs();
   updateGpsStabilitySamples();
+  captureSamplingStatus(d);
   _isRec=!!d.recording;
   _statusSnapshot.track=d.track||'';
   _statusSnapshot.track_id=d.track_id||'';
@@ -808,22 +1177,150 @@ function applyStatusData(d){
 }
 
 function fetchStatusSnapshot(){
+  var requestId=++_statusRequestSeq;
+  var requestedAtMs=nowMs();
   return fetch('/api/status').then(function(r){return r.json();}).then(function(d){
+    d.__requestId=requestId;
+    d.__requestedAtMs=requestedAtMs;
     applyStatusData(d);
     return d;
   });
 }
 
-function captureCurrentGpsPoint(){
-  return fetchStatusSnapshot().then(function(){
+function pointCaptureSummary(point){
+  var spreadText=point.spreadM.toFixed(1)+' m';
+  return 'Sampled '+point.sampleCount+' fixes, spread '+spreadText+'. '+pointConfidenceActionLabel(point)+'.';
+}
+
+function sampledPointFromSession(session){
+  var origin=localOriginPoint(session.samples);
+  var projected=session.samples.map(function(sample){
+    return projectPointMeters(sample,origin);
+  });
+  var aggregated=unprojectPointMeters({
+    x:medianValue(projected.map(function(sample){return sample.x;})),
+    y:medianValue(projected.map(function(sample){return sample.y;}))
+  },origin);
+  var point={
+    lat:aggregated.lat,
+    lon:aggregated.lon
+  };
+  var spreadM=0;
+  session.samples.forEach(function(sample){
+    spreadM=Math.max(spreadM,distanceMeters(point,sample));
+  });
+  point.sampleCount=session.samples.length;
+  point.spreadM=spreadM;
+  point.capturedAtMs=nowMs();
+  point.captureAgeMs=Math.max(0,nowMs()-session.latestSampleAtMs);
+  point.confidence=pointConfidenceTier(point);
+  point.captureSummary=pointCaptureSummary(point);
+  return point;
+}
+
+function clearPointSamplingSession(){
+  var session=_pointSampling;
+  if(!session){return null;}
+  if(session.finalizeTimer){clearTimeout(session.finalizeTimer);}
+  _pointSampling=null;
+  scheduleStatusRefresh();
+  return session;
+}
+
+function rejectPointSampling(err){
+  var session=clearPointSamplingSession();
+  if(!session){return;}
+  session.reject(err);
+}
+
+function resolvePointSampling(point){
+  var session=clearPointSamplingSession();
+  if(!session){return;}
+  session.resolve(point);
+}
+
+function samplingProgressMessage(){
+  if(!isPointSamplingActive()){return '';}
+  return 'Sampling point... '+_pointSampling.samples.length+'/'+_pointSampling.targetSamples+' fixes collected. Hold still.';
+}
+
+function updateSamplingProgressMessage(){
+  if(!isPointSamplingActive()){return;}
+  setTrackMsg(samplingProgressMessage(),'');
+}
+
+function captureCurrentGpsPoint(meta){
+  return new Promise(function(resolve,reject){
+    if(isPointSamplingActive()){
+      reject({code:'busy'});
+      return;
+    }
     if(!hasValidFix()){
-      throw {code:'no_fix'};
+      reject({code:'no_fix'});
+      return;
     }
     if(!canMarkWithCurrentGps()){
-      throw {code:getGpsStatusInfo().state};
+      reject({code:getGpsStatusInfo().state});
+      return;
     }
-    return currentGpsPoint();
+    _pointSampling={
+      active:true,
+      startedAtMs:nowMs(),
+      samples:[],
+      latestSampleAtMs:nowMs(),
+      targetSamples:sampleTargetCount(),
+      minFreshRequestId:_statusRequestSeq+1,
+      awaitingFreshRequest:_statusRefreshInFlight,
+      meta:meta||{},
+      resolve:resolve,
+      reject:reject,
+      finalizeTimer:setTimeout(function(){
+        if(!isPointSamplingActive()){return;}
+        if(_pointSampling.samples.length<POINT_SAMPLE_MIN_VALID_COUNT){
+          rejectPointSampling({
+            code:'too_few_samples',
+            sampleCount:_pointSampling.samples.length
+          });
+          return;
+        }
+        resolvePointSampling(sampledPointFromSession(_pointSampling));
+      },POINT_SAMPLE_WINDOW_MS)
+    };
+    updateSamplingProgressMessage();
+    renderTrackDraft();
+    if(!_statusRefreshInFlight){
+      refreshStatus();
+    }
   });
+}
+
+function cancelPointSampling(){
+  if(!isPointSamplingActive()){return;}
+  rejectPointSampling({code:'canceled'});
+}
+
+function captureSamplingStatus(status){
+  if(!isPointSamplingActive()){return;}
+  var requestId=Number(status&&status.__requestId);
+  if(isNaN(requestId)||requestId<_pointSampling.minFreshRequestId){
+    return;
+  }
+  if(!status||!status.gps_fix||(status.satellites||0)<GPS_STABILITY_MIN_SATS){
+    rejectPointSampling({code:'gps_lost'});
+    return;
+  }
+  var lat=Number(status.lat);
+  var lon=Number(status.lon);
+  if(isNaN(lat)||isNaN(lon)){
+    rejectPointSampling({code:'gps_lost'});
+    return;
+  }
+  if(_pointSampling.samples.length>=_pointSampling.targetSamples){
+    return;
+  }
+  _pointSampling.samples.push({lat:lat,lon:lon});
+  _pointSampling.latestSampleAtMs=nowMs();
+  updateSamplingProgressMessage();
 }
 
 function storeLinePoint(line,which,point,label){
@@ -842,11 +1339,16 @@ function renderGpsBar(){
   var gpsStatus=getGpsStatusInfo();
   if(!bar){return;}
   var fixOk=hasValidFix();
+  var samplingHtml=isPointSamplingActive()
+    ? '<div class="helper-text">'+samplingProgressMessage()+'</div>'
+    : '';
   bar.className='gps-bar '+gpsStatus.barClass;
   bar.innerHTML=
     '<div class="row"><span class="label">GPS</span><span class="val '+gpsStatus.textClass+'">'+gpsStatus.label+'</span></div>'+
     '<div class="row"><span class="label">Satellites</span><span class="val">'+_trackDraft.gps.satellites+'</span></div>'+
-    '<div class="helper-text">Current position: '+(fixOk?formatCoord(currentGpsPoint()):'--')+'</div>';
+    '<div class="helper-text">Current position: '+(fixOk?formatCoord(currentGpsPoint()):'--')+'</div>'+
+    '<div class="helper-text">Freshness: '+gpsFreshnessLabel()+'</div>'+
+    samplingHtml;
 }
 
 function renderStartFinishSection(){
@@ -857,30 +1359,37 @@ function renderStartFinishSection(){
   var headingBar=$('sf-heading');
   var headingText=$('sf-heading-text');
   var flipBtn=$('sf-flip');
-  var p1Marked=!!_trackDraft.startFinish.p1;
-  var p2Marked=!!_trackDraft.startFinish.p2;
+  var cancelBtn=$('sample-cancel-btn');
+  var targetLine=activeStartFinishLine();
+  var p1Marked=!!targetLine.p1;
+  var p2Marked=!!targetLine.p2;
   var canMark=canMarkWithCurrentGps();
-  var showHeading=p1Marked&&p2Marked&&typeof _trackDraft.startFinish.heading==='number';
+  var showHeading=p1Marked&&p2Marked&&typeof targetLine.heading==='number'&&!_trackDraft.repeatability.active;
+  var sampling=isPointSamplingActive();
+  var samplingP1=sampling&&_pointSampling.meta.scope==='start_finish'&&_pointSampling.meta.which==='p1';
+  var samplingP2=sampling&&_pointSampling.meta.scope==='start_finish'&&_pointSampling.meta.which==='p2';
+  var labelPrefix=_trackDraft.repeatability.active?'Check ':'';
 
   if(p1Btn){
-    p1Btn.textContent=p1Marked?'Re-mark P1':'Mark P1';
+    p1Btn.textContent=samplingP1?'Sampling P1...':(p1Marked?'Re-mark P1':labelPrefix+'P1');
     p1Btn.className='mark-btn'+(p1Marked?' marked':'');
-    p1Btn.disabled=!canMark;
+    p1Btn.disabled=sampling||!canMark;
   }
   if(p2Btn){
-    p2Btn.textContent=p2Marked?'Re-mark P2':'Mark P2';
+    p2Btn.textContent=samplingP2?'Sampling P2...':(p2Marked?'Re-mark P2':labelPrefix+'P2');
     p2Btn.className='mark-btn'+(p2Marked?' marked':'');
-    p2Btn.disabled=!canMark||!p1Marked;
+    p2Btn.disabled=sampling||!canMark||!p1Marked;
   }
-  if(p1Coord){p1Coord.textContent=formatCoord(_trackDraft.startFinish.p1);}
-  if(p2Coord){p2Coord.textContent=formatCoord(_trackDraft.startFinish.p2);}
+  if(p1Coord){p1Coord.textContent=formatCoord(targetLine.p1);}
+  if(p2Coord){p2Coord.textContent=formatCoord(targetLine.p2);}
   if(headingBar){headingBar.style.display=showHeading?'flex':'none';}
   if(headingText&&showHeading){
-    headingText.textContent=headingArrow(_trackDraft.startFinish.heading)+' '
-      +Math.round(_trackDraft.startFinish.heading)+'° '
-      +compassLabel(_trackDraft.startFinish.heading);
+    headingText.textContent=headingArrow(targetLine.heading)+' '
+      +Math.round(targetLine.heading)+'° '
+      +compassLabel(targetLine.heading);
   }
   if(flipBtn){flipBtn.disabled=!showHeading;}
+  if(cancelBtn){cancelBtn.style.display=sampling?'block':'none';}
 }
 
 function renderSectorRows(){
@@ -910,7 +1419,10 @@ function renderSectorRows(){
     var p1Marked=!!sector.p1;
     var p2Marked=!!sector.p2;
     var canMark=canMarkWithCurrentGps();
-    var canMarkP2=canMark&&p1Marked;
+    var sampling=isPointSamplingActive();
+    var samplingP1=sampling&&_pointSampling.meta.scope==='sector'&&_pointSampling.meta.id===sector.id&&_pointSampling.meta.which==='p1';
+    var samplingP2=sampling&&_pointSampling.meta.scope==='sector'&&_pointSampling.meta.id===sector.id&&_pointSampling.meta.which==='p2';
+    var canMarkP2=canMark&&p1Marked&&!sampling;
     var headingHtml='<div class="helper-text">Mark P1 then P2 to calculate heading.</div>';
     if(sectorIsComplete(sector)){
       headingHtml='<div class="heading-bar"><span class="heading-value">'
@@ -921,15 +1433,47 @@ function renderSectorRows(){
       +'<div class="sector-head"><strong>Sector '+(i+1)+'</strong>'
       +'<button type="button" class="mark-btn inline-btn" data-sector-action="delete" data-sector-id="'+sector.id+'">Delete</button></div>'
       +'<div class="mark-row">'
-      +'<button type="button" class="mark-btn'+(p1Marked?' marked':'')+'" data-sector-action="mark-p1" data-sector-id="'+sector.id+'"'+(canMark?'':' disabled')+'>'+(p1Marked?'✓ P1':'Mark P1')+'</button>'
+      +'<button type="button" class="mark-btn'+(p1Marked?' marked':'')+'" data-sector-action="mark-p1" data-sector-id="'+sector.id+'"'+((canMark&&!sampling)?'':' disabled')+'>'+(samplingP1?'Sampling P1...':(p1Marked?'✓ P1':'Mark P1'))+'</button>'
       +'<div class="coord">'+formatCoord(sector.p1)+'</div></div>'
       +'<div class="mark-row">'
-      +'<button type="button" class="mark-btn'+(p2Marked?' marked':'')+'" data-sector-action="mark-p2" data-sector-id="'+sector.id+'"'+(canMarkP2?'':' disabled')+'>'+(p2Marked?'✓ P2':'Mark P2')+'</button>'
+      +'<button type="button" class="mark-btn'+(p2Marked?' marked':'')+'" data-sector-action="mark-p2" data-sector-id="'+sector.id+'"'+(canMarkP2?'':' disabled')+'>'+(samplingP2?'Sampling P2...':(p2Marked?'✓ P2':'Mark P2'))+'</button>'
       +'<div class="coord">'+formatCoord(sector.p2)+'</div></div>'
       +headingHtml
       +'</div>';
   }
   list.innerHTML=html;
+}
+
+function renderRepeatabilitySection(){
+  var btn=$('repeatability-btn');
+  var summary=$('repeatability-summary');
+  var lineInfo=lineConfidenceInfo(_trackDraft.startFinish);
+  if(btn){
+    btn.style.display=(REPEATABILITY_CHECK_ENABLED&&isReviewReady())?'block':'none';
+    btn.textContent=_trackDraft.repeatability.active
+      ? 'Repeatability Check In Progress'
+      : (_trackDraft.repeatability.status==='passed'?'Repeatability Confirmed':'Repeatability Check');
+    btn.disabled=!REPEATABILITY_CHECK_ENABLED||!isReviewReady()||_trackDraft.repeatability.active;
+  }
+  if(summary){
+    if(!REPEATABILITY_CHECK_ENABLED){
+      summary.textContent='';
+    }else if(_trackDraft.repeatability.active){
+      summary.textContent='Repeatability check active: re-mark P1 then P2 for the same line.';
+    }else if(_trackDraft.repeatability.status==='passed'&&_trackDraft.repeatability.result){
+      summary.textContent='Repeatability passed. Midpoint delta '
+        +_trackDraft.repeatability.result.midpointDeltaM.toFixed(1)+' m, heading delta '
+        +_trackDraft.repeatability.result.headingDeltaDeg.toFixed(1)+'°.';
+    }else if(_trackDraft.repeatability.status==='failed'&&_trackDraft.repeatability.result){
+      summary.textContent='Repeatability mismatch - remeasure line. Midpoint delta '
+        +_trackDraft.repeatability.result.midpointDeltaM.toFixed(1)+' m, heading delta '
+        +_trackDraft.repeatability.result.headingDeltaDeg.toFixed(1)+'°.';
+    }else if(lineInfo.isShort&&!lineInfo.ready){
+      summary.textContent='Short lines benefit from an optional repeatability check before saving.';
+    }else{
+      summary.textContent='Optional: confirm the line again if you want extra confidence.';
+    }
+  }
 }
 
 function renderCreateButton(){
@@ -945,7 +1489,9 @@ function renderTrackDraft(){
   renderStartFinishSection();
   renderSectorRows();
   renderGeometryReview();
+  renderRepeatabilitySection();
   renderCreateButton();
+  scheduleStatusRefresh();
 }
 
 function renderAdvancedSettings(){
@@ -960,27 +1506,52 @@ function renderAdvancedSettings(){
 }
 
 function markStartFinishPoint(which){
-  if(which==='p2'&&!_trackDraft.startFinish.p1){
+  var targetLine=activeStartFinishLine();
+  var lineLabel=_trackDraft.repeatability.active?'Repeatability':'Start/Finish';
+  if(isPointSamplingActive()){
+    setTrackMsg('Finish the current sample or cancel it first.','err');
+    renderTrackDraft();
+    return;
+  }
+  if(which==='p2'&&!targetLine.p1){
     setTrackMsg('Mark P1 first.','err');
     renderTrackDraft();
     return;
   }
-  setTrackMsg('Capturing current GPS sample...','');
-  captureCurrentGpsPoint().then(function(point){
-    if(!storeLinePoint(_trackDraft.startFinish,which,point,'Start/Finish')){
+  setTrackMsg('Sampling point...','');
+  captureCurrentGpsPoint({
+    scope:'start_finish',
+    which:which
+  }).then(function(point){
+    if(!storeLinePoint(targetLine,which,point,lineLabel)){
       renderTrackDraft();
       return;
     }
-    updateStartFinishHeading();
-    setTrackMsg('', '');
+    updateLineHeading(targetLine);
+    if(_trackDraft.repeatability.active&&targetLine.p1&&targetLine.p2&&typeof targetLine.heading==='number'){
+      finalizeRepeatabilityCheck();
+      return;
+    }
+    if(!_trackDraft.repeatability.active){
+      resetRepeatabilityState();
+    }
+    setTrackMsg(point.captureSummary,point.confidence==='high'?'ok':(point.confidence==='low'?'err':''));
     renderTrackDraft();
   }).catch(function(err){
     if(err&&err.code==='no_fix'){
       setTrackMsg('Wait for a valid GPS fix before marking points.','err');
     }else if(err&&(err.code==='low_sats'||err.code==='stabilizing')){
       setTrackMsg(gpsMarkingBlockMessage(),'err');
+    }else if(err&&err.code==='busy'){
+      setTrackMsg('Finish the current sample or cancel it first.','err');
+    }else if(err&&err.code==='gps_lost'){
+      setTrackMsg('GPS dropped during sampling. Move to a clearer spot and retry.','err');
+    }else if(err&&err.code==='too_few_samples'){
+      setTrackMsg('Need at least 3 good fixes during sampling. Hold still and retry.','err');
+    }else if(err&&err.code==='canceled'){
+      setTrackMsg('Sampling canceled. No point stored.','');
     }else{
-      setTrackMsg('Failed to capture current GPS sample.','err');
+      setTrackMsg('Failed to sample the current GPS point.','err');
     }
     renderTrackDraft();
   });
@@ -990,11 +1561,40 @@ function flipStartFinishHeading(){
   if(!_trackDraft.startFinish.p1||!_trackDraft.startFinish.p2){return;}
   _trackDraft.startFinish.flipped=!_trackDraft.startFinish.flipped;
   updateStartFinishHeading();
+  resetRepeatabilityState();
   renderTrackDraft();
 }
 
 function toggleSectorSection(){
   _trackDraft.sectorsExpanded=!_trackDraft.sectorsExpanded;
+  renderTrackDraft();
+}
+
+function startRepeatabilityCheck(){
+  if(!REPEATABILITY_CHECK_ENABLED||!isReviewReady()){
+    return;
+  }
+  _trackDraft.repeatability=makeRepeatabilityState(_trackDraft.startFinish.flipped);
+  _trackDraft.repeatability.active=true;
+  _trackDraft.repeatability.status='measuring';
+  setTrackMsg('Repeatability check: re-mark P1 then P2 for the same line.','');
+  renderTrackDraft();
+}
+
+function finalizeRepeatabilityCheck(){
+  var result=compareRepeatabilityLines(_trackDraft.startFinish,_trackDraft.repeatability.candidate);
+  _trackDraft.repeatability.active=false;
+  _trackDraft.repeatability.status=result.passed?'passed':'failed';
+  _trackDraft.repeatability.result=result;
+  if(result.passed){
+    setTrackMsg('Repeatability check passed. Midpoint delta '
+      +result.midpointDeltaM.toFixed(1)+' m, heading delta '
+      +result.headingDeltaDeg.toFixed(1)+'°.','ok');
+  }else{
+    setTrackMsg('Repeatability mismatch - remeasure line. Midpoint delta '
+      +result.midpointDeltaM.toFixed(1)+' m, heading delta '
+      +result.headingDeltaDeg.toFixed(1)+'°.','err');
+  }
   renderTrackDraft();
 }
 
@@ -1021,27 +1621,44 @@ function deleteSectorRow(id){
 function markSectorPoint(id,which){
   var sector=findSector(id);
   if(!sector){return;}
+  if(isPointSamplingActive()){
+    setTrackMsg('Finish the current sample or cancel it first.','err');
+    renderTrackDraft();
+    return;
+  }
   if(which==='p2'&&!sector.p1){
     setTrackMsg('Mark P1 first for this sector.','err');
     renderTrackDraft();
     return;
   }
-  setTrackMsg('Capturing current GPS sample...','');
-  captureCurrentGpsPoint().then(function(point){
+  setTrackMsg('Sampling point...','');
+  captureCurrentGpsPoint({
+    scope:'sector',
+    id:id,
+    which:which
+  }).then(function(point){
     if(!storeLinePoint(sector,which,point,'Sector')){
       renderTrackDraft();
       return;
     }
     updateSectorHeading(sector);
-    setTrackMsg('', '');
+    setTrackMsg(point.captureSummary,point.confidence==='high'?'ok':(point.confidence==='low'?'err':''));
     renderTrackDraft();
   }).catch(function(err){
     if(err&&err.code==='no_fix'){
       setTrackMsg('Wait for a valid GPS fix before marking points.','err');
     }else if(err&&(err.code==='low_sats'||err.code==='stabilizing')){
       setTrackMsg(gpsMarkingBlockMessage(),'err');
+    }else if(err&&err.code==='busy'){
+      setTrackMsg('Finish the current sample or cancel it first.','err');
+    }else if(err&&err.code==='gps_lost'){
+      setTrackMsg('GPS dropped during sampling. Move to a clearer spot and retry.','err');
+    }else if(err&&err.code==='too_few_samples'){
+      setTrackMsg('Need at least 3 good fixes during sampling. Hold still and retry.','err');
+    }else if(err&&err.code==='canceled'){
+      setTrackMsg('Sampling canceled. No point stored.','');
     }else{
-      setTrackMsg('Failed to capture current GPS sample.','err');
+      setTrackMsg('Failed to sample the current GPS point.','err');
     }
     renderTrackDraft();
   });
@@ -1145,6 +1762,8 @@ function addTrack(){
 function initTrackCreationUi(){
   if($('sf-p1-btn')){$('sf-p1-btn').onclick=function(){markStartFinishPoint('p1');};}
   if($('sf-p2-btn')){$('sf-p2-btn').onclick=function(){markStartFinishPoint('p2');};}
+  if($('sample-cancel-btn')){$('sample-cancel-btn').onclick=cancelPointSampling;}
+  if($('repeatability-btn')){$('repeatability-btn').onclick=startRepeatabilityCheck;}
   if($('sf-flip')){$('sf-flip').onclick=flipStartFinishHeading;}
   if($('sector-toggle')){$('sector-toggle').onclick=toggleSectorSection;}
   if($('add-sector-btn')){$('add-sector-btn').onclick=addSectorRow;}
@@ -1185,9 +1804,18 @@ function initTrackCreationUi(){
 }
 
 function refreshStatus(){
+  if(_statusRefreshInFlight){return;}
+  _statusRefreshInFlight=true;
   fetchStatusSnapshot().then(function(){
     renderTrackDraft();
-  }).catch(function(){});
+  }).catch(function(){})
+    .then(function(){
+      _statusRefreshInFlight=false;
+      if(isPointSamplingActive()&&_pointSampling.awaitingFreshRequest){
+        _pointSampling.awaitingFreshRequest=false;
+        refreshStatus();
+      }
+    });
 }
 
 function loadSessions(){
@@ -1328,6 +1956,6 @@ loadSessions();
 loadTracks();
 loadSettings();
 if($('advanced-toggle')){$('advanced-toggle').onclick=toggleAdvancedSettings;}
-setInterval(refreshStatus,2000);
+scheduleStatusRefresh();
 </script>)JS";
 }

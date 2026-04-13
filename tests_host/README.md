@@ -13,6 +13,7 @@ extracted from the firmware specifically to be testable.
 | `test_boot_status.cpp` | `src/boot_status.cpp` | Boot stage/state transitions, ASCII-safe detail storage, and structured serial line formatting over plain enums/buffers |
 | `test_boot_presenter.cpp` | `src/boot_presenter.cpp` | Mapping `BootStatus` into the restrained boot splash view model (stage label, detail text, progress segments) with no hardware dependencies |
 | `test_track_runtime.cpp` | `src/track_runtime.cpp` | Track lifecycle decisions (boot detection sync, delete-while-recording guard, late auto-detect guard) — pure functions over `TrackDefinition` and primitive types, no Arduino/FreeRTOS deps |
+| `test_track_creation_feedback.cpp` | `src/track_creation_feedback.cpp` | Track-save diagnostic mapping and start/finish minimum-separation validation — pure enums, strings, and meter-space geometry helpers |
 | `test_storage_naming.cpp` | `src/storage_naming.cpp` | Final session VBO path layout — pure string formatting |
 | `test_button_profile.cpp` | `src/button_profile.cpp` | Button event classification and profile lookup logic over plain enums/structs with no hardware dependencies |
 | `test_time_format.cpp` | `src/time_format.cpp` | Lap/delta time string formatting using pure integer and buffer logic |

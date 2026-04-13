@@ -123,6 +123,11 @@ void handle_api_tracks_post() {
         server.send(400, "application/json", "{\"error\":\"missing start/finish coordinates\"}");
         return;
     }
+    if (!track_creation_has_min_start_finish_separation(&track.start_finish, 1.0)) {
+        server.send(400, "application/json",
+                    "{\"error\":\"start/finish points must be at least 1 m apart\"}");
+        return;
+    }
 
     // Compute center from start/finish midpoint
     track.center_lat_deg = (track.start_finish.lat1_deg + track.start_finish.lat2_deg) / 2.0;
@@ -168,7 +173,8 @@ void handle_api_tracks_post() {
     track.sector_count = sector_lines + 1;  // split lines + start/finish
 
     // Save through track module (validates, generates ID, writes proper JSON)
-    if (track_save(&track)) {
+    TrackSaveResult save_result = track_save_detailed(&track);
+    if (track_creation_save_result_succeeded(save_result)) {
         const TrackDefinition* saved = track_get(track_count() - 1);
         if (saved) {
             char buf[160];
@@ -180,7 +186,10 @@ void handle_api_tracks_post() {
         }
         server.send(201, "application/json", "{\"ok\":true}");
     } else {
-        server.send(500, "application/json", "{\"error\":\"save failed\"}");
+        char buf[160];
+        snprintf(buf, sizeof(buf), "{\"error\":\"%s\"}",
+                 track_creation_save_result_message(save_result));
+        server.send(500, "application/json", buf);
     }
 }
 

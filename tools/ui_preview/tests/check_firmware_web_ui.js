@@ -45,6 +45,11 @@ function createHarness() {
   const elements = new Map();
   const calls = [];
   const queuedResponses = [];
+  const intervals = new Map();
+  const timeouts = new Map();
+  let nextTimerId = 1;
+  let nowMs = 0;
+  let intervalsEnabled = true;
 
   function getElement(id) {
     if (!elements.has(id)) {
@@ -136,20 +141,85 @@ function createHarness() {
     return Promise.resolve(makeResponse(defaultPayload(url, options)));
   }
 
+  function setIntervalFake(handler, delay) {
+    const id = nextTimerId++;
+    if (!intervalsEnabled) {
+      return id;
+    }
+    const normalizedDelay = Math.max(0, Number(delay) || 0);
+    intervals.set(id, {
+      handler,
+      delay: normalizedDelay,
+      nextAt: nowMs + normalizedDelay,
+    });
+    return id;
+  }
+
+  function clearIntervalFake(id) {
+    intervals.delete(id);
+  }
+
+  function setTimeoutFake(handler, delay) {
+    const id = nextTimerId++;
+    const normalizedDelay = Math.max(0, Number(delay) || 0);
+    timeouts.set(id, {
+      handler,
+      nextAt: nowMs + normalizedDelay,
+    });
+    return id;
+  }
+
+  function clearTimeoutFake(id) {
+    timeouts.delete(id);
+  }
+
+  function findNextTimerBefore(targetMs) {
+    let best = null;
+
+    for (const [id, timer] of intervals.entries()) {
+      if (timer.nextAt > targetMs) {
+        continue;
+      }
+      if (!best || timer.nextAt < best.when) {
+        best = { type: "interval", id, when: timer.nextAt };
+      }
+    }
+
+    for (const [id, timer] of timeouts.entries()) {
+      if (timer.nextAt > targetMs) {
+        continue;
+      }
+      if (!best || timer.nextAt < best.when) {
+        best = { type: "timeout", id, when: timer.nextAt };
+      }
+    }
+
+    return best;
+  }
+
   const context = {
     console,
     fetch,
     confirm() {
       return true;
     },
-    setInterval() {
-      return 1;
+    setInterval: setIntervalFake,
+    clearInterval: clearIntervalFake,
+    setTimeout: setTimeoutFake,
+    clearTimeout: clearTimeoutFake,
+    Date: class FakeDate extends Date {
+      constructor(...args) {
+        if (args.length > 0) {
+          super(...args);
+        } else {
+          super(nowMs);
+        }
+      }
+
+      static now() {
+        return nowMs;
+      }
     },
-    clearInterval() {},
-    setTimeout() {
-      return 1;
-    },
-    clearTimeout() {},
     document: {
       getElementById(id) {
         return getElement(id);
@@ -170,6 +240,36 @@ function createHarness() {
     }
   }
 
+  async function tick(ms) {
+    const targetMs = nowMs + Math.max(0, Number(ms) || 0);
+
+    while (true) {
+      const next = findNextTimerBefore(targetMs);
+      if (!next) {
+        break;
+      }
+
+      nowMs = next.when;
+      if (next.type === "timeout") {
+        const timer = timeouts.get(next.id);
+        timeouts.delete(next.id);
+        if (timer) {
+          timer.handler();
+        }
+      } else {
+        const timer = intervals.get(next.id);
+        if (timer) {
+          timer.nextAt += timer.delay;
+          timer.handler();
+        }
+      }
+      await settle();
+    }
+
+    nowMs = targetMs;
+    await settle();
+  }
+
   return {
     context,
     calls,
@@ -177,6 +277,14 @@ function createHarness() {
     enqueueResponse,
     enqueueDeferredResponse,
     settle,
+    tick,
+    pauseIntervals() {
+      intervalsEnabled = false;
+      intervals.clear();
+    },
+    countStatusCalls() {
+      return calls.filter((call) => call.url === "/api/status").length;
+    },
     countTrackPostCalls() {
       return calls.filter((call) => {
         return call.url === "/api/tracks" &&
@@ -190,6 +298,45 @@ function createHarness() {
       }).length;
     },
   };
+}
+
+function applyStatusSample(harness, sample = {}) {
+  harness.context.applyStatusData({
+    gps_fix: false,
+    satellites: 0,
+    lat: 0,
+    lon: 0,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "",
+    ...sample,
+  });
+  harness.context.renderTrackDraft();
+}
+
+function seedStableGps(harness, samples) {
+  samples.forEach((sample) => applyStatusSample(harness, sample));
+}
+
+function sampledResponse(lat, lon, extra = {}) {
+  return {
+    gps_fix: true,
+    satellites: 8,
+    lat,
+    lon,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "No Track",
+    ...extra,
+  };
+}
+
+function enqueueStatusSamples(harness, responses) {
+  responses.forEach((response) => {
+    harness.enqueueResponse("/api/status", response);
+  });
 }
 
 async function testGpsFixAllowsZeroZeroCoordinates() {
@@ -209,62 +356,45 @@ async function testMarkingUsesFreshStatusAndRejectsZeroLengthLine() {
   const harness = createHarness();
   await harness.settle();
 
-  harness.context.applyStatusData({
-    gps_fix: true,
-    satellites: 4,
-    lat: 31.2304160,
-    lon: 121.4737004,
-    recording: false,
-    current_lap: 0,
-    best_lap_ms: -1,
-    track: "",
-  });
-  harness.context.applyStatusData({
-    gps_fix: true,
-    satellites: 4,
-    lat: 31.2304163,
-    lon: 121.4737007,
-    recording: false,
-    current_lap: 0,
-    best_lap_ms: -1,
-    track: "",
-  });
+  seedStableGps(harness, [
+    sampledResponse(31.2304160, 121.4737004),
+    sampledResponse(31.2304163, 121.4737007),
+    sampledResponse(31.2304166, 121.4737010),
+  ]);
 
   const statusCallsBefore = harness.calls.filter((call) => call.url === "/api/status").length;
-  harness.enqueueResponse("/api/status", {
-    gps_fix: true,
-    satellites: 4,
-    lat: 31.2304167,
-    lon: 121.4737010,
-    recording: false,
-    current_lap: 0,
-    best_lap_ms: -1,
-    track: "",
-  });
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304167, 121.4737010),
+  ]);
   harness.context.markStartFinishPoint("p1");
   await harness.settle();
+  await harness.tick(2400);
 
   const statusCallsAfter = harness.calls.filter((call) => call.url === "/api/status").length;
   assert.equal(
     statusCallsAfter,
-    statusCallsBefore + 1,
-    "marking should request a fresh /api/status snapshot",
+    statusCallsBefore + 6,
+    "marking should use a timed sample window of fresh /api/status snapshots",
   );
   assert.equal(harness.context._trackDraft.startFinish.p1.lat, 31.2304167);
   assert.equal(harness.context._trackDraft.startFinish.p1.lon, 121.4737010);
 
-  harness.enqueueResponse("/api/status", {
-    gps_fix: true,
-    satellites: 4,
-    lat: 31.2304167,
-    lon: 121.4737010,
-    recording: false,
-    current_lap: 0,
-    best_lap_ms: -1,
-    track: "",
-  });
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304167, 121.4737010),
+  ]);
   harness.context.markStartFinishPoint("p2");
   await harness.settle();
+  await harness.tick(2400);
 
   assert.equal(
     harness.context._trackDraft.startFinish.p2,
@@ -304,7 +434,7 @@ async function testGpsStabilityControlsMarkingState() {
   });
   assert.match(
     harness.getElement("gps-bar").innerHTML,
-    /Waiting for better GPS/i,
+    /Need better GPS/i,
   );
   assert.equal(
     harness.getElement("sf-p1-btn").disabled,
@@ -342,7 +472,7 @@ async function testGpsStabilityControlsMarkingState() {
   });
   assert.match(
     harness.getElement("gps-bar").innerHTML,
-    /Stable - ready to mark/i,
+    /Good - ready to mark/i,
   );
   assert.equal(
     harness.getElement("sf-p1-btn").disabled,
@@ -367,9 +497,151 @@ async function testGpsStabilityControlsMarkingState() {
   );
 }
 
+async function testGpsBarShowsFreshnessBuckets() {
+  const harness = createHarness();
+  await harness.settle();
+  harness.pauseIntervals();
+
+  function applyStatus(sample) {
+    harness.context.applyStatusData({
+      gps_fix: false,
+      satellites: 0,
+      lat: 0,
+      lon: 0,
+      recording: false,
+      current_lap: 0,
+      best_lap_ms: -1,
+      track: "",
+      ...sample,
+    });
+    harness.context.renderTrackDraft();
+  }
+
+  applyStatus({
+    gps_fix: true,
+    satellites: 4,
+    lat: 31.2304167,
+    lon: 121.4737010,
+  });
+  applyStatus({
+    gps_fix: true,
+    satellites: 4,
+    lat: 31.2304174,
+    lon: 121.4737017,
+  });
+  applyStatus({
+    gps_fix: true,
+    satellites: 4,
+    lat: 31.2304181,
+    lon: 121.4737014,
+  });
+
+  assert.match(
+    harness.getElement("gps-bar").innerHTML,
+    /Live/i,
+    "fresh GPS data should be labeled as live",
+  );
+
+  await harness.tick(1500);
+  harness.context.renderTrackDraft();
+  assert.match(
+    harness.getElement("gps-bar").innerHTML,
+    /1s ago/i,
+    "freshness should move to a coarse age bucket after about a second",
+  );
+
+  await harness.tick(2500);
+  harness.context.renderTrackDraft();
+  assert.match(
+    harness.getElement("gps-bar").innerHTML,
+    /Stale/i,
+    "freshness should warn when the visible coordinate is several seconds old",
+  );
+}
+
+async function testTrackCreationUsesAdaptivePollingWithoutOverlap() {
+  const harness = createHarness();
+  await harness.settle();
+
+  const initialStatusCalls = harness.countStatusCalls();
+  await harness.tick(1999);
+  assert.equal(
+    harness.countStatusCalls(),
+    initialStatusCalls,
+    "idle polling should not fire before the default two-second cadence",
+  );
+
+  await harness.tick(1);
+  assert.equal(
+    harness.countStatusCalls(),
+    initialStatusCalls + 1,
+    "idle polling should refresh after two seconds",
+  );
+
+  harness.getElement("track-name").value = "Adaptive Polling Test";
+  harness.context.renderTrackDraft();
+
+  const creationCallsBefore = harness.countStatusCalls();
+  await harness.tick(999);
+  assert.equal(
+    harness.countStatusCalls(),
+    creationCallsBefore,
+    "track-creation mode should wait until the faster polling interval elapses",
+  );
+
+  await harness.tick(1);
+  assert.equal(
+    harness.countStatusCalls(),
+    creationCallsBefore + 1,
+    "track-creation mode should poll faster than the default status screen",
+  );
+
+  const pendingStatus = harness.enqueueDeferredResponse("/api/status");
+  const overlapCallsBefore = harness.countStatusCalls();
+  await harness.tick(1000);
+  assert.equal(
+    harness.countStatusCalls(),
+    overlapCallsBefore + 1,
+    "the next poll should begin once the faster interval elapses",
+  );
+
+  await harness.tick(3000);
+  assert.equal(
+    harness.countStatusCalls(),
+    overlapCallsBefore + 1,
+    "slow responses should not cause overlapping queued status polls",
+  );
+
+  pendingStatus.resolve({
+    gps_fix: true,
+    satellites: 4,
+    lat: 31.2304167,
+    lon: 121.4737010,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "",
+  });
+  await harness.settle();
+
+  await harness.tick(1000);
+  assert.equal(
+    harness.countStatusCalls(),
+    overlapCallsBefore + 2,
+    "polling should resume after the in-flight request finishes",
+  );
+}
+
 async function testMarkingRequiresGpsStability() {
   const harness = createHarness();
   await harness.settle();
+
+  applyStatusSample(harness, {
+    gps_fix: true,
+    satellites: 4,
+    lat: 31.2304165,
+    lon: 121.4737008,
+  });
 
   harness.enqueueResponse("/api/status", {
     gps_fix: true,
@@ -392,6 +664,472 @@ async function testMarkingRequiresGpsStability() {
   assert.match(
     harness.getElement("track-create-msg").textContent,
     /stabil/i,
+  );
+}
+
+async function testSampledCaptureUsesTimedMedianAndSamplingCadence() {
+  const harness = createHarness();
+  await harness.settle();
+
+  seedStableGps(harness, [
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304169, 121.4737012),
+    sampledResponse(31.2304171, 121.4737014),
+  ]);
+
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2304188, 121.4737020),
+    sampledResponse(31.2304190, 121.4737022),
+    sampledResponse(31.2304300, 121.4737200),
+    sampledResponse(31.2304192, 121.4737024),
+    sampledResponse(31.2304194, 121.4737026),
+    sampledResponse(31.2304196, 121.4737028),
+  ]);
+
+  const statusCallsBefore = harness.countStatusCalls();
+  harness.context.markStartFinishPoint("p1");
+  await harness.settle();
+
+  assert.equal(
+    harness.context._trackDraft.startFinish.p1,
+    null,
+    "sampling should not store P1 immediately on tap",
+  );
+  assert.match(
+    harness.getElement("track-create-msg").textContent,
+    /sampling point/i,
+    "sampling should surface in-progress copy while collecting fresh points",
+  );
+
+  await harness.tick(399);
+  assert.equal(
+    harness.countStatusCalls(),
+    statusCallsBefore + 1,
+    "sampling should not fetch again before the 400ms cadence elapses",
+  );
+
+  await harness.tick(1);
+  assert.equal(
+    harness.countStatusCalls(),
+    statusCallsBefore + 2,
+    "sampling should temporarily increase capture cadence to 400ms",
+  );
+
+  await harness.tick(2000);
+
+  assert.ok(
+    harness.context._trackDraft.startFinish.p1,
+    "sampling should eventually store a captured point after the full window",
+  );
+  assert.equal(
+    harness.countStatusCalls(),
+    statusCallsBefore + 6,
+    "sampling should collect a fixed six fresh snapshots across the 2400ms window",
+  );
+  assert.ok(
+    Math.abs(harness.context._trackDraft.startFinish.p1.lat - 31.2304193) < 1e-7,
+    "captured latitude should reflect the sample median rather than the first sample",
+  );
+  assert.ok(
+    Math.abs(harness.context._trackDraft.startFinish.p1.lon - 121.4737025) < 1e-7,
+    "captured longitude should reflect the sample median rather than the first sample",
+  );
+  assert.equal(harness.context._trackDraft.startFinish.p1.sampleCount, 6);
+  assert.match(
+    harness.getElement("track-create-msg").textContent,
+    /sampled 6 fixes/i,
+    "successful capture should summarize the number of samples used",
+  );
+}
+
+async function testSampledCaptureCanCancelAndRejectConcurrentMarks() {
+  const harness = createHarness();
+  await harness.settle();
+
+  seedStableGps(harness, [
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304169, 121.4737012),
+    sampledResponse(31.2304171, 121.4737014),
+  ]);
+
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2304188, 121.4737020),
+    sampledResponse(31.2304190, 121.4737022),
+    sampledResponse(31.2304192, 121.4737024),
+    sampledResponse(31.2304194, 121.4737026),
+    sampledResponse(31.2304196, 121.4737028),
+    sampledResponse(31.2304198, 121.4737030),
+  ]);
+
+  harness.context.markStartFinishPoint("p1");
+  await harness.settle();
+
+  harness.context.markStartFinishPoint("p2");
+  assert.match(
+    harness.getElement("track-create-msg").textContent,
+    /finish the current sample or cancel/i,
+    "second mark taps should be rejected while a sample window is already active",
+  );
+
+  harness.context.cancelPointSampling();
+  await harness.settle();
+  await harness.tick(2400);
+
+  assert.equal(
+    harness.context._trackDraft.startFinish.p1,
+    null,
+    "cancel should discard the in-progress sample window",
+  );
+  assert.match(
+    harness.getElement("track-create-msg").textContent,
+    /sampling canceled/i,
+    "cancel should explain that no point was stored",
+  );
+}
+
+async function testSampledCaptureFailsOnGpsLossOrTooFewSamples() {
+  const harness = createHarness();
+  await harness.settle();
+
+  seedStableGps(harness, [
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304169, 121.4737012),
+    sampledResponse(31.2304171, 121.4737014),
+  ]);
+
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2304188, 121.4737020),
+    sampledResponse(31.2304190, 121.4737022),
+    sampledResponse(0, 0, { gps_fix: false, satellites: 0 }),
+  ]);
+
+  harness.context.markStartFinishPoint("p1");
+  await harness.settle();
+  await harness.tick(2400);
+
+  assert.equal(
+    harness.context._trackDraft.startFinish.p1,
+    null,
+    "GPS loss during the sample window should fail the capture",
+  );
+  assert.match(
+    harness.getElement("track-create-msg").textContent,
+    /gps dropped during sampling|retry/i,
+    "failed sampling should tell the user to retry instead of storing partial data",
+  );
+
+  seedStableGps(harness, [
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304169, 121.4737012),
+    sampledResponse(31.2304171, 121.4737014),
+  ]);
+
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2304188, 121.4737020),
+    sampledResponse(31.2304190, 121.4737022),
+  ]);
+  harness.enqueueDeferredResponse("/api/status");
+
+  harness.context.markStartFinishPoint("p1");
+  await harness.settle();
+  await harness.tick(2400);
+
+  assert.equal(
+    harness.context._trackDraft.startFinish.p1,
+    null,
+    "fewer than three valid samples should not create a point",
+  );
+  assert.match(
+    harness.getElement("track-create-msg").textContent,
+    /at least 3 good fixes|retry/i,
+    "sample windows with too few valid fixes should produce an actionable retry message",
+  );
+}
+
+async function testSectorMarkingUsesSharedSampledCapturePath() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.context.addSectorRow();
+  seedStableGps(harness, [
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304169, 121.4737012),
+    sampledResponse(31.2304171, 121.4737014),
+  ]);
+
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2304200, 121.4737040),
+    sampledResponse(31.2304202, 121.4737042),
+    sampledResponse(31.2304204, 121.4737044),
+    sampledResponse(31.2304206, 121.4737046),
+    sampledResponse(31.2304208, 121.4737048),
+    sampledResponse(31.2304210, 121.4737050),
+  ]);
+
+  harness.context.markSectorPoint(1, "p1");
+  await harness.settle();
+  await harness.tick(2400);
+
+  assert.ok(
+    harness.context._trackDraft.sectors[0].p1,
+    "sector P1 should also use the sampled capture path",
+  );
+  assert.equal(
+    harness.context._trackDraft.sectors[0].p1.sampleCount,
+    6,
+    "sector capture should store the same metadata as start/finish capture",
+  );
+}
+
+async function testRepeatabilityCheckCanUpgradeShortLineConfidence() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.context.REPEATABILITY_CHECK_ENABLED = true;
+  harness.getElement("track-name").value = "Repeatability Test";
+  harness.context._trackDraft.startFinish = {
+    p1: { lat: 31.2300000, lon: 121.4700000, sampleCount: 3, spreadM: 1.3 },
+    p2: { lat: 31.2300000, lon: 121.4700420, sampleCount: 3, spreadM: 1.2 },
+    heading: 180,
+    flipped: false,
+  };
+  seedStableGps(harness, [
+    sampledResponse(31.2300000, 121.4700000),
+    sampledResponse(31.2300001, 121.4700001),
+    sampledResponse(31.2300000, 121.4700000),
+  ]);
+  harness.context.renderTrackDraft();
+
+  assert.equal(
+    harness.getElement("create-track-btn").disabled,
+    true,
+    "short lines with only medium-confidence points should stay blocked before repeatability confirmation",
+  );
+  assert.equal(
+    harness.getElement("repeatability-btn").style.display,
+    "block",
+    "repeatability affordance should appear when the feature flag is enabled",
+  );
+
+  harness.context.startRepeatabilityCheck();
+  assert.equal(harness.context._trackDraft.repeatability.active, true);
+
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2300000, 121.4700000),
+    sampledResponse(31.2300001, 121.4700001),
+    sampledResponse(31.2300000, 121.4700000),
+    sampledResponse(31.2300001, 121.4700001),
+    sampledResponse(31.2300000, 121.4700000),
+    sampledResponse(31.2300001, 121.4700001),
+  ]);
+  harness.context.markStartFinishPoint("p1");
+  await harness.settle();
+  await harness.tick(2400);
+
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2300000, 121.4700420),
+    sampledResponse(31.2300001, 121.4700421),
+    sampledResponse(31.2300000, 121.4700420),
+    sampledResponse(31.2300001, 121.4700421),
+    sampledResponse(31.2300000, 121.4700420),
+    sampledResponse(31.2300001, 121.4700421),
+  ]);
+  harness.context.markStartFinishPoint("p2");
+  await harness.settle();
+  await harness.tick(2400);
+
+  assert.equal(harness.context._trackDraft.repeatability.status, "passed");
+  assert.equal(
+    harness.getElement("create-track-btn").disabled,
+    false,
+    "close repeatability agreement should allow the short line to be created",
+  );
+  assert.match(
+    harness.getElement("repeatability-summary").textContent,
+    /passed|confirmed/i,
+    "repeatability UI should summarize a successful confirmation",
+  );
+}
+
+async function testRepeatabilityCheckBlocksShortLineOnMismatch() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.context.REPEATABILITY_CHECK_ENABLED = true;
+  harness.getElement("track-name").value = "Repeatability Mismatch";
+  harness.context._trackDraft.startFinish = {
+    p1: { lat: 31.2300000, lon: 121.4700000, sampleCount: 3, spreadM: 1.3 },
+    p2: { lat: 31.2300000, lon: 121.4700420, sampleCount: 3, spreadM: 1.2 },
+    heading: 180,
+    flipped: false,
+  };
+  seedStableGps(harness, [
+    sampledResponse(31.2300000, 121.4700000),
+    sampledResponse(31.2300001, 121.4700001),
+    sampledResponse(31.2300000, 121.4700000),
+  ]);
+  harness.context.renderTrackDraft();
+  harness.context.startRepeatabilityCheck();
+
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2300200, 121.4700100),
+    sampledResponse(31.2300201, 121.4700101),
+    sampledResponse(31.2300200, 121.4700100),
+    sampledResponse(31.2300201, 121.4700101),
+    sampledResponse(31.2300200, 121.4700100),
+    sampledResponse(31.2300201, 121.4700101),
+  ]);
+  harness.context.markStartFinishPoint("p1");
+  await harness.settle();
+  await harness.tick(2400);
+
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2300450, 121.4700100),
+    sampledResponse(31.2300451, 121.4700101),
+    sampledResponse(31.2300450, 121.4700100),
+    sampledResponse(31.2300451, 121.4700101),
+    sampledResponse(31.2300450, 121.4700100),
+    sampledResponse(31.2300451, 121.4700101),
+  ]);
+  harness.context.markStartFinishPoint("p2");
+  await harness.settle();
+  await harness.tick(2400);
+
+  assert.equal(harness.context._trackDraft.repeatability.status, "failed");
+  assert.equal(
+    harness.getElement("create-track-btn").disabled,
+    true,
+    "large repeatability disagreement should keep short lines blocked",
+  );
+  assert.match(
+    harness.getElement("repeatability-summary").textContent,
+    /mismatch|remeasure/i,
+    "repeatability UI should explain that the line needs to be remeasured",
+  );
+}
+
+async function testRepeatabilityStateResetsAfterLineChangesAndInheritsFlip() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.context.REPEATABILITY_CHECK_ENABLED = true;
+  harness.getElement("track-name").value = "Repeatability Reset";
+  harness.context._trackDraft.startFinish = {
+    p1: { lat: 31.2300000, lon: 121.4700000, sampleCount: 3, spreadM: 1.3 },
+    p2: { lat: 31.2300000, lon: 121.4700420, sampleCount: 3, spreadM: 1.2 },
+    heading: 180,
+    flipped: true,
+  };
+  harness.context.renderTrackDraft();
+
+  harness.context.startRepeatabilityCheck();
+  assert.equal(
+    harness.context._trackDraft.repeatability.candidate.flipped,
+    true,
+    "repeatability candidate should inherit the currently selected crossing direction",
+  );
+
+  harness.context._trackDraft.repeatability.active = false;
+  harness.context._trackDraft.repeatability.status = "passed";
+  harness.context._trackDraft.repeatability.result = {
+    passed: true,
+    midpointDeltaM: 0.4,
+    headingDeltaDeg: 3.0,
+  };
+  harness.context.renderTrackDraft();
+  assert.equal(
+    harness.getElement("create-track-btn").disabled,
+    false,
+    "a passed repeatability check should unlock creation for a short line",
+  );
+
+  harness.context.flipStartFinishHeading();
+  assert.equal(
+    harness.context._trackDraft.repeatability.status,
+    "idle",
+    "flipping the accepted direction should invalidate old repeatability results",
+  );
+  assert.equal(
+    harness.getElement("create-track-btn").disabled,
+    true,
+    "creation should be re-gated after the line direction changes",
+  );
+
+  seedStableGps(harness, [
+    sampledResponse(31.2300000, 121.4700000),
+    sampledResponse(31.2300001, 121.4700001),
+    sampledResponse(31.2300000, 121.4700000),
+  ]);
+
+  harness.context._trackDraft.repeatability.status = "passed";
+  harness.context._trackDraft.repeatability.result = {
+    passed: true,
+    midpointDeltaM: 0.3,
+    headingDeltaDeg: 2.0,
+  };
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2300000, 121.4700010),
+    sampledResponse(31.2300001, 121.4700011),
+    sampledResponse(31.2300000, 121.4700010),
+    sampledResponse(31.2300001, 121.4700011),
+    sampledResponse(31.2300000, 121.4700010),
+    sampledResponse(31.2300001, 121.4700011),
+  ]);
+  harness.context.markStartFinishPoint("p1");
+  await harness.settle();
+  await harness.tick(2400);
+
+  assert.equal(
+    harness.context._trackDraft.repeatability.status,
+    "idle",
+    "re-marking the main line should invalidate old repeatability results",
+  );
+}
+
+async function testSamplingIgnoresPreTapStatusRequestsUntilFreshFetchArrives() {
+  const harness = createHarness();
+  await harness.settle();
+
+  seedStableGps(harness, [
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304169, 121.4737012),
+    sampledResponse(31.2304171, 121.4737014),
+  ]);
+
+  const staleResponse = harness.enqueueDeferredResponse("/api/status");
+  harness.context.refreshStatus();
+  await harness.settle();
+
+  harness.context.markStartFinishPoint("p1");
+  await harness.settle();
+
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2304188, 121.4737020),
+    sampledResponse(31.2304190, 121.4737022),
+    sampledResponse(31.2304192, 121.4737024),
+    sampledResponse(31.2304194, 121.4737026),
+    sampledResponse(31.2304196, 121.4737028),
+    sampledResponse(31.2304198, 121.4737030),
+  ]);
+  staleResponse.resolve(sampledResponse(31.2305000, 121.4737800));
+  await harness.settle();
+
+  assert.equal(
+    harness.context._trackDraft.startFinish.p1,
+    null,
+    "a status request that was already in flight before the tap should not count as the first capture sample",
+  );
+  assert.equal(
+    harness.context._pointSampling.samples.length,
+    0,
+    "sampling should wait for a fresh post-tap request before collecting points",
+  );
+
+  await harness.tick(2400);
+
+  assert.ok(
+    harness.context._trackDraft.startFinish.p1,
+    "sampling should still complete once a genuinely fresh status series arrives",
   );
 }
 
@@ -766,18 +1504,17 @@ async function testGuidedTrackReviewStageSupportsRemarkingSinglePoints() {
   harness.getElement("track-name").value = "Sprint Layout";
   harness.context.renderTrackDraft();
 
-  harness.enqueueResponse("/api/status", {
-    gps_fix: true,
-    satellites: 9,
-    lat: 31.2304167,
-    lon: 121.4737010,
-    recording: false,
-    current_lap: 0,
-    best_lap_ms: -1,
-    track: "No Track",
-  });
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2304167, 121.4737010),
+    sampledResponse(31.2304168, 121.4737011),
+    sampledResponse(31.2304169, 121.4737012),
+    sampledResponse(31.2304170, 121.4737013),
+    sampledResponse(31.2304171, 121.4737014),
+    sampledResponse(31.2304172, 121.4737015),
+  ]);
   harness.context.markStartFinishPoint("p1");
   await harness.settle();
+  await harness.tick(2400);
 
   harness.context.applyStatusData({
     gps_fix: true,
@@ -810,18 +1547,17 @@ async function testGuidedTrackReviewStageSupportsRemarkingSinglePoints() {
     track: "No Track",
   });
 
-  harness.enqueueResponse("/api/status", {
-    gps_fix: true,
-    satellites: 9,
-    lat: 31.2304367,
-    lon: 121.4737408,
-    recording: false,
-    current_lap: 0,
-    best_lap_ms: -1,
-    track: "No Track",
-  });
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2304366, 121.4737407),
+    sampledResponse(31.2304367, 121.4737408),
+    sampledResponse(31.2304368, 121.4737409),
+    sampledResponse(31.2304369, 121.4737410),
+    sampledResponse(31.2304370, 121.4737411),
+    sampledResponse(31.2304371, 121.4737412),
+  ]);
   harness.context.markStartFinishPoint("p2");
   await harness.settle();
+  await harness.tick(2400);
 
   assert.match(
     harness.getElement("creation-step-name").className,
@@ -844,9 +1580,34 @@ async function testGuidedTrackReviewStageSupportsRemarkingSinglePoints() {
     "review stage should render a geometry preview before submit",
   );
   assert.match(
+    harness.getElement("geometry-review").innerHTML,
+    /North|review-north/i,
+    "review stage should include a north reference",
+  );
+  assert.match(
+    harness.getElement("geometry-review").innerHTML,
+    /Line length/i,
+    "review stage should include a measured line-length annotation",
+  );
+  assert.match(
+    harness.getElement("geometry-review").innerHTML,
+    /Crossing/i,
+    "review stage should include crossing direction metadata",
+  );
+  assert.match(
+    harness.getElement("geometry-review").innerHTML,
+    /Good - ready to save|Acceptable - short lines may drift|Noisy - try again/i,
+    "review stage should surface an action-oriented confidence label",
+  );
+  assert.match(
     harness.getElement("review-copy").textContent,
     /becomes current/i,
     "review stage should explain that a new track becomes current",
+  );
+  assert.match(
+    harness.getElement("review-copy").textContent,
+    /do not close or refresh/i,
+    "review copy should warn that track creation does not survive refreshes",
   );
   assert.match(harness.getElement("sf-p1-btn").textContent, /Re-mark P1/i);
   assert.match(harness.getElement("sf-p2-btn").textContent, /Re-mark P2/i);
@@ -885,18 +1646,17 @@ async function testGuidedTrackReviewStageSupportsRemarkingSinglePoints() {
     track: "No Track",
   });
 
-  harness.enqueueResponse("/api/status", {
-    gps_fix: true,
-    satellites: 9,
-    lat: 31.2304101,
-    lon: 121.4736924,
-    recording: false,
-    current_lap: 0,
-    best_lap_ms: -1,
-    track: "No Track",
-  });
+  enqueueStatusSamples(harness, [
+    sampledResponse(31.2304100, 121.4736923),
+    sampledResponse(31.2304101, 121.4736924),
+    sampledResponse(31.2304102, 121.4736925),
+    sampledResponse(31.2304103, 121.4736926),
+    sampledResponse(31.2304104, 121.4736927),
+    sampledResponse(31.2304105, 121.4736928),
+  ]);
   harness.context.markStartFinishPoint("p1");
   await harness.settle();
+  await harness.tick(2400);
 
   assert.equal(
     harness.context._trackDraft.startFinish.p2.lat,
@@ -962,7 +1722,17 @@ async function testSessionCardsRenderMetadataAndEncodedDownloads() {
   await testGpsFixAllowsZeroZeroCoordinates();
   await testMarkingUsesFreshStatusAndRejectsZeroLengthLine();
   await testGpsStabilityControlsMarkingState();
+  await testGpsBarShowsFreshnessBuckets();
+  await testTrackCreationUsesAdaptivePollingWithoutOverlap();
   await testMarkingRequiresGpsStability();
+  await testSampledCaptureUsesTimedMedianAndSamplingCadence();
+  await testSampledCaptureCanCancelAndRejectConcurrentMarks();
+  await testSampledCaptureFailsOnGpsLossOrTooFewSamples();
+  await testSectorMarkingUsesSharedSampledCapturePath();
+  await testRepeatabilityCheckCanUpgradeShortLineConfidence();
+  await testRepeatabilityCheckBlocksShortLineOnMismatch();
+  await testRepeatabilityStateResetsAfterLineChangesAndInheritsFlip();
+  await testSamplingIgnoresPreTapStatusRequestsUntilFreshFetchArrives();
   await testIncompleteSectorBlocksTrackCreation();
   await testCreateTrackGuardsAgainstDoubleSubmit();
   await testCreateTrackAutoSelectsNewTrack();

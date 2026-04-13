@@ -51,6 +51,35 @@ src/
 | `session.cpp` | 维护 SessionState，持有 current_lap、best_lap、delta_ms，是各模块共享的状态中心 | 无 |
 | `config.cpp` | 读写 SD 卡 `config/settings.json`，提供 WiFi 密码、屏幕亮度等运行时配置 | storage.cpp |
 
+### 赛道创建 Web 流程（当前 v1）
+
+- 前端仍嵌在 `src/wifi/web_ui.cpp` 的离线 HTML/JS 中，不依赖在线地图
+- 状态数据继续来自 `/api/status`，但赛道创建阶段会采用分层刷新节奏：
+  - 空闲页默认约 `2000ms`
+  - 进入赛道创建后约 `1000ms`
+  - 点位采样窗口内约 `400ms`
+- 所有打点路径共享同一个采样状态机：
+  - 起终线 `P1/P2`
+  - 扇区 `P1/P2`
+  - 固定 `2400ms` 窗口
+  - 固定 `400ms` cadence
+  - 最多一个 `/api/status` 请求在途，慢响应时跳过下一个 tick，不排队
+  - 少于 `3` 个有效样本直接失败
+  - 聚合点使用局部切平面（米制）中的分量中位数，再换回经纬度
+- 前端会把采样得到的 `sampleCount / spreadM / captureAgeMs / confidence` 元数据保留在草稿里，用于：
+  - 点位置信度文案
+  - 短线风险判断
+  - 离线 review 面板中的不确定性圈和置信度 badge
+- 起终线 review 采用本地米制投影，保留真实纵横比，并显示 North、比例尺、线长和穿越方向
+- 当前实现默认 **不** 持久化赛道创建草稿；页面刷新后需要重新创建
+- Repeatability check 流程已实现，但 `REPEATABILITY_CHECK_ENABLED = false`，因此 v1 默认不阻塞用户
+- 保存链路使用更细的诊断枚举，而不是单一 `save failed`：
+  - `tracks/` 目录创建失败
+  - 文件打开失败
+  - 写入不完整
+  - `sync()` 失败
+  - 起终线 < `1m` 的服务端拒绝
+
 ---
 
 ## 2. 数据流图

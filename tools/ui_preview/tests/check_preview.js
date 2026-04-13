@@ -23,6 +23,32 @@ function formatLapTimeForExpectation(timeMs) {
   return String(minutes) + ":" + String(seconds).padStart(2, "0") + "." + String(hundredths).padStart(2, "0");
 }
 
+function extractReviewLine(markup, label) {
+  const escapedLabel = escapeRegExp(label);
+  const pattern = new RegExp(
+    '<line[^>]*data-review-label="' + escapedLabel + '"[^>]*x1="([^"]+)"[^>]*y1="([^"]+)"[^>]*x2="([^"]+)"[^>]*y2="([^"]+)"',
+  );
+  const match = markup.match(pattern);
+  assert.ok(match, "Expected review line for " + label);
+  return {
+    x1: Number(match[1]),
+    y1: Number(match[2]),
+    x2: Number(match[3]),
+    y2: Number(match[4]),
+  };
+}
+
+function projectedAspectRatio(line) {
+  return Math.abs((line.x2 - line.x1) / (line.y2 - line.y1));
+}
+
+function localMeterAspectRatio(p1, p2) {
+  const latCenter = (p1.lat + p2.lat) / 2;
+  const dx = (p2.lon - p1.lon) * 111320 * Math.cos(latCenter * Math.PI / 180);
+  const dy = (p2.lat - p1.lat) * 110540;
+  return Math.abs(dx / dy);
+}
+
 assert.match(indexHtml, /id="web-console-root"/);
 assert.match(indexHtml, /id="device-screen-root"/);
 assert.match(indexHtml, /id="scenario-controls-root"/);
@@ -208,6 +234,25 @@ assert.match(guidedReviewMarkup, /Re-mark P1/);
 assert.match(guidedReviewMarkup, /Re-mark P2/);
 assert.match(guidedReviewMarkup, /becomes current/i);
 assert.match(guidedReviewMarkup, /<svg/i);
+assert.match(guidedReviewMarkup, /Good - ready to save|Acceptable - short lines may drift|Noisy - try again/);
+assert.match(guidedReviewMarkup, /Crossing/i);
+assert.match(guidedReviewMarkup, /Line length/i);
+assert.match(guidedReviewMarkup, /Scale/i);
+assert.match(guidedReviewMarkup, /Do not close or refresh this page during track creation/i);
+assert.match(guidedReviewMarkup, /review-uncertainty/i);
+assert.match(guidedReviewMarkup, /review-north/i);
+{
+  const renderedLine = extractReviewLine(guidedReviewMarkup, "Start/Finish");
+  const expectedRatio = localMeterAspectRatio(
+    guidedTrackReviewScenario.track_creation.startFinish.p1,
+    guidedTrackReviewScenario.track_creation.startFinish.p2,
+  );
+  const renderedRatio = projectedAspectRatio(renderedLine);
+  assert.ok(
+    Math.abs(renderedRatio - expectedRatio) < 0.5,
+    "review panel should preserve the true meter-space aspect ratio",
+  );
+}
 assert.match(stabilizingMarkup, /Hold still\.\.\. stabilizing/i);
 assert.match(stabilizingMarkup, /web-console__gps-bar--warn/);
 assert.match(
