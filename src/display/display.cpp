@@ -11,6 +11,7 @@
 #include "config.h"
 #include "types.h"
 #include "pins.h"
+#include "boot_sequence.h"
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
@@ -28,6 +29,9 @@ static constexpr int   UNLOCK_HOLD_MS         = 3000;
 
 TFT_eSPI    s_tft = TFT_eSPI();
 TFT_eSprite s_delta_sprite(&s_tft);
+static bool s_tft_ready = false;
+static bool s_backlight_ready = false;
+static bool s_boot_frame_ready = false;
 
 static QueueHandle_t     s_btn_queue   = nullptr;
 static SemaphoreHandle_t s_spi_mtx     = nullptr;
@@ -260,6 +264,12 @@ static void init_backlight() {
 }
 
 static void init_tft() {
+    pinMode(PIN_TFT_RST, OUTPUT);
+    digitalWrite(PIN_TFT_RST, LOW);
+    delay(boot_tft_reset_low_ms());
+    digitalWrite(PIN_TFT_RST, HIGH);
+    delay(boot_tft_reset_high_ms());
+
     s_tft.init();
     s_tft.setRotation(1);  // landscape 320x240
     s_tft.fillScreen(TFT_BLACK);
@@ -270,9 +280,34 @@ static void init_delta_sprite() {
     s_delta_sprite.setTextDatum(MC_DATUM);
 }
 
+static void ensure_tft_ready() {
+    if (s_tft_ready) {
+        return;
+    }
+    init_tft();
+    s_tft_ready = true;
+}
+
+static void ensure_backlight_ready() {
+    if (s_backlight_ready) {
+        return;
+    }
+    init_backlight();
+    s_backlight_ready = true;
+}
+
 // ============================================================
 // Public API
 // ============================================================
+
+void display_boot_init() {
+    ensure_tft_ready();
+    if (!s_boot_frame_ready) {
+        draw_boot_static_frame();
+        s_boot_frame_ready = true;
+    }
+    ensure_backlight_ready();
+}
 
 void display_init(QueueHandle_t     btn_display_q,
                   SemaphoreHandle_t spi_mtx,
@@ -281,8 +316,8 @@ void display_init(QueueHandle_t     btn_display_q,
     s_spi_mtx     = spi_mtx;
     s_session_mtx = session_mtx;
 
-    init_backlight();
-    init_tft();
+    ensure_tft_ready();
+    ensure_backlight_ready();
     init_delta_sprite();
 
     memset(&s_cached_state, 0, sizeof(s_cached_state));

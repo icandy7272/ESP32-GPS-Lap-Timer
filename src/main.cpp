@@ -25,6 +25,8 @@
 #include "config.h"
 #include "track.h"
 #include "track_runtime.h"
+#include "boot_status.h"
+#include "boot_sequence.h"
 
 // --- Shared FreeRTOS primitives (created once here) ----------
 
@@ -37,20 +39,64 @@ QueueHandle_t lap_event_queue    = nullptr;
 QueueHandle_t btn_session_queue  = nullptr;
 QueueHandle_t btn_display_queue  = nullptr;
 
+RTC_NOINIT_ATTR uint8_t rtc_boot_stage;
+RTC_NOINIT_ATTR uint8_t rtc_boot_state;
+
 // --- Default track (loaded from SD or hard-coded fallback) ---
 
 TrackDefinition active_track = {};
 
-// --- Boot splash (shown while subsystems init) ---------------
+// --- Boot status + early hardware prep -----------------------
 
-static void show_splash() {
-    // Deassert SD CS before any SPI activity
-    pinMode(PIN_SD_CS, OUTPUT);
-    digitalWrite(PIN_SD_CS, HIGH);
+static constexpr uint8_t kBootBreadcrumbCleared = 0xFF;
 
-    // Backlight on
-    pinMode(PIN_TFT_BL, OUTPUT);
-    digitalWrite(PIN_TFT_BL, HIGH);
+static BootStatus s_boot_status = boot_status_make();
+static bool s_boot_status_active = false;
+static uint8_t s_previous_boot_stage = kBootBreadcrumbCleared;
+static uint8_t s_previous_boot_state = kBootBreadcrumbCleared;
+
+static void clear_boot_breadcrumb() {
+    rtc_boot_stage = kBootBreadcrumbCleared;
+    rtc_boot_state = kBootBreadcrumbCleared;
+}
+
+static void boot_publish(BootStage stage,
+                         BootState state,
+                         const char* display_detail,
+                         const char* serial_detail,
+                         bool update_display = true) {
+    const uint32_t now_ms = millis();
+    if (!s_boot_status_active || s_boot_status.stage != stage) {
+        boot_status_begin(&s_boot_status, stage, now_ms);
+        s_boot_status_active = true;
+    }
+
+    boot_status_update(&s_boot_status, state, display_detail, serial_detail);
+    rtc_boot_stage = static_cast<uint8_t>(s_boot_status.stage);
+    rtc_boot_state = static_cast<uint8_t>(s_boot_status.state);
+
+    char line[128];
+    boot_status_format_line(s_boot_status, now_ms, line, sizeof(line));
+    Serial.println(line);
+
+    if (update_display) {
+        display_boot_update(s_boot_status);
+    }
+}
+
+static void prepare_early_boot_hardware() {
+    EarlyBootPinState boot_pins[EARLY_BOOT_PIN_STATE_COUNT];
+    size_t count = boot_fill_early_pin_states(boot_pins,
+                                              EARLY_BOOT_PIN_STATE_COUNT);
+    for (size_t i = 0; i < count; ++i) {
+        pinMode(boot_pins[i].pin, OUTPUT);
+        digitalWrite(boot_pins[i].pin,
+                     boot_pins[i].level_high ? HIGH : LOW);
+    }
+
+    // Let the board 3V3 rail, SD module and TFT controller settle
+    // before the first shared-SPI transaction.
+    delay(boot_power_stable_delay_ms());
 }
 
 static void print_boot_info() {
@@ -73,7 +119,9 @@ static bool     s_boot_fix_valid = false;
 
 static void boot_wait_for_gps(uint32_t timeout_ms) {
     uint32_t start = millis();
+    uint32_t last_publish_ms = 0;
     int best_sats = 0;
+    int last_reported_sats = -1;
     GpsPoint pt;
 
     while ((millis() - start) < timeout_ms) {
@@ -84,18 +132,54 @@ static void boot_wait_for_gps(uint32_t timeout_ms) {
             if (pt.fix_3d) {
                 s_boot_fix = pt;
                 s_boot_fix_valid = true;
-                display_show_gps_search(pt.satellites);
-                Serial.printf("[BOOT] GPS fix acquired: %d sats\n",
-                              pt.satellites);
+                char display_detail[24];
+                char serial_detail[80];
+                snprintf(display_detail, sizeof(display_detail), "%d sats", pt.satellites);
+                snprintf(serial_detail, sizeof(serial_detail),
+                         "3D fix acquired (%d sats)", pt.satellites);
+                boot_publish(BootStage::GPS,
+                             BootState::OK,
+                             display_detail,
+                             serial_detail);
                 return;
             }
         }
-        // Update screen roughly once per second (200ms queue poll x5)
-        display_show_gps_search(best_sats);
+
+        const uint32_t now_ms = millis();
+        if (best_sats != last_reported_sats || (now_ms - last_publish_ms) >= 1000) {
+            char display_detail[24];
+            char serial_detail[80];
+            if (best_sats > 0) {
+                snprintf(display_detail, sizeof(display_detail), "%d sats", best_sats);
+                snprintf(serial_detail, sizeof(serial_detail),
+                         "waiting for fix (%d sats)", best_sats);
+            } else {
+                snprintf(display_detail, sizeof(display_detail), "waiting for fix");
+                snprintf(serial_detail, sizeof(serial_detail), "waiting for fix");
+            }
+            boot_publish(BootStage::GPS,
+                         BootState::START,
+                         display_detail,
+                         serial_detail);
+            last_reported_sats = best_sats;
+            last_publish_ms = now_ms;
+        }
     }
 
-    Serial.println("[BOOT] GPS timeout — proceeding without fix");
-    display_show_gps_search(best_sats);
+    char serial_detail[80];
+    if (best_sats > 0) {
+        snprintf(serial_detail, sizeof(serial_detail),
+                 "gps timeout after %u ms (best %d sats)",
+                 static_cast<unsigned>(timeout_ms), best_sats);
+    } else {
+        snprintf(serial_detail, sizeof(serial_detail),
+                 "gps timeout after %u ms",
+                 static_cast<unsigned>(timeout_ms));
+    }
+    boot_publish(BootStage::GPS,
+                 BootState::WARN,
+                 "fix timeout",
+                 serial_detail);
 }
 
 void setup() {
@@ -105,8 +189,24 @@ void setup() {
     pinMode(PIN_LED, OUTPUT);
     digitalWrite(PIN_LED, LOW);
 
-    show_splash();
+    s_boot_status = boot_status_make();
+    s_boot_status_active = false;
+    s_boot_fix_valid = false;
+    s_previous_boot_stage = rtc_boot_stage;
+    s_previous_boot_state = rtc_boot_state;
+
+    boot_publish(BootStage::POWER,
+                 BootState::START,
+                 "power staging",
+                 "applying early boot safe state",
+                 false);
     print_boot_info();
+    prepare_early_boot_hardware();
+    boot_publish(BootStage::POWER,
+                 BootState::OK,
+                 "rails stable",
+                 "rails stable",
+                 false);
 
     // --- Create shared primitives ---
     spi_mutex        = xSemaphoreCreateMutex();
@@ -116,13 +216,40 @@ void setup() {
     btn_session_queue = xQueueCreate(8,  sizeof(ButtonEvent));
     btn_display_queue = xQueueCreate(8,  sizeof(ButtonEvent));
 
-    // --- Config (reads settings.json from SD) ---
+    // Seed runtime defaults before boot display init so the early
+    // backlight handoff uses a sane brightness value.
     config_set_defaults();
-    if (!storage_init()) {
-        Serial.println("[BOOT] SD card init FAILED — running without storage");
+
+    // --- Bring up the TFT boot UI before any SD work ---
+    boot_publish(BootStage::DISPLAY_STAGE,
+                 BootState::START,
+                 "starting display",
+                 "resetting TFT",
+                 false);
+    display_boot_init();
+    boot_publish(BootStage::DISPLAY_STAGE,
+                 BootState::OK,
+                 "splash ready",
+                 "boot splash ready");
+
+    // --- Config (reads settings.json from SD) ---
+    boot_publish(BootStage::STORAGE,
+                 BootState::START,
+                 "mounting storage",
+                 "initializing storage and config");
+    const bool storage_ok = storage_init();
+    if (!storage_ok) {
+        boot_publish(BootStage::STORAGE,
+                     BootState::WARN,
+                     "storage offline",
+                     "sd init failed; continuing without storage");
     } else {
-        config_load();
-        Serial.println("[BOOT] SD card OK, config loaded");
+        const bool config_loaded = config_load();
+        boot_publish(BootStage::STORAGE,
+                     BootState::OK,
+                     config_loaded ? "config loaded" : "defaults loaded",
+                     config_loaded ? "sd mounted, config loaded"
+                                   : "sd mounted, defaults in use");
 
         // --- Crash logger: if previous boot was a crash, log to SD ---
         esp_reset_reason_t rst = esp_reset_reason();
@@ -141,6 +268,10 @@ void setup() {
             extern int crash_bc_core1;
             int bc0 = crash_bc_core0;
             int bc1 = crash_bc_core1;
+            const char* boot_stage_str =
+                boot_stage_name(static_cast<BootStage>(s_previous_boot_stage));
+            const char* boot_state_str =
+                boot_state_name(static_cast<BootState>(s_previous_boot_state));
 
             // Read stack watermarks from RTC (last snapshot before crash)
             extern uint16_t wm_storage, wm_display, wm_session, wm_wifi, wm_laptimer;
@@ -154,9 +285,10 @@ void setup() {
             if (log.open("crash_log.txt", O_WRONLY | O_CREAT | O_APPEND)) {
                 char buf[384];
                 int n = snprintf(buf, sizeof(buf),
-                         "reason=%s core0=%d core1=%d "
+                         "reason=%s boot_stage=%s boot_state=%s core0=%d core1=%d "
                          "wm:stor=%u disp=%u sess=%u wifi=%u lapt=%u\n",
-                         reason_str, bc0, bc1, ws, wd, wse, ww, wl);
+                         reason_str, boot_stage_str, boot_state_str,
+                         bc0, bc1, ws, wd, wse, ww, wl);
                 log.write(reinterpret_cast<const uint8_t*>(buf), n);
                 log.sync();
                 log.close();
@@ -169,18 +301,38 @@ void setup() {
             if (persisted) {
                 crash_bc_core0 = 0;
                 crash_bc_core1 = 0;
-                Serial.printf("[BOOT] Previous crash persisted: %s core0=%d core1=%d "
+                Serial.printf("[BOOT] Previous crash persisted: %s boot_stage=%s boot_state=%s "
+                              "core0=%d core1=%d "
                               "wm:stor=%u disp=%u sess=%u wifi=%u lapt=%u\n",
-                              reason_str, bc0, bc1, ws, wd, wse, ww, wl);
+                              reason_str, boot_stage_str, boot_state_str,
+                              bc0, bc1, ws, wd, wse, ww, wl);
             } else {
-                Serial.printf("[BOOT] WARN: crash detected (%s) but SD write failed — "
-                              "breadcrumbs preserved for next boot\n", reason_str);
+                Serial.printf("[BOOT] WARN: crash detected (%s) at %s/%s but SD write "
+                              "failed — breadcrumbs preserved for next boot\n",
+                              reason_str, boot_stage_str, boot_state_str);
             }
 
             // Reset watermarks to sentinel (0 = "not yet sampled this boot")
             // so crash_log never inherits stale values from a previous boot.
             wm_storage = 0; wm_display = 0; wm_session = 0;
             wm_wifi = 0; wm_laptimer = 0;
+        }
+
+        // --- Track loading ---
+        track_init();
+        if (track_count() > 0) {
+            track_load_first(&active_track);
+            char serial_detail[80];
+            snprintf(serial_detail, sizeof(serial_detail), "track loaded: %s", active_track.name);
+            boot_publish(BootStage::STORAGE,
+                         BootState::OK,
+                         "track loaded",
+                         serial_detail);
+        } else {
+            boot_publish(BootStage::STORAGE,
+                         BootState::OK,
+                         "storage ready",
+                         "no tracks on sd; crossing detection disabled");
         }
     }
 
@@ -190,42 +342,34 @@ void setup() {
     // --- Session state machine ---
     session_init(lap_event_queue, btn_session_queue);
 
-    // --- Track loading ---
-    track_init();
-    if (track_count() > 0) {
-        track_load_first(&active_track);
-        Serial.printf("[BOOT] Track loaded: %s\n", active_track.name);
-    } else {
-        Serial.println("[BOOT] No tracks on SD — crossing detection disabled");
-    }
-
     // --- Lap timer init (task started AFTER boot GPS wait to avoid queue race) ---
     lap_timer_init(gps_queue, vbo_write_queue, lap_event_queue,
                    session_mutex, &active_track);
 
-    // --- Display init (TFT hardware) — must happen before boot screens ---
-    display_init(btn_display_queue, spi_mutex, session_mutex);
-
-    // --- Recovery notification (before splash if session was salvaged) ---
+    // --- Recovery notification while staying on the shared boot splash ---
     if (storage_recovered) {
-        display_show_recovery();
+        boot_publish(BootStage::STORAGE,
+                     BootState::WARN,
+                     "session recovered",
+                     "session recovered");
         delay(2000);
     }
 
-    // --- Boot screen 1: Splash ---
-    display_show_splash();
-    delay(1000);
-
     // --- GPS (Core 0 task creates gps_task internally) ---
+    boot_publish(BootStage::GPS,
+                 BootState::START,
+                 "starting gps",
+                 "starting UART and GPS task");
     gps_init(gps_queue);
 
-    // --- Boot screen 2: GPS searching (poll up to 30s) ---
+    // --- GPS fix wait (poll up to 30s) ---
     // lap_timer_task not yet started, so we're the sole queue consumer
     boot_wait_for_gps(30000);
-    delay(500);
+    if (!s_boot_fix_valid) {
+        delay(500);
+    }
 
     // --- Auto-detect track from GPS position ---
-    bool boot_track_confirmed = false;
     if (s_boot_fix_valid) {
         const TrackDefinition* detected =
             track_auto_detect(s_boot_fix.lat_deg, s_boot_fix.lon_deg);
@@ -238,30 +382,48 @@ void setup() {
                         sizeof(session_state.track_name));
                 xSemaphoreGive(session_mutex);
             }
-            boot_track_confirmed = true;
-            Serial.printf("[BOOT] Auto-detected: %s\n", active_track.name);
+            char serial_detail[80];
+            snprintf(serial_detail, sizeof(serial_detail), "track matched: %s", active_track.name);
+            boot_publish(BootStage::GPS,
+                         BootState::OK,
+                         "track matched",
+                         serial_detail);
+            delay(1000);
         } else if (active_track.name[0] == '\0') {
             strncpy(active_track.name, "No Track", sizeof(active_track.name) - 1);
             active_track.name[sizeof(active_track.name) - 1] = '\0';
             track_runtime_note_track_cleared();
-            Serial.println("[BOOT] No track within 5km");
+            boot_publish(BootStage::GPS,
+                         BootState::OK,
+                         "track not found",
+                         "track autodetect missed");
+            delay(500);
+        } else {
+            char serial_detail[80];
+            snprintf(serial_detail, sizeof(serial_detail),
+                     "track autodetect missed; keeping %s",
+                     active_track.name);
+            boot_publish(BootStage::GPS,
+                         BootState::OK,
+                         "track not found",
+                         serial_detail);
+            delay(500);
         }
     }
+
+    // --- READY before runtime task startup / display handoff ---
+    boot_publish(BootStage::READY,
+                 BootState::OK,
+                 "entering runtime",
+                 "entering runtime");
+    delay(500);
+
+    // --- Runtime display handoff ---
+    display_init(btn_display_queue, spi_mutex, session_mutex);
 
     // --- NOW start lap_timer_task (after boot GPS wait is done) ---
     xTaskCreatePinnedToCore(lap_timer_task, "lap_timer", 8192,
                             nullptr, 20, nullptr, 0);
-
-    // --- Boot screen 3: Track found ---
-    if (track_runtime_should_show_track_found(boot_track_confirmed,
-                                              &active_track)) {
-        display_show_track_found(active_track.name);
-        delay(1500);
-    }
-
-    // --- Boot screen 4: Ready ---
-    display_show_ready();
-    delay(500);
 
     // --- Storage task (Core 1) ---
     xTaskCreatePinnedToCore(storage_task, "storage", 6144,
@@ -285,9 +447,16 @@ void setup() {
     xTaskCreatePinnedToCore(wifi_task, "wifi", 12288,
                             nullptr, 5, nullptr, 1);
 
-    Serial.println("[BOOT] All subsystems started");
-    Serial.printf("[BOOT] Free heap: %u B  Free PSRAM: %u B\n",
-                  ESP.getFreeHeap(), ESP.getFreePsram());
+    char serial_detail[80];
+    snprintf(serial_detail, sizeof(serial_detail),
+             "runtime tasks started, heap=%u, psram=%u",
+             ESP.getFreeHeap(), ESP.getFreePsram());
+    boot_publish(BootStage::READY,
+                 BootState::OK,
+                 "runtime active",
+                 serial_detail,
+                 false);
+    clear_boot_breadcrumb();
 }
 
 // Stack watermark snapshot — written every 5s by loop(), read by crash logger.

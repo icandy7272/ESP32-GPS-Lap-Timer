@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.h"
+#include "boot_status.h"
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
@@ -93,3 +94,7 @@ void format_delta(char* buf, size_t len, int32_t delta_ms);
 void draw_driving_screen(const DirtyFlags& df, const SessionState& st);
 void draw_status_screen(const SessionState& st);
 void draw_lap_list_screen(const SessionState& st);
+
+// Boot renderer internals.
+void draw_boot_static_frame();
+void draw_boot_status(const BootStatus& status);

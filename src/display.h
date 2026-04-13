@@ -11,6 +11,8 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 
+struct BootStatus;
+
 // --- Public API ---
 
 // Initialise TFT hardware, backlight, and start the display task.
@@ -25,12 +27,19 @@ void display_init(QueueHandle_t     btn_display_q,
 // param is unused — dependencies injected via display_init().
 void display_task(void* param);
 
-// --- Boot sequence screens (called from setup() before display_task starts) ---
+// --- Boot sequence renderer (called from setup() before display_task starts) ---
 // These draw directly to the TFT. No mutex needed since display_task
-// hasn't started yet. TFT must be initialised first via display_init().
+// hasn't started yet.
 
-void display_show_splash();                     // "GPS Lap Timer v1.0"
-void display_show_gps_search(int sats);         // "GPS Searching... X sats"
-void display_show_track_found(const char* name); // "Track: XX"
-void display_show_recovery();                    // "Session Recovered" for 2s
-void display_show_ready();                       // "READY" in big green text
+// Initialize TFT + boot static frame (black background + centered logo).
+void display_boot_init();
+// Update only mutable boot status UI regions.
+void display_boot_update(const BootStatus& status);
+
+// Compatibility wrappers that adapt legacy boot call sites to the unified
+// splash renderer while migration is in progress.
+void display_show_splash();
+void display_show_gps_search(int sats);
+void display_show_track_found(const char* name);
+void display_show_recovery();
+void display_show_ready();

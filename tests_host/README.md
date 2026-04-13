@@ -9,6 +9,9 @@ extracted from the firmware specifically to be testable.
 
 | Test file | Module under test | Why it's portable |
 |---|---|---|
+| `test_boot_sequence.cpp` | `src/boot_sequence.cpp` | Early boot pin-safe-state and stabilization timing helpers — pure data assembly and constant access with no Arduino runtime dependency |
+| `test_boot_status.cpp` | `src/boot_status.cpp` | Boot stage/state transitions, ASCII-safe detail storage, and structured serial line formatting over plain enums/buffers |
+| `test_boot_presenter.cpp` | `src/boot_presenter.cpp` | Mapping `BootStatus` into the restrained boot splash view model (stage label, detail text, progress segments) with no hardware dependencies |
 | `test_track_runtime.cpp` | `src/track_runtime.cpp` | Track lifecycle decisions (boot detection sync, delete-while-recording guard, late auto-detect guard) — pure functions over `TrackDefinition` and primitive types, no Arduino/FreeRTOS deps |
 | `test_storage_naming.cpp` | `src/storage_naming.cpp` | Final session VBO path layout — pure string formatting |
 | `test_button_profile.cpp` | `src/button_profile.cpp` | Button event classification and profile lookup logic over plain enums/structs with no hardware dependencies |
