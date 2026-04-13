@@ -9,7 +9,7 @@ extracted from the firmware specifically to be testable.
 
 | Test file | Module under test | Why it's portable |
 |---|---|---|
-| `test_boot_sequence.cpp` | `src/boot_sequence.cpp` | Early boot pin-safe-state and stabilization timing helpers — pure data assembly and constant access with no Arduino runtime dependency |
+| `test_boot_sequence.cpp` | `src/boot_sequence.cpp` | Early boot pin-safe-state, cold-start probe naming/formatting, and stabilization timing helpers — pure data assembly and constant access with no Arduino runtime dependency |
 | `test_boot_status.cpp` | `src/boot_status.cpp` | Boot stage/state transitions, ASCII-safe detail storage, and structured serial line formatting over plain enums/buffers |
 | `test_boot_presenter.cpp` | `src/boot_presenter.cpp` | Mapping `BootStatus` into the restrained boot splash view model (stage label, detail text, progress segments) with no hardware dependencies |
 | `test_track_runtime.cpp` | `src/track_runtime.cpp` | Track lifecycle decisions (boot detection sync, delete-while-recording guard, late auto-detect guard) — pure functions over `TrackDefinition` and primitive types, no Arduino/FreeRTOS deps |

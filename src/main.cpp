@@ -9,6 +9,7 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <esp_task_wdt.h>
+#include <esp_rom_sys.h>
 #include <esp_system.h>
 
 #include "sdfat_global.h"
@@ -41,6 +42,8 @@ QueueHandle_t btn_display_queue  = nullptr;
 
 RTC_NOINIT_ATTR uint8_t rtc_boot_stage;
 RTC_NOINIT_ATTR uint8_t rtc_boot_state;
+RTC_NOINIT_ATTR uint32_t rtc_boot_probe_magic;
+RTC_NOINIT_ATTR uint8_t rtc_boot_probe_phase;
 
 // --- Default track (loaded from SD or hard-coded fallback) ---
 
@@ -49,15 +52,45 @@ TrackDefinition active_track = {};
 // --- Boot status + early hardware prep -----------------------
 
 static constexpr uint8_t kBootBreadcrumbCleared = 0xFF;
+static constexpr uint32_t kBootProbeMagic = 0x42505242;
 
 static BootStatus s_boot_status = boot_status_make();
 static bool s_boot_status_active = false;
 static uint8_t s_previous_boot_stage = kBootBreadcrumbCleared;
 static uint8_t s_previous_boot_state = kBootBreadcrumbCleared;
+static uint8_t s_previous_boot_probe_phase = kBootProbeCleared;
 
 static void clear_boot_breadcrumb() {
     rtc_boot_stage = kBootBreadcrumbCleared;
     rtc_boot_state = kBootBreadcrumbCleared;
+}
+
+static uint8_t capture_previous_boot_probe() {
+    if (rtc_boot_probe_magic != kBootProbeMagic) {
+        return kBootProbeCleared;
+    }
+    return rtc_boot_probe_phase;
+}
+
+static void clear_boot_probe() {
+    rtc_boot_probe_magic = kBootProbeMagic;
+    rtc_boot_probe_phase = kBootProbeCleared;
+}
+
+static void boot_probe_mark(EarlyBootProbe probe) {
+    rtc_boot_probe_magic = kBootProbeMagic;
+    rtc_boot_probe_phase = static_cast<uint8_t>(probe);
+    esp_rom_printf("[BOOT-EARLY] %s\r\n", boot_probe_name(probe));
+}
+
+static void report_previous_boot_probe() {
+    if (s_previous_boot_probe_phase == kBootProbeCleared) {
+        return;
+    }
+
+    char probe[32];
+    boot_probe_format(s_previous_boot_probe_phase, probe, sizeof(probe));
+    Serial.printf("[BOOT] Previous attempt reached %s before reset\n", probe);
 }
 
 static void boot_publish(BootStage stage,
@@ -183,8 +216,12 @@ static void boot_wait_for_gps(uint32_t timeout_ms) {
 }
 
 void setup() {
+    s_previous_boot_probe_phase = capture_previous_boot_probe();
+    boot_probe_mark(EarlyBootProbe::SETUP_ENTRY);
+
     Serial.begin(115200);
     delay(200);
+    boot_probe_mark(EarlyBootProbe::SERIAL_READY);
 
     pinMode(PIN_LED, OUTPUT);
     digitalWrite(PIN_LED, LOW);
@@ -194,6 +231,7 @@ void setup() {
     s_boot_fix_valid = false;
     s_previous_boot_stage = rtc_boot_stage;
     s_previous_boot_state = rtc_boot_state;
+    report_previous_boot_probe();
 
     boot_publish(BootStage::POWER,
                  BootState::START,
@@ -202,6 +240,7 @@ void setup() {
                  false);
     print_boot_info();
     prepare_early_boot_hardware();
+    boot_probe_mark(EarlyBootProbe::POWER_STABLE);
     boot_publish(BootStage::POWER,
                  BootState::OK,
                  "rails stable",
@@ -226,7 +265,9 @@ void setup() {
                  "starting display",
                  "resetting TFT",
                  false);
+    boot_probe_mark(EarlyBootProbe::DISPLAY_START);
     display_boot_init();
+    boot_probe_mark(EarlyBootProbe::DISPLAY_READY);
     boot_publish(BootStage::DISPLAY_STAGE,
                  BootState::OK,
                  "splash ready",
@@ -237,6 +278,7 @@ void setup() {
                  BootState::START,
                  "mounting storage",
                  "initializing storage and config");
+    boot_probe_mark(EarlyBootProbe::STORAGE_START);
     const bool storage_ok = storage_init();
     if (!storage_ok) {
         boot_publish(BootStage::STORAGE,
@@ -335,6 +377,7 @@ void setup() {
                          "no tracks on sd; crossing detection disabled");
         }
     }
+    boot_probe_mark(EarlyBootProbe::STORAGE_READY);
 
     // --- Delta engine ---
     delta_init();
@@ -360,6 +403,7 @@ void setup() {
                  BootState::START,
                  "starting gps",
                  "starting UART and GPS task");
+    boot_probe_mark(EarlyBootProbe::GPS_START);
     gps_init(gps_queue);
 
     // --- GPS fix wait (poll up to 30s) ---
@@ -456,7 +500,9 @@ void setup() {
                  "runtime active",
                  serial_detail,
                  false);
+    boot_probe_mark(EarlyBootProbe::READY);
     clear_boot_breadcrumb();
+    clear_boot_probe();
 }
 
 // Stack watermark snapshot — written every 5s by loop(), read by crash logger.
