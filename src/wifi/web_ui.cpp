@@ -672,13 +672,22 @@ function reviewLineLengthMeters(line){
 }
 
 function projectReviewPoint(point,bounds,width,height,padding){
-  var spanX=bounds.maxLon-bounds.minLon;
+  var midLat=(bounds.minLat+bounds.maxLat)/2;
+  var cosLat=Math.cos(midLat*Math.PI/180);
+  var spanX=(bounds.maxLon-bounds.minLon)*cosLat;
   var spanY=bounds.maxLat-bounds.minLat;
   if(spanX===0){spanX=0.0001;}
   if(spanY===0){spanY=0.0001;}
+  var innerW=width-padding*2;
+  var innerH=height-padding*2;
+  var scale=Math.min(innerW/spanX,innerH/spanY);
+  var usedW=spanX*scale;
+  var usedH=spanY*scale;
+  var ox=padding+(innerW-usedW)/2;
+  var oy=padding+(innerH-usedH)/2;
   return {
-    x: padding+((point.lon-bounds.minLon)/spanX)*(width-padding*2),
-    y: height-padding-((point.lat-bounds.minLat)/spanY)*(height-padding*2)
+    x: ox+((point.lon-bounds.minLon)*cosLat)/spanX*usedW,
+    y: height-oy-((point.lat-bounds.minLat)/spanY)*usedH
   };
 }
 

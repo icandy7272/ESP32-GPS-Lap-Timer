@@ -130,19 +130,31 @@ bool track_save(const TrackDefinition* track) {
 
     xSemaphoreTake(spi_mutex, portMAX_DELAY);
 
+    bool dir_ok = sd.exists(TRACKS_DIR);
+    if (!dir_ok) {
+        Serial.printf("[track] directory missing: %s — recreating\n", TRACKS_DIR);
+        dir_ok = sd.mkdir(TRACKS_DIR);
+    }
+
     FsFile file;
-    bool ok = file.open(path, O_WRONLY | O_CREAT | O_TRUNC);
+    bool ok = dir_ok && file.open(path, O_WRONLY | O_CREAT | O_TRUNC);
     if (ok) {
-        file.write(json_buf, strlen(json_buf));
+        size_t len = strlen(json_buf);
+        size_t written = file.write(json_buf, len);
         file.flush();
         file.sync();
         file.close();
+        if (written != len) {
+            Serial.printf("[track] partial write: %u/%u bytes to %s\n",
+                          (unsigned)written, (unsigned)len, path);
+            ok = false;
+        }
     }
 
     xSemaphoreGive(spi_mutex);
 
     if (!ok) {
-        Serial.printf("[track] failed to write: %s\n", path);
+        Serial.printf("[track] failed to write: %s (dir_ok=%d)\n", path, dir_ok);
         return false;
     }
 
