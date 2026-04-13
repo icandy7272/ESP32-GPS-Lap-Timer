@@ -215,7 +215,8 @@ static void render_frame(bool screen_changed) {
     // so storage_task can write VBO data and INT_WDT doesn't fire.
     if (df.full_redraw) {
         if (xSemaphoreTake(s_spi_mtx, pdMS_TO_TICKS(SPI_TIMEOUT_MS)) != pdTRUE) {
-            return;  // skip entire frame; full_redraw will re-trigger via dirty check
+            s_pending_full_redraw = true;  // retry next frame
+            return;
         }
         s_tft.fillScreen(TFT_BLACK);
         xSemaphoreGive(s_spi_mtx);
@@ -264,6 +265,11 @@ static void init_backlight() {
 }
 
 static void init_tft() {
+    // Hardware reset with extended timing for cold-start reliability.
+    // Many ILI9341 modules lack a MISO connection to the display
+    // controller, so SPI-based liveness probes always read 0xFF.
+    // Instead we rely on generous power-on and reset delays
+    // (configured in boot_sequence.cpp) to guarantee readiness.
     pinMode(PIN_TFT_RST, OUTPUT);
     digitalWrite(PIN_TFT_RST, LOW);
     delay(boot_tft_reset_low_ms());
@@ -356,7 +362,6 @@ void display_task(void* param) {
 
         // 2. Handle button input, determine if screen changed
         bool screen_changed = handle_button_events() || first_frame;
-        first_frame = false;
 
         // 3. Refresh SD free space periodically (outside SPI render lock)
         uint32_t now_ms = millis();
@@ -382,6 +387,7 @@ void display_task(void* param) {
         // 5. Render the active screen
         crash_bc_core1 = 61;  // display: about to render
         render_frame(screen_changed);
+        first_frame = false;  // only clear after render succeeds
         crash_bc_core1 = 62;  // display: frame done
     }
 }

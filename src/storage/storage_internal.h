@@ -13,7 +13,9 @@ extern TrackDefinition active_track;
 
 namespace storage_internal {
 
-static constexpr uint32_t SD_SPI_MHZ = 25;
+// 4 MHz is safe for breadboard wiring.  Bump to 10-25 MHz once on
+// a real PCB with short traces and ground plane.
+static constexpr uint32_t SD_SPI_MHZ = 4;
 static constexpr uint32_t FSYNC_INTERVAL_MS = 30000;
 static constexpr int VBO_LINE_BUF_LEN = 128;
 static constexpr int PATH_BUF_LEN = 128;

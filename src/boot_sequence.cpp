@@ -6,9 +6,14 @@
 
 namespace {
 
-constexpr uint32_t POWER_STABLE_DELAY_MS = 120;
+// Cold power-on needs longer for 3.3V rail + ILI9341 POR to settle,
+// especially with bulk capacitors slowing the ramp.  500 ms is
+// conservative but safe on breadboard.
+constexpr uint32_t POWER_STABLE_DELAY_MS = 500;
 constexpr uint32_t TFT_RESET_LOW_MS = 20;
-constexpr uint32_t TFT_RESET_HIGH_MS = 120;
+// ILI9341 datasheet: 120 ms minimum after hardware reset.
+// Use 150 ms for breadboard margin.
+constexpr uint32_t TFT_RESET_HIGH_MS = 150;
 
 }  // namespace
 

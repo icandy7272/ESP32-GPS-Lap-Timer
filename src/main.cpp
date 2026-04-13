@@ -28,6 +28,7 @@
 #include "track_runtime.h"
 #include "boot_status.h"
 #include "boot_sequence.h"
+#include "boot_log.h"
 
 // --- Shared FreeRTOS primitives (created once here) ----------
 
@@ -80,7 +81,12 @@ static void clear_boot_probe() {
 static void boot_probe_mark(EarlyBootProbe probe) {
     rtc_boot_probe_magic = kBootProbeMagic;
     rtc_boot_probe_phase = static_cast<uint8_t>(probe);
-    esp_rom_printf("[BOOT-EARLY] %s\r\n", boot_probe_name(probe));
+    const char* name = boot_probe_name(probe);
+    esp_rom_printf("[BOOT-EARLY] %s\r\n", name);
+
+    char msg[48];
+    snprintf(msg, sizeof(msg), "[BOOT-EARLY] %s", name);
+    boot_log_append(msg);
 }
 
 static void report_previous_boot_probe() {
@@ -90,7 +96,10 @@ static void report_previous_boot_probe() {
 
     char probe[32];
     boot_probe_format(s_previous_boot_probe_phase, probe, sizeof(probe));
-    Serial.printf("[BOOT] Previous attempt reached %s before reset\n", probe);
+    char msg[80];
+    snprintf(msg, sizeof(msg), "[BOOT] Previous attempt reached %s before reset", probe);
+    Serial.println(msg);
+    boot_log_append(msg);
 }
 
 static void boot_publish(BootStage stage,
@@ -111,6 +120,7 @@ static void boot_publish(BootStage stage,
     char line[128];
     boot_status_format_line(s_boot_status, now_ms, line, sizeof(line));
     Serial.println(line);
+    boot_log_append(line);
 
     if (update_display) {
         display_boot_update(s_boot_status);
@@ -286,6 +296,9 @@ void setup() {
                      "storage offline",
                      "sd init failed; continuing without storage");
     } else {
+        // SD is up — flush all buffered boot lines to boot_log.txt
+        boot_log_flush_to_sd();
+
         const bool config_loaded = config_load();
         boot_publish(BootStage::STORAGE,
                      BootState::OK,
@@ -296,13 +309,15 @@ void setup() {
         // --- Crash logger: if previous boot was a crash, log to SD ---
         esp_reset_reason_t rst = esp_reset_reason();
         if (rst == ESP_RST_PANIC || rst == ESP_RST_INT_WDT ||
-            rst == ESP_RST_TASK_WDT || rst == ESP_RST_WDT) {
+            rst == ESP_RST_TASK_WDT || rst == ESP_RST_WDT ||
+            rst == ESP_RST_BROWNOUT) {
             const char* reason_str = "unknown";
             switch (rst) {
                 case ESP_RST_PANIC:    reason_str = "PANIC (Guru Meditation)"; break;
                 case ESP_RST_INT_WDT:  reason_str = "INT_WDT (interrupt watchdog)"; break;
                 case ESP_RST_TASK_WDT: reason_str = "TASK_WDT (task watchdog)"; break;
                 case ESP_RST_WDT:      reason_str = "WDT (other watchdog)"; break;
+                case ESP_RST_BROWNOUT: reason_str = "BROWNOUT (voltage drop)"; break;
                 default: break;
             }
             // Read per-core breadcrumbs from RTC memory (survives warm reset)
@@ -320,34 +335,38 @@ void setup() {
             uint16_t ws = wm_storage, wd = wm_display, wse = wm_session,
                      ww = wm_wifi, wl = wm_laptimer;
 
-            // Try to persist crash evidence to SD
+            // Build crash summary for both crash_log.txt and boot_log.txt
+            char crash_buf[384];
+            int crash_len = snprintf(crash_buf, sizeof(crash_buf),
+                     "reason=%s boot_stage=%s boot_state=%s core0=%d core1=%d "
+                     "wm:stor=%u disp=%u sess=%u wifi=%u lapt=%u",
+                     reason_str, boot_stage_str, boot_state_str,
+                     bc0, bc1, ws, wd, wse, ww, wl);
+
+            // Persist to crash_log.txt
             bool persisted = false;
             xSemaphoreTake(spi_mutex, portMAX_DELAY);
             FsFile log;
             if (log.open("crash_log.txt", O_WRONLY | O_CREAT | O_APPEND)) {
-                char buf[384];
-                int n = snprintf(buf, sizeof(buf),
-                         "reason=%s boot_stage=%s boot_state=%s core0=%d core1=%d "
-                         "wm:stor=%u disp=%u sess=%u wifi=%u lapt=%u\n",
-                         reason_str, boot_stage_str, boot_state_str,
-                         bc0, bc1, ws, wd, wse, ww, wl);
-                log.write(reinterpret_cast<const uint8_t*>(buf), n);
+                log.write(reinterpret_cast<const uint8_t*>(crash_buf), crash_len);
+                log.write(reinterpret_cast<const uint8_t*>("\n"), 1);
                 log.sync();
                 log.close();
                 persisted = true;
             }
             xSemaphoreGive(spi_mutex);
 
+            // Also log to boot_log.txt via the boot log system
+            char crash_msg[420];
+            snprintf(crash_msg, sizeof(crash_msg),
+                     "[BOOT] Previous crash: %s", crash_buf);
+            boot_log_append(crash_msg);
+
             // Only clear RTC breadcrumbs AFTER successful SD write.
-            // If SD write failed, keep them for the next boot attempt.
             if (persisted) {
                 crash_bc_core0 = 0;
                 crash_bc_core1 = 0;
-                Serial.printf("[BOOT] Previous crash persisted: %s boot_stage=%s boot_state=%s "
-                              "core0=%d core1=%d "
-                              "wm:stor=%u disp=%u sess=%u wifi=%u lapt=%u\n",
-                              reason_str, boot_stage_str, boot_state_str,
-                              bc0, bc1, ws, wd, wse, ww, wl);
+                Serial.println(crash_msg);
             } else {
                 Serial.printf("[BOOT] WARN: crash detected (%s) at %s/%s but SD write "
                               "failed — breadcrumbs preserved for next boot\n",
@@ -355,7 +374,6 @@ void setup() {
             }
 
             // Reset watermarks to sentinel (0 = "not yet sampled this boot")
-            // so crash_log never inherits stale values from a previous boot.
             wm_storage = 0; wm_display = 0; wm_session = 0;
             wm_wifi = 0; wm_laptimer = 0;
         }
