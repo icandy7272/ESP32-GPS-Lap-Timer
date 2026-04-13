@@ -78,6 +78,19 @@ extern bool s_laplist_needs_clear;
 
 extern bool s_laplist_header_drawn;
 
+// ---- Colour helpers ----
+
+// The ILI9341 panel runs in BGR mode (TFT_RGB_ORDER=1).
+// TFT_eSPI colour constants are always RGB565, so R and B appear
+// swapped on screen.  Use this wrapper for any colour that has a
+// visible R or B component.
+static inline uint16_t bgr565(uint16_t rgb) {
+    uint16_t r = (rgb >> 11) & 0x1F;
+    uint16_t g = (rgb >> 5)  & 0x3F;
+    uint16_t b = rgb & 0x1F;
+    return (b << 11) | (g << 5) | r;
+}
+
 // ---- Cross-file helpers ----
 
 uint16_t delta_background_colour(const SessionState& st);

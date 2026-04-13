@@ -42,11 +42,11 @@ char s_cached_detail[kMaxDetailChars] = {0};
 uint16_t accent_colour(BootState state) {
     switch (state) {
         case BootState::OK:
-            return TFT_GREEN;
+            return bgr565(TFT_GREEN);
         case BootState::WARN:
-            return TFT_YELLOW;
+            return bgr565(TFT_YELLOW);
         case BootState::FAIL:
-            return TFT_RED;
+            return bgr565(TFT_RED);
         case BootState::START:
         default:
             return kCompletedColour;
@@ -58,9 +58,9 @@ uint16_t detail_colour(BootState state) {
         case BootState::START:
             return TFT_DARKGREY;
         case BootState::WARN:
-            return TFT_YELLOW;
+            return bgr565(TFT_YELLOW);
         case BootState::FAIL:
-            return TFT_RED;
+            return bgr565(TFT_RED);
         case BootState::OK:
         default:
             return TFT_WHITE;

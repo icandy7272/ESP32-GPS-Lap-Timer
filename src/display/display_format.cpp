@@ -12,20 +12,20 @@
 // ============================================================
 
 uint16_t delta_background_colour(const SessionState& st) {
-    if (!st.gps_fix_ok)  return TFT_DARKGREY;
-    if (st.off_track)    return TFT_YELLOW;
-    if (!st.delta_valid) return TFT_DARKGREY;
-    if (st.delta_ms < 0) return TFT_GREEN;
-    if (st.delta_ms > 0) return TFT_RED;
-    return TFT_DARKGREY;
+    if (!st.gps_fix_ok)  return TFT_BLACK;
+    if (st.off_track)    return bgr565(TFT_YELLOW);
+    if (!st.delta_valid) return TFT_BLACK;
+    if (st.delta_ms < 0) return bgr565(TFT_GREEN);
+    if (st.delta_ms > 0) return bgr565(TFT_RED);
+    return TFT_BLACK;
 }
 
 uint16_t lap_status_colour(uint8_t status) {
     switch (status) {
         case LAP_STATUS_TIMED:  return TFT_WHITE;
-        case LAP_STATUS_NO_REF: return TFT_CYAN;
-        case LAP_STATUS_SLOW:   return TFT_ORANGE;
-        case LAP_STATUS_SHORT:  return TFT_ORANGE;
+        case LAP_STATUS_NO_REF: return bgr565(TFT_CYAN);
+        case LAP_STATUS_SLOW:   return bgr565(TFT_ORANGE);
+        case LAP_STATUS_SHORT:  return bgr565(TFT_ORANGE);
         case LAP_STATUS_OUT:    return TFT_DARKGREY;
         default:                return TFT_WHITE;
     }
