@@ -2,6 +2,26 @@
 
 const char* build_web_ui_script_track_creation_fragment() {
     return R"JS(
+function updateLineHeading(line){
+  if(line.p1&&line.p2){
+    line.heading=crossingHeadingDeg(line.p1,line.p2,line.flipped);
+  }else{
+    line.heading=null;
+  }
+}
+
+function updateStartFinishHeading(){
+  updateLineHeading(_trackDraft.startFinish);
+}
+
+function setCreationStepState(id,label,state){
+  var step=$(id);
+  if(!step){return;}
+  step.textContent=label;
+  step.className='creation-step';
+  if(state){step.className+=' '+state;}
+}
+
 function renderCreationStages(){
   var stage=currentCreationStage();
   var nameStage=$('creation-stage-name');

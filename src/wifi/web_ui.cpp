@@ -6,7 +6,6 @@
 #include "wifi_internal.h"
 #include "web_ui_internal.h"
 
-#include <Arduino.h>
 #include <WebServer.h>
 
 namespace {

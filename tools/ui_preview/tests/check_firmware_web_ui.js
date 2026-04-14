@@ -72,6 +72,11 @@ assert.doesNotMatch(
   /function \$\(id\)/,
   "src/wifi/web_ui.cpp should no longer embed the full dashboard script directly",
 );
+assert.doesNotMatch(
+  webUiEntrySource,
+  /#include <Arduino\.h>/,
+  "src/wifi/web_ui.cpp should avoid the redundant Arduino include",
+);
 assert.match(
   webUiMarkupSource,
   /build_web_ui_body_section/,
@@ -106,6 +111,16 @@ assert.doesNotMatch(
   webUiScriptCoreSource,
   /function renderCurrentTrackSummary|function loadSessions|function renderGeometryReview/,
   "src/wifi/web_ui_script_core.cpp should stay focused on shared state and helpers",
+);
+assert.doesNotMatch(
+  webUiScriptCoreSource,
+  /function updateLineHeading|function updateStartFinishHeading|function setCreationStepState/,
+  "src/wifi/web_ui_script_core.cpp should not keep track-creation-only helpers",
+);
+assert.match(
+  webUiScriptTrackCreationSource,
+  /function updateLineHeading|function updateStartFinishHeading|function setCreationStepState/,
+  "src/wifi/web_ui_script_track_creation.cpp should own the track-creation-only helpers",
 );
 assert.doesNotMatch(
   webUiScriptTrackCreationSource,
