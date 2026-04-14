@@ -1,6 +1,6 @@
 # ESP32-S3 GPS 轨迹记录仪 — 接线指南
 
-> 适用硬件：ESP32-S3 N16R8 DevKit（乐鑫官方开发板，38/44 pin）
+> 适用硬件：ESP32-S3 N16R8 DevKit（乐鑫官方开发板，两排独立 1×22 排针）
 > 更新日期：2026-04-09
 
 ---
@@ -36,11 +36,12 @@
 | SD 卡 | MOSI | GPIO11 | SPI 数据输出，与 TFT 共享 |
 | SD 卡 | SCK | GPIO12 | SPI 时钟，与 TFT 共享 |
 | SD 卡 | CS | GPIO42 | SPI 片选（SD 专用） |
-| **GPS BK-880** | GND | GND | 接地；若 GPS 独立供电，必须与 ESP32 共地 |
-| GPS BK-880 | VCC | **5V_SW** | 当前项目实测这块 BK-880 载板优先按 **5V 供电** |
-| GPS BK-880 | TX | GPIO17 | GPS 发送 → ESP32 接收（UART1 RX） |
-| GPS BK-880 | RX | GPIO18 | GPS 接收 ← ESP32 发送（UART1 TX） |
-| GPS BK-880 | PPS | GPIO16 | **仅在模块/线束确实引出 1PPS 时才连接**，否则留空 |
+| **GPS BK-880** | SDA (pin1) | 未接（预留） | I2C 数据，QMC5883 罗盘 |
+| GPS BK-880 | GND (pin2) | GND | 接地；必须与 ESP32 共地 |
+| GPS BK-880 | TX (pin3) | GPIO17 | GPS 发送 → ESP32 接收（UART1 RX） |
+| GPS BK-880 | RX (pin4) | GPIO18 | GPS 接收 ← ESP32 发送（UART1 TX） |
+| GPS BK-880 | VCC (pin5) | **5V_SW** | 主电源 DC 3.6-5.5V，推荐 5V |
+| GPS BK-880 | SCL (pin6) | 未接（预留） | I2C 时钟，QMC5883 罗盘 |
 | **按钮 1（锁定）** | 串联在 5V 正极 | 不接 GPIO | 作为系统总开关，控制 `5V_SW` 母线 |
 | **按钮 2（录制）** | 一端 | GPIO4 | 自复位物理录制键，另一端接 GND |
 | **GPIO5 扩展位** | 预留 | GPIO5 | 当前硬件未装配；可留给未来页面/扇区键 |
@@ -99,28 +100,30 @@
 
 ## GPS 模块接线
 
-**模块型号：** BK-880 GNSS 模块，UART 通信
+**模块型号：** Beitian BK-880 GNSS 模块，UART 通信，内置 QMC5883 电子罗盘
 
-> 重要：BK-880 存在不同板级变体，卖家页面、说明书、实物线束和实际供电方式可能不完全一致。
-> 当前项目 bring-up 过程中验证到的这块模块，更稳妥的接法是：
-> - 模块 **VCC 接 5V**
-> - UART `TX/RX` 仍为 **3.3V TTL**，可直接接 ESP32-S3
-> - `PPS` 是否可接，要看你的模块或附带线束是否真的把 1PPS 引出来
+> 参考文档：《BK-880 GNSS 模块使用说明书》P2.0 (2025-07-06)
+>
+> BK-880 使用 1.25mm 6P 卧式贴片座，线束为 6 线。
+> UART TX/RX 为 **3.3V TTL** 电平，可直接接 ESP32-S3。
+> **PPS 信号未引出到 6P 连接器**，仅板上 LED 和测试焊盘可用。
 
-| # | 模块引脚标注 | 连接位置 | 说明 |
-|---|-------------|----------|------|
-| 1 | GND | ESP32-S3 GND | 接地；若 GPS 用外部 5V 供电，仍必须和 ESP32 共地 |
-| 2 | VCC | **5V_SW** | 当前项目实测这块 BK-880 载板建议优先接 **5V_SW** |
-| 3 | TX | GPIO17 | GPS 模块发送 → ESP32 接收（**交叉连接**） |
-| 4 | RX | GPIO18 | GPS 模块接收 ← ESP32 发送（**交叉连接**） |
-| 5 | PPS | GPIO16 | **可选**；只有模块或线束确实引出 1PPS 时才接 |
+| # | 模块引脚标注 | I/O | 连接位置 | 说明 |
+|---|-------------|-----|----------|------|
+| 1 | SDA | O | 未接（预留） | I2C 数据，QMC5883 罗盘（未来可接 ESP32 I2C） |
+| 2 | GND | G | ESP32-S3 GND | 接地；必须和 ESP32 共地 |
+| 3 | TX | O | GPIO17 | GPS 模块发送 → ESP32 接收（**交叉连接**） |
+| 4 | RX | I | GPIO18 | GPS 模块接收 ← ESP32 发送（**交叉连接**） |
+| 5 | VCC | I | **5V_SW** | 主电源，DC 3.6-5.5V，推荐 5.0V |
+| 6 | SCL | I | 未接（预留） | I2C 时钟，QMC5883 罗盘（未来可接 ESP32 I2C） |
 
 **要点：**
 - TX/RX 必须交叉：GPS 的 TX 接 ESP32 的 RX，GPS 的 RX 接 ESP32 的 TX
 - 当前代码引脚定义见 [pins.h](/Users/wenchaodu/Documents/Claude_code_projects/ESP32_track_GPS/src/pins.h)：`RX=GPIO17`、`TX=GPIO18`、`PPS=GPIO16`
+- **PPS (GPIO16) 当前无法通过线束连接**；如需 PPS，须在模块 PCB 的 PPS 测试焊盘上飞线
 - 当前固件会自动尝试 `115200 / 38400 / 9600` 三种常见波特率；探测到后会尽量切到 `115200`
 - 25Hz 下 NMEA 数据量较大，长期稳定运行仍建议最终工作在 `115200`
-- 若模块没有导出 PPS，也可以先不接；固件仍可按 UART 模式运行
+- SDA/SCL 为 QMC5883 电子罗盘 I2C 接口，当前项目未使用，线束上预留即可
 - 若 GPS 模块单独接 5V 供电，**一定要和 ESP32 共地**
 
 ---
@@ -349,7 +352,7 @@ ESP32-S3 启动时以下引脚电平会影响启动模式，**慎用或避用**�
 | GPIO11 | SPI MOSI | TFT + SD 共享 |
 | GPIO12 | SPI SCLK | TFT + SD 共享 |
 | GPIO13 | SPI MISO | SD 卡专用 |
-| GPIO16 | GPS PPS | 秒脉冲（可选，仅在模块/线束确实引出时使用） |
+| GPIO16 | PPS 预留位 | 秒脉冲（可选；当前 1×6 线束不引出，如需使用需飞线到测试焊盘） |
 | GPIO17 | UART1 RX | 接 GPS TX |
 | GPIO18 | UART1 TX | 接 GPS RX |
 | GPIO42 | SD CS | SD 卡片选 |
