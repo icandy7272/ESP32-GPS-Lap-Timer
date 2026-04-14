@@ -4,15 +4,147 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
-const webUiSource = fs.readFileSync(
-  path.join(repoRoot, "src/wifi/web_ui.cpp"),
-  "utf8",
+const webUiEntryPath = path.join(repoRoot, "src/wifi/web_ui.cpp");
+const webUiMarkupPath = path.join(repoRoot, "src/wifi/web_ui_markup.cpp");
+const webUiScriptPath = path.join(repoRoot, "src/wifi/web_ui_script.cpp");
+const webUiScriptCorePath = path.join(repoRoot, "src/wifi/web_ui_script_core.cpp");
+const webUiScriptDashboardPath = path.join(repoRoot, "src/wifi/web_ui_script_dashboard.cpp");
+const webUiScriptTrackCreationReviewPath = path.join(repoRoot, "src/wifi/web_ui_script_track_creation_review.cpp");
+const webUiScriptTrackCreationPath = path.join(repoRoot, "src/wifi/web_ui_script_track_creation.cpp");
+
+assert.ok(
+  fs.existsSync(webUiEntryPath),
+  "Expected src/wifi/web_ui.cpp to exist",
+);
+assert.ok(
+  fs.existsSync(webUiMarkupPath),
+  "Expected src/wifi/web_ui_markup.cpp to hold the HTML/CSS markup builders",
+);
+assert.ok(
+  fs.existsSync(webUiScriptPath),
+  "Expected src/wifi/web_ui_script.cpp to assemble the embedded script section",
+);
+assert.ok(
+  fs.existsSync(webUiScriptCorePath),
+  "Expected src/wifi/web_ui_script_core.cpp to hold the shared dashboard script",
+);
+assert.ok(
+  fs.existsSync(webUiScriptDashboardPath),
+  "Expected src/wifi/web_ui_script_dashboard.cpp to hold the status/tracks/sessions/settings runtime script",
+);
+assert.ok(
+  fs.existsSync(webUiScriptTrackCreationReviewPath),
+  "Expected src/wifi/web_ui_script_track_creation_review.cpp to hold the geometry review script",
+);
+assert.ok(
+  fs.existsSync(webUiScriptTrackCreationPath),
+  "Expected src/wifi/web_ui_script_track_creation.cpp to hold the track-creation script",
 );
 
-const scriptMatch = webUiSource.match(/return R"JS\(<script>\n([\s\S]*?)<\/script>\)JS";/);
-assert.ok(scriptMatch, "Failed to extract embedded web UI script from src/wifi/web_ui.cpp");
+const webUiEntrySource = fs.readFileSync(
+  webUiEntryPath,
+  "utf8",
+);
+const webUiMarkupSource = fs.readFileSync(webUiMarkupPath, "utf8");
+const webUiScriptSource = fs.readFileSync(webUiScriptPath, "utf8");
+const webUiScriptCoreSource = fs.readFileSync(webUiScriptCorePath, "utf8");
+const webUiScriptDashboardSource = fs.readFileSync(webUiScriptDashboardPath, "utf8");
+const webUiScriptTrackCreationReviewSource = fs.readFileSync(webUiScriptTrackCreationReviewPath, "utf8");
+const webUiScriptTrackCreationSource = fs.readFileSync(webUiScriptTrackCreationPath, "utf8");
 
-const embeddedScript = scriptMatch[1];
+assert.match(
+  webUiEntrySource,
+  /build_web_ui_head_section\(\)/,
+  "src/wifi/web_ui.cpp should delegate head markup assembly",
+);
+assert.match(
+  webUiEntrySource,
+  /build_web_ui_body_section\(\)/,
+  "src/wifi/web_ui.cpp should delegate body markup assembly",
+);
+assert.match(
+  webUiEntrySource,
+  /build_web_ui_script_section\(\)/,
+  "src/wifi/web_ui.cpp should delegate script assembly",
+);
+assert.doesNotMatch(
+  webUiEntrySource,
+  /function \$\(id\)/,
+  "src/wifi/web_ui.cpp should no longer embed the full dashboard script directly",
+);
+assert.match(
+  webUiMarkupSource,
+  /build_web_ui_body_section/,
+  "src/wifi/web_ui_markup.cpp should define the body builder",
+);
+assert.match(
+  webUiScriptSource,
+  /build_web_ui_script_section/,
+  "src/wifi/web_ui_script.cpp should define the script-section builder",
+);
+assert.match(
+  webUiScriptCoreSource,
+  /build_web_ui_script_core_fragment/,
+  "src/wifi/web_ui_script_core.cpp should define the shared script fragment",
+);
+assert.match(
+  webUiScriptDashboardSource,
+  /build_web_ui_script_dashboard_fragment/,
+  "src/wifi/web_ui_script_dashboard.cpp should define the dashboard runtime fragment",
+);
+assert.match(
+  webUiScriptTrackCreationReviewSource,
+  /build_web_ui_script_track_creation_review_fragment/,
+  "src/wifi/web_ui_script_track_creation_review.cpp should define the track review fragment",
+);
+assert.match(
+  webUiScriptTrackCreationSource,
+  /build_web_ui_script_track_creation_fragment/,
+  "src/wifi/web_ui_script_track_creation.cpp should define the track-creation fragment",
+);
+assert.doesNotMatch(
+  webUiScriptCoreSource,
+  /function renderCurrentTrackSummary|function loadSessions|function renderGeometryReview/,
+  "src/wifi/web_ui_script_core.cpp should stay focused on shared state and helpers",
+);
+assert.doesNotMatch(
+  webUiScriptTrackCreationSource,
+  /function renderGeometryReview|function loadSessions|function loadTracks|function loadSettings/,
+  "src/wifi/web_ui_script_track_creation.cpp should stay focused on the track-creation flow",
+);
+
+function extractJsFragment(source, functionName, fileLabel) {
+  const escapedFunctionName = functionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const fragmentMatch = source.match(
+    new RegExp(
+      escapedFunctionName + String.raw`\s*\([^)]*\)\s*\{\s*return R"JS\(([\s\S]*?)\)JS";`,
+    ),
+  );
+  assert.ok(fragmentMatch, "Failed to extract " + functionName + " from " + fileLabel);
+  return fragmentMatch[1];
+}
+
+const embeddedScript =
+  extractJsFragment(
+    webUiScriptCoreSource,
+    "build_web_ui_script_core_fragment",
+    "src/wifi/web_ui_script_core.cpp",
+  ) +
+  extractJsFragment(
+    webUiScriptDashboardSource,
+    "build_web_ui_script_dashboard_fragment",
+    "src/wifi/web_ui_script_dashboard.cpp",
+  ) +
+  extractJsFragment(
+    webUiScriptTrackCreationReviewSource,
+    "build_web_ui_script_track_creation_review_fragment",
+    "src/wifi/web_ui_script_track_creation_review.cpp",
+  ) +
+  extractJsFragment(
+    webUiScriptTrackCreationSource,
+    "build_web_ui_script_track_creation_fragment",
+    "src/wifi/web_ui_script_track_creation.cpp",
+  );
 
 function createElement(id = "") {
   return {
