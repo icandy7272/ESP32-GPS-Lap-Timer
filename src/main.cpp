@@ -127,7 +127,13 @@ static void boot_publish(BootStage stage,
     }
 }
 
-static void prepare_early_boot_hardware() {
+static uint32_t boot_power_hold_ms(esp_reset_reason_t reset_reason) {
+    return reset_reason == ESP_RST_POWERON
+        ? boot_cold_power_stable_delay_ms()
+        : boot_warm_power_stable_delay_ms();
+}
+
+static void prepare_early_boot_hardware(uint32_t settle_delay_ms) {
     EarlyBootPinState boot_pins[EARLY_BOOT_PIN_STATE_COUNT];
     size_t count = boot_fill_early_pin_states(boot_pins,
                                               EARLY_BOOT_PIN_STATE_COUNT);
@@ -139,7 +145,7 @@ static void prepare_early_boot_hardware() {
 
     // Let the board 3V3 rail, SD module and TFT controller settle
     // before the first shared-SPI transaction.
-    delay(boot_power_stable_delay_ms());
+    delay(settle_delay_ms);
 }
 
 static void print_boot_info() {
@@ -226,6 +232,8 @@ static void boot_wait_for_gps(uint32_t timeout_ms) {
 }
 
 void setup() {
+    const esp_reset_reason_t reset_reason = esp_reset_reason();
+    const uint32_t power_hold_ms = boot_power_hold_ms(reset_reason);
     s_previous_boot_probe_phase = capture_previous_boot_probe();
     boot_probe_mark(EarlyBootProbe::SETUP_ENTRY);
 
@@ -246,15 +254,21 @@ void setup() {
     boot_publish(BootStage::POWER,
                  BootState::START,
                  "power staging",
-                 "applying early boot safe state",
+                 reset_reason == ESP_RST_POWERON
+                    ? "applying early boot safe state (cold power-on hold)"
+                    : "applying early boot safe state",
                  false);
     print_boot_info();
-    prepare_early_boot_hardware();
+    prepare_early_boot_hardware(power_hold_ms);
     boot_probe_mark(EarlyBootProbe::POWER_STABLE);
+    char power_ready_detail[80];
+    snprintf(power_ready_detail, sizeof(power_ready_detail),
+             "rails stable after %u ms hold",
+             static_cast<unsigned>(power_hold_ms));
     boot_publish(BootStage::POWER,
                  BootState::OK,
                  "rails stable",
-                 "rails stable",
+                 power_ready_detail,
                  false);
 
     // --- Create shared primitives ---
@@ -307,19 +321,9 @@ void setup() {
                                    : "sd mounted, defaults in use");
 
         // --- Crash logger: if previous boot was a crash, log to SD ---
-        esp_reset_reason_t rst = esp_reset_reason();
-        if (rst == ESP_RST_PANIC || rst == ESP_RST_INT_WDT ||
-            rst == ESP_RST_TASK_WDT || rst == ESP_RST_WDT ||
-            rst == ESP_RST_BROWNOUT) {
-            const char* reason_str = "unknown";
-            switch (rst) {
-                case ESP_RST_PANIC:    reason_str = "PANIC (Guru Meditation)"; break;
-                case ESP_RST_INT_WDT:  reason_str = "INT_WDT (interrupt watchdog)"; break;
-                case ESP_RST_TASK_WDT: reason_str = "TASK_WDT (task watchdog)"; break;
-                case ESP_RST_WDT:      reason_str = "WDT (other watchdog)"; break;
-                case ESP_RST_BROWNOUT: reason_str = "BROWNOUT (voltage drop)"; break;
-                default: break;
-            }
+        if (boot_reset_reason_is_crash(static_cast<uint32_t>(reset_reason))) {
+            const char* reason_str =
+                boot_reset_reason_detail(static_cast<uint32_t>(reset_reason));
             // Read per-core breadcrumbs from RTC memory (survives warm reset)
             extern int crash_bc_core0;
             extern int crash_bc_core1;
