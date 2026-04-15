@@ -2,6 +2,9 @@
 
 const char* build_web_ui_script_dashboard_fragment() {
     return R"JS(
+var _activeTab='status';
+var _sessions=[];
+
 function hasSelectedTrack(){
   return !!(_statusSnapshot.track&&_statusSnapshot.track!=='No Track');
 }
@@ -70,6 +73,51 @@ function currentTrackMatches(track){
   return !!_statusSnapshot.track&&track.name===_statusSnapshot.track;
 }
 
+function renderPrimaryTabs(){
+  ['status','sessions','tracks'].forEach(function(tab){
+    var section=$('section-'+tab);
+    var button=$('tab-'+tab);
+    var active=_activeTab===tab;
+    if(section){
+      section.className='tab-section'+(active?' active':'');
+    }
+    if(button){
+      button.className='tab-btn'+(active?' tab-btn--active':'');
+      button.setAttribute('data-active',active?'true':'false');
+    }
+  });
+}
+
+function onActiveTabChange(tab){
+  if(tab==='status'){
+    updateRecBtn();
+    return;
+  }
+  if(tab==='sessions'){
+    renderSessionsList();
+    return;
+  }
+  if(tab==='tracks'){
+    renderCurrentTrackSummary();
+    renderNearbyTrackChooser();
+    renderTracksList();
+    renderTrackDraft();
+  }
+}
+
+function setActiveTab(tab){
+  if(tab!=='status'&&tab!=='sessions'&&tab!=='tracks'){return;}
+  if(_activeTab===tab){
+    renderPrimaryTabs();
+    return;
+  }
+  _activeTab=tab;
+  _advancedSettingsOpen=false;
+  renderAdvancedSettings();
+  renderPrimaryTabs();
+  onActiveTabChange(tab);
+}
+
 function getRecordingCtaConfig(){
   var state=_statusSnapshot.recording_cta_state||(_isRec?'recording':(hasSelectedTrack()?'ready':'blocked_no_track'));
   if(_isRec||state==='recording'){
@@ -89,6 +137,7 @@ function renderCurrentTrackSummary(){
   var source=$('current-track-source');
   var distance=$('current-track-distance');
   var lock=$('current-track-lock');
+  if(_activeTab!=='tracks'){return;}
   if(name){name.textContent=currentTrackName();}
   if(source){source.textContent=currentTrackSource();}
   if(distance){
@@ -110,6 +159,7 @@ function renderCurrentTrackSummary(){
 function renderNearbyTrackChooser(){
   var nearby=$('nearby-tracks');
   if(!nearby){return;}
+  if(_activeTab!=='tracks'){return;}
   var html='<div class="row current-track-head"><span class="label">Nearby Tracks</span>';
   if(_statusSnapshot.track_locked_manual&&!_isRec&&_trackDraft.gps.fix){
     html+='<button type="button" class="mark-btn inline-btn" data-nearby-action="auto">Resume Auto</button>';
@@ -136,6 +186,7 @@ function renderNearbyTrackChooser(){
 function renderTracksList(){
   var ul=$('tracks');
   if(!ul){return;}
+  if(_activeTab!=='tracks'){return;}
   ul.innerHTML='';
   if(!_trackList.length){
     ul.innerHTML='<li>No tracks</li>';
@@ -261,30 +312,40 @@ function refreshStatus(){
     });
 }
 
+function renderSessionsList(){
+  var ul=$('sessions');
+  if(!ul){return;}
+  if(_activeTab!=='sessions'){return;}
+  ul.innerHTML='';
+  if(!_sessions.length){
+    ul.innerHTML='<div class="helper-text">No sessions</div>';
+    return;
+  }
+  _sessions.forEach(function(rawSession){
+    var session=normalizeSessionItem(rawSession);
+    var card=document.createElement('div');
+    card.className='session-card';
+    var safeFileName=escapeHtml(session.filename);
+    card.innerHTML=
+      '<div class="session-meta">'
+      +'<div><strong>Date</strong>'+escapeHtml(session.date)+'</div>'
+      +'<div><strong>Track</strong>'+escapeHtml(session.track)+'</div>'
+      +'<div><strong>Best Lap</strong>'+escapeHtml(formatSessionBestLap(session.best_lap_ms))+'</div>'
+      +'</div>'
+      +'<div class="session-actions"><a href="/files/'+encodeURIComponent(session.filename)+'">Download '
+      +safeFileName+'</a></div>';
+    ul.appendChild(card);
+  });
+}
+
 function loadSessions(){
   fetch('/api/sessions').then(function(r){return r.json();}).then(function(d){
-    var ul=$('sessions');
-    ul.innerHTML='';
-    if(!d.sessions||!d.sessions.length){
-      ul.innerHTML='<div class="helper-text">No sessions</div>';
-      return;
-    }
-    d.sessions.forEach(function(rawSession){
-      var session=normalizeSessionItem(rawSession);
-      var card=document.createElement('div');
-      card.className='session-card';
-      var safeFileName=escapeHtml(session.filename);
-      card.innerHTML=
-        '<div class="session-meta">'
-        +'<div><strong>Date</strong>'+escapeHtml(session.date)+'</div>'
-        +'<div><strong>Track</strong>'+escapeHtml(session.track)+'</div>'
-        +'<div><strong>Best Lap</strong>'+escapeHtml(formatSessionBestLap(session.best_lap_ms))+'</div>'
-        +'</div>'
-        +'<div class="session-actions"><a href="/files/'+encodeURIComponent(session.filename)+'">Download '
-        +safeFileName+'</a></div>';
-      ul.appendChild(card);
-    });
-  }).catch(function(){});
+    _sessions=d.sessions||[];
+    renderSessionsList();
+  }).catch(function(){
+    _sessions=[];
+    renderSessionsList();
+  });
 }
 
 function loadTracks(){

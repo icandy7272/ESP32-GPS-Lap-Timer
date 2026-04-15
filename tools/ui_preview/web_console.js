@@ -1072,7 +1072,12 @@
 
     return (
       '<div class="web-console-preview">' +
-      '<div class="web-console__card" data-card="status">' +
+      '<div class="web-console__tabs">' +
+      '<button type="button" class="web-console__tab web-console__tab--active" data-tab="status" data-active="true">Status</button>' +
+      '<button type="button" class="web-console__tab" data-tab="sessions" data-active="false">Sessions</button>' +
+      '<button type="button" class="web-console__tab" data-tab="tracks" data-active="false">Tracks</button>' +
+      "</div>" +
+      '<section class="web-console__panel web-console__panel--active web-console__card" data-panel="status">' +
       "<h2>Status</h2>" +
       '<div class="web-console__row"><span class="web-console__label">GPS Fix</span><span class="web-console__value">' +
       gpsFix +
@@ -1099,17 +1104,19 @@
       ">" +
       recordingCta.label +
       "</button>" +
+      '<button type="button" class="web-console__secondary-button web-console__advanced-toggle" disabled>Advanced</button>' +
       '<div class="web-console__recording-reason">' +
       escapeHtml(status.recording_cta_reason) +
       "</div>" +
-      "</div>" +
-      '<div class="web-console__card" data-card="sessions">' +
+      '<div class="web-console__hint">Wi-Fi credential changes still require a reboot after saving.</div>' +
+      "</section>" +
+      '<section class="web-console__panel web-console__card" data-panel="sessions">' +
       "<h2>Sessions</h2>" +
       '<ul class="web-console__list">' +
       renderSessionsMarkup(sessions) +
       "</ul>" +
-      "</div>" +
-      '<div class="web-console__card" data-card="tracks">' +
+      "</section>" +
+      '<section class="web-console__panel web-console__card" data-panel="tracks">' +
       "<h2>Tracks</h2>" +
       renderCurrentTrackMarkup(status) +
       renderNearbyTracksMarkup(status) +
@@ -1117,11 +1124,7 @@
       renderTracksMarkup(tracks, status) +
       "</ul>" +
       renderTrackCreationMarkup(data) +
-      "</div>" +
-      '<div class="web-console__card" data-card="settings">' +
-      '<button type="button" class="web-console__secondary-button web-console__advanced-toggle" disabled>Advanced</button>' +
-      '<div class="web-console__hint">Wi-Fi credential changes still require a reboot after saving.</div>' +
-      "</div>" +
+      "</section>" +
       "</div>"
     );
   }

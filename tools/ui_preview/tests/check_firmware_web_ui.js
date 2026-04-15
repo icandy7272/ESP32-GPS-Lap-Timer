@@ -83,6 +83,46 @@ assert.match(
   "src/wifi/web_ui_markup.cpp should define the body builder",
 );
 assert.match(
+  webUiMarkupSource,
+  /id=\\"section-status\\"/,
+  "src/wifi/web_ui_markup.cpp should render the status section wrapper",
+);
+assert.match(
+  webUiMarkupSource,
+  /id=\\"section-sessions\\"/,
+  "src/wifi/web_ui_markup.cpp should render the sessions section wrapper",
+);
+assert.match(
+  webUiMarkupSource,
+  /id=\\"section-tracks\\"/,
+  "src/wifi/web_ui_markup.cpp should render the tracks section wrapper",
+);
+assert.match(
+  webUiMarkupSource,
+  /id=\\"bottom-tabs\\"/,
+  "src/wifi/web_ui_markup.cpp should render the bottom tab shell",
+);
+assert.match(
+  webUiMarkupSource,
+  /id=\\"tab-status\\"/,
+  "src/wifi/web_ui_markup.cpp should render the status tab button",
+);
+assert.match(
+  webUiMarkupSource,
+  /id=\\"tab-sessions\\"/,
+  "src/wifi/web_ui_markup.cpp should render the sessions tab button",
+);
+assert.match(
+  webUiMarkupSource,
+  /id=\\"tab-tracks\\"/,
+  "src/wifi/web_ui_markup.cpp should render the tracks tab button",
+);
+assert.doesNotMatch(
+  webUiMarkupSource,
+  /id=\\"tab-settings\\"/,
+  "src/wifi/web_ui_markup.cpp should not promote Settings to a fourth primary tab",
+);
+assert.match(
   webUiScriptSource,
   /build_web_ui_script_section/,
   "src/wifi/web_ui_script.cpp should define the script-section builder",
@@ -186,6 +226,10 @@ function createElement(id = "") {
       this[name] = String(value);
     },
   };
+}
+
+function hasClass(element, className) {
+  return (element.className || "").split(/\s+/).includes(className);
 }
 
 function createHarness() {
@@ -1454,6 +1498,7 @@ async function testStatusRendersCurrentTrackAndBlockedRecordingReason() {
   const harness = createHarness();
   await harness.settle();
 
+  harness.context.setActiveTab("tracks");
   harness.context.applyStatusData({
     gps_fix: true,
     satellites: 8,
@@ -1501,6 +1546,7 @@ async function testNearbyTracksRenderSortedAndSupportSwitching() {
   const harness = createHarness();
   await harness.settle();
 
+  harness.context.setActiveTab("tracks");
   harness.context.applyStatusData({
     gps_fix: true,
     satellites: 9,
@@ -1835,10 +1881,142 @@ async function testAdvancedSettingsStartCollapsed() {
   );
 }
 
+async function testDashboardUsesThreePrimaryTabs() {
+  const harness = createHarness();
+  await harness.settle();
+
+  assert.equal(
+    typeof harness.context.setActiveTab,
+    "function",
+    "dashboard runtime should expose setActiveTab",
+  );
+  assert.equal(
+    harness.getElement("tab-status").getAttribute("data-active"),
+    "true",
+    "status tab should be active on cold load",
+  );
+  assert.equal(
+    harness.getElement("tab-sessions").getAttribute("data-active"),
+    "false",
+    "sessions tab should start inactive",
+  );
+  assert.equal(
+    harness.getElement("tab-tracks").getAttribute("data-active"),
+    "false",
+    "tracks tab should start inactive",
+  );
+  assert.ok(
+    hasClass(harness.getElement("section-status"), "active"),
+    "status section should start visible",
+  );
+  assert.ok(
+    !hasClass(harness.getElement("section-sessions"), "active"),
+    "sessions section should start hidden",
+  );
+  assert.ok(
+    !hasClass(harness.getElement("section-tracks"), "active"),
+    "tracks section should start hidden",
+  );
+}
+
+async function testTabSwitchingShowsTargetPanelAndClosesAdvanced() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.context.toggleAdvancedSettings();
+  assert.equal(
+    harness.getElement("advanced-settings-panel").style.display,
+    "block",
+    "advanced settings should open inside status before switching tabs",
+  );
+
+  harness.context.setActiveTab("sessions");
+  assert.ok(
+    hasClass(harness.getElement("section-sessions"), "active"),
+    "sessions section should become active after switching",
+  );
+  assert.ok(
+    !hasClass(harness.getElement("section-status"), "active"),
+    "status section should hide after switching to sessions",
+  );
+  assert.equal(
+    harness.context._advancedSettingsOpen,
+    false,
+    "switching tabs should force-close advanced settings",
+  );
+  assert.equal(
+    harness.getElement("advanced-settings-panel").style.display,
+    "none",
+    "advanced settings panel should collapse when leaving status",
+  );
+
+  harness.context.setActiveTab("tracks");
+  assert.ok(
+    hasClass(harness.getElement("section-tracks"), "active"),
+    "tracks section should become active after switching",
+  );
+  assert.ok(
+    !hasClass(harness.getElement("section-sessions"), "active"),
+    "sessions section should hide after switching away",
+  );
+}
+
+async function testHiddenTrackPanelWaitsForCatchUpRender() {
+  const harness = createHarness();
+  await harness.settle();
+
+  const nameBefore = harness.getElement("current-track-name").textContent;
+  const nearbyBefore = harness.getElement("nearby-tracks").innerHTML;
+
+  harness.context.applyStatusData({
+    gps_fix: true,
+    satellites: 9,
+    lat: 31.2304167,
+    lon: 121.4737010,
+    recording: false,
+    current_lap: 0,
+    best_lap_ms: -1,
+    track: "Circuit A",
+    track_id: "track_hidden",
+    track_source: "Auto-detected",
+    track_locked_manual: false,
+    recording_cta_state: "ready",
+    recording_cta_reason: "",
+    current_track_distance_m: 12.3,
+    nearby_tracks: [
+      { id: "track_003", name: "Zhuhai International Circuit", distance_m: 18 },
+    ],
+  });
+
+  assert.equal(
+    harness.getElement("current-track-name").textContent,
+    nameBefore,
+    "hidden tracks panel should not update its summary before activation",
+  );
+  assert.equal(
+    harness.getElement("nearby-tracks").innerHTML,
+    nearbyBefore,
+    "hidden tracks panel should not update nearby choices before activation",
+  );
+
+  harness.context.setActiveTab("tracks");
+  assert.match(
+    harness.getElement("current-track-name").textContent,
+    /Circuit A/i,
+    "activating tracks should trigger catch-up summary rendering",
+  );
+  assert.match(
+    harness.getElement("nearby-tracks").innerHTML,
+    /Zhuhai International Circuit/i,
+    "activating tracks should trigger catch-up nearby rendering",
+  );
+}
+
 async function testSessionCardsRenderMetadataAndEncodedDownloads() {
   const harness = createHarness();
   await harness.settle();
 
+  harness.context.setActiveTab("sessions");
   harness.enqueueResponse("/api/sessions", {
     sessions: [
       {
@@ -1888,6 +2066,9 @@ async function testSessionCardsRenderMetadataAndEncodedDownloads() {
   await testNearbyTracksRenderSortedAndSupportSwitching();
   await testGuidedTrackReviewStageSupportsRemarkingSinglePoints();
   await testAdvancedSettingsStartCollapsed();
+  await testDashboardUsesThreePrimaryTabs();
+  await testTabSwitchingShowsTargetPanelAndClosesAdvanced();
+  await testHiddenTrackPanelWaitsForCatchUpRender();
   await testSessionCardsRenderMetadataAndEncodedDownloads();
   console.log("check_firmware_web_ui: PASS");
 })().catch((error) => {

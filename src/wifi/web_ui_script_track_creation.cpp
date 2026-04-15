@@ -667,6 +667,10 @@ function initTrackCreationUi(){
 
 
 initTrackCreationUi();
+if($('tab-status')){$('tab-status').onclick=function(){setActiveTab('status');};}
+if($('tab-sessions')){$('tab-sessions').onclick=function(){setActiveTab('sessions');};}
+if($('tab-tracks')){$('tab-tracks').onclick=function(){setActiveTab('tracks');};}
+renderPrimaryTabs();
 renderAdvancedSettings();
 refreshStatus();
 loadSessions();

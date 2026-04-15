@@ -4,6 +4,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const root = path.resolve(__dirname, "..");
+const repoRoot = path.resolve(root, "..", "..");
 const indexHtml = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const scenariosModule = require(path.join(root, "scenarios.js"));
 const webConsoleModule = require(path.join(root, "web_console.js"));
@@ -11,6 +12,10 @@ const deviceScreenModule = require(path.join(root, "device_screen.js"));
 const webConsoleSource = fs.readFileSync(path.join(root, "web_console.js"), "utf8");
 const deviceScreenSource = fs.readFileSync(path.join(root, "device_screen.js"), "utf8");
 const stylesSource = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+const firmwareWebUiSource = fs.readFileSync(
+  path.join(repoRoot, "src", "wifi", "web_ui_markup.cpp"),
+  "utf8",
+);
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -65,6 +70,22 @@ assert.match(stylesSource, /\.device-status__text\s*\{[\s\S]*overflow: hidden;[\
 assert.match(stylesSource, /\.device-preview--polished \.device-driving--sector-focus \.device-driving__delta\s*\{[\s\S]*font-size: clamp\(2\.7rem, 9\.4vw, 3\.55rem\);/);
 assert.match(stylesSource, /\.device-sector-ribbon\s*\{[\s\S]*grid-auto-flow: column;[\s\S]*grid-auto-columns: minmax\(0, 1fr\);[\s\S]*gap: 0;/);
 assert.match(stylesSource, /\.device-sector\s*\{[\s\S]*border-radius: 0;/);
+assert.match(
+  stylesSource,
+  /\.web-console__session-grid > div\s*\{[\s\S]*min-width: 0;[\s\S]*overflow-wrap: anywhere;[\s\S]*word-break: break-word;/,
+);
+assert.match(
+  stylesSource,
+  /\.web-console__session-link\s*\{[\s\S]*display: block;[\s\S]*max-width: 100%;[\s\S]*overflow-wrap: anywhere;[\s\S]*word-break: break-word;/,
+);
+assert.match(
+  firmwareWebUiSource,
+  /\.session-meta>div\{min-width:0;overflow-wrap:anywhere;word-break:break-word\}/,
+);
+assert.match(
+  firmwareWebUiSource,
+  /\.session-actions a\{display:block;max-width:100%;overflow-wrap:anywhere;[\s\S]*word-break:break-word;/,
+);
 
 const { SCENARIOS, DEFAULT_SCENARIO_ID, getScenarioById } = scenariosModule;
 const requiredScenarioIds = [
@@ -203,7 +224,16 @@ const stabilizingMarkup = webConsoleModule.renderWebConsoleMarkup(trackCreationS
 assert.match(markup, /Status/);
 assert.match(markup, /Sessions/);
 assert.match(markup, /Tracks/);
-assert.match(markup, /Advanced|Settings/);
+assert.match(markup, /web-console__tabs/);
+assert.match(markup, /data-tab="status"/);
+assert.match(markup, /data-tab="sessions"/);
+assert.match(markup, /data-tab="tracks"/);
+assert.match(markup, /data-panel="status"/);
+assert.match(markup, /data-panel="sessions"/);
+assert.match(markup, /data-panel="tracks"/);
+assert.match(markup, /Advanced/);
+assert.doesNotMatch(markup, /data-card="settings"/);
+assert.doesNotMatch(markup, />Settings<\/button>/);
 assert.match(markup, /Track Creation/);
 assert.match(markup, /Current Track/);
 assert.match(markup, /Mark P1|✓ P1/);
