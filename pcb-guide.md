@@ -59,7 +59,7 @@
 
 ```
 USB-C 电池 (5V 3A) → Type-C 母口分线板
-  → [接线端子] → [自锁按键] → 5V_SW 总线
+  → [接线端子 `5V_BAT`] → [自锁按键] → `5V_IN` 总线
       │
       ├── C1: 470µF + C2: 104 ── GND     ← 总线入口滤波
       │
@@ -131,7 +131,7 @@ USB-C 电池 (5V 3A) → Type-C 母口分线板
 
 | 引脚编号 | 标注 | 说明 |
 |----------|------|------|
-| 按 DevKit 实际排列 | 5VIN | 接 5V_SW |
+| 按 DevKit 实际排列 | 5VIN | 接 `5V_IN` |
 | | GND | 接地 |
 | | 3V3 | 输出给 TFT |
 | | GPIO4 | Record 按钮 |
@@ -168,8 +168,8 @@ USB-C 电池 (5V 3A) → Type-C 母口分线板
 
 | 网络标签 | 连接的引脚 |
 |----------|-----------|
-| `5V_SW` | 接线端子 pin1 → 自锁按键 pin1 |
-| `5V_OUT` | 自锁按键 pin2 → C1+ → C4+ → C6+ → ESP32 5VIN → GPS VCC → SD VCC |
+| `5V_BAT` | 接线端子 pin1 → 自锁按键 pin1（按键前，电池原始 5V） |
+| `5V_IN` | 自锁按键 pin2 → C1+ → C4+ → C6+ → ESP32 5VIN → GPS VCC → SD VCC（按键后，系统 5V 总线） |
 | `3V3` | ESP32 3V3 → C8+ → TFT VCC |
 | `GND` | 所有 GND 引脚、所有电容负极、接线端子 pin2 |
 | `MOSI` | ESP32 GPIO11 → TFT MOS → SD MOSI |
@@ -180,8 +180,8 @@ USB-C 电池 (5V 3A) → Type-C 母口分线板
 | `TFT_RST` | ESP32 GPIO8 → TFT RES |
 | `TFT_BL` | ESP32 GPIO47 → TFT BLK |
 | `SD_CS` | ESP32 GPIO42 → SD CS |
-| `GPS_TX` | ESP32 GPIO17 → GPS TX |
-| `GPS_RX` | ESP32 GPIO18 → GPS RX |
+| `GPS_RX` | ESP32 GPIO17 (U1RXD) ↔ GPS pin3 (TX) — 从 ESP32 视角命名：ESP32 的 RX 线 |
+| `GPS_TX` | ESP32 GPIO18 (U1TXD) ↔ GPS pin4 (RX) — 从 ESP32 视角命名：ESP32 的 TX 线 |
 | `GPS_PPS` | ESP32 GPIO16 → PPS 预留测试焊点（可选） |
 | `BTN_REC` | ESP32 GPIO4 → Record 按钮 pin1 |
 | `LED_OUT` | ESP32 GPIO2 → 220Ω 电阻 → LED 正极 |
@@ -191,7 +191,7 @@ USB-C 电池 (5V 3A) → Type-C 母口分线板
 #### 步骤 4：添加电源符号
 
 1. 搜索元件库中的 `VCC` 和 `GND` 电源符号
-2. 把 `VCC` 放在 5V_OUT 网络上，`GND` 放在地线上
+2. 把 `VCC` 放在 `5V_IN` 网络上，`GND` 放在地线上
 3. 这一步主要是让原理图更易读，不影响实际连接
 
 #### 步骤 5：ERC 检查
@@ -251,7 +251,7 @@ USB-C 电池 (5V 3A) → Type-C 母口分线板
 
 走线宽度设置：
 - 「设计规则」→ 添加规则：
-  - `5V_OUT` 网络：线宽 **1mm**
+  - `5V_IN` 网络：线宽 **1mm**
   - `3V3` 网络：线宽 **0.5mm**
   - `GND` 网络：线宽 **1mm**（或用铺铜代替）
   - 其余信号线：线宽 **0.25mm**
@@ -341,7 +341,7 @@ GPS 焊盘：
 
 | 网络 | 线宽 | 说明 |
 |------|------|------|
-| `5V_OUT`, `GND` | ≥ 1.0mm | 电源主干，电流大 |
+| `5V_IN`, `GND` | ≥ 1.0mm | 电源主干，电流大 |
 | `3V3` | ≥ 0.5mm | 3.3V 供 TFT，电流 ~30mA |
 | SPI (`MOSI`, `SCLK`, `MISO`) | 0.25mm | 尽量短、平行、等长 |
 | CS/DC/RST/BL | 0.25mm | 低速控制信号，不敏感 |
@@ -680,7 +680,7 @@ GPS 焊盘旁：SDA GND TX RX VCC SCL
 
 - 哪怕是洞洞板，也建议至少留出几个万用表/示波器好碰到的位置
 - 推荐预留：
-- `5V_SW`
+- `5V_IN`
 - `3V3`
 - `GND`
 - `GPIO17 / GPIO18`（GPS 串口）
@@ -690,7 +690,7 @@ GPS 焊盘旁：SDA GND TX RX VCC SCL
 ### 6. 首次上电顺序建议再保守一点
 
 - 第一次不是“全插满再上电”，而是按层级推进
-- 先只上电源总线，确认 `5V_SW` 正常
+- 先只上电源总线，确认 `5V_IN` 正常
 - 再插 `ESP32`，确认板上 `3.3V` 正常
 - 再插 `TFT`
 - 再插 `SD`

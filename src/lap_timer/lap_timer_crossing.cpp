@@ -167,6 +167,15 @@ void process_line(int line_idx,
                   const DetectionLine* line,
                   const GpsPoint* prev,
                   const GpsPoint* curr) {
+    // Reject stationary GPS drift: if we're not moving, do NOT accumulate
+    // arm distance and do NOT check for crossings. Otherwise drift-driven
+    // position jitter will arm the line and then cross it randomly while
+    // the device sits still. u-blox RMC reports ~0 km/h when stationary,
+    // so any real walking/driving crosses the MIN_CROSSING_SPEED_KMH gate.
+    if (curr->speed_kmh < MIN_CROSSING_SPEED_KMH) {
+        return;
+    }
+
     update_arm_distance(line_idx, prev, curr);
 
     if (s_debounce_active[line_idx]) {
