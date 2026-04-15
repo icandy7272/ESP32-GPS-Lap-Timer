@@ -264,21 +264,39 @@ static void init_backlight() {
     ledcWrite(0, app_config.brightness);
 }
 
-static void init_tft() {
-    // Hardware reset with extended timing for cold-start reliability.
-    // Many ILI9341 modules lack a MISO connection to the display
-    // controller, so SPI-based liveness probes always read 0xFF.
-    // Instead we rely on generous power-on and reset delays
-    // (configured in boot_sequence.cpp) to guarantee readiness.
+static void reset_tft_hardware() {
+    // Keep other SPI clients off the bus and hold the backlight low
+    // while the panel controller is being reset on cold power-on.
+    pinMode(PIN_SD_CS, OUTPUT);
+    digitalWrite(PIN_SD_CS, HIGH);
+    pinMode(PIN_TFT_CS, OUTPUT);
+    digitalWrite(PIN_TFT_CS, HIGH);
+    pinMode(PIN_TFT_DC, OUTPUT);
+    digitalWrite(PIN_TFT_DC, HIGH);
+    pinMode(PIN_TFT_BL, OUTPUT);
+    digitalWrite(PIN_TFT_BL, LOW);
+
     pinMode(PIN_TFT_RST, OUTPUT);
     digitalWrite(PIN_TFT_RST, LOW);
     delay(boot_tft_reset_low_ms());
     digitalWrite(PIN_TFT_RST, HIGH);
     delay(boot_tft_reset_high_ms());
+}
 
+static void init_tft_once() {
+    reset_tft_hardware();
     s_tft.init();
     s_tft.setRotation(1);  // landscape 320x240
     s_tft.fillScreen(TFT_BLACK);
+}
+
+static void init_tft() {
+    // Some breadboard cold boots appear to miss the first panel init even
+    // though setup continues. A second reset+init pass is cheap and gives
+    // the controller another clean chance to latch commands.
+    init_tft_once();
+    delay(50);
+    init_tft_once();
 }
 
 static void init_delta_sprite() {

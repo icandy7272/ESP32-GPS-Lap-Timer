@@ -29,6 +29,7 @@
 #include "boot_status.h"
 #include "boot_sequence.h"
 #include "boot_log.h"
+#include "serial_console.h"
 
 // --- Shared FreeRTOS primitives (created once here) ----------
 
@@ -60,6 +61,10 @@ static bool s_boot_status_active = false;
 static uint8_t s_previous_boot_stage = kBootBreadcrumbCleared;
 static uint8_t s_previous_boot_state = kBootBreadcrumbCleared;
 static uint8_t s_previous_boot_probe_phase = kBootProbeCleared;
+static char s_serial_console_line[160] = {0};
+static size_t s_serial_console_line_len = 0;
+static bool s_serial_console_overflow = false;
+static uint32_t s_last_stack_snapshot_ms = 0;
 
 static void clear_boot_breadcrumb() {
     rtc_boot_stage = kBootBreadcrumbCleared;
@@ -148,6 +153,27 @@ static void prepare_early_boot_hardware(uint32_t settle_delay_ms) {
     delay(settle_delay_ms);
 }
 
+static void prime_tft_cold_boot_power_path() {
+    // Field evidence on the breadboard setup shows the TFT module only becomes
+    // reliable on a true cold power-on if BL is driven high early and long
+    // enough before the normal reset/init sequence begins. Pure extra delay
+    // was not sufficient.
+    constexpr uint32_t kPrimeLowMs = 120;
+    constexpr uint32_t kPrimeHighMs = 120;
+
+    pinMode(PIN_LED, OUTPUT);
+    digitalWrite(PIN_LED, HIGH);
+
+    pinMode(PIN_TFT_BL, OUTPUT);
+    digitalWrite(PIN_TFT_BL, LOW);
+    delay(kPrimeLowMs);
+    digitalWrite(PIN_TFT_BL, HIGH);
+    delay(kPrimeHighMs);
+    digitalWrite(PIN_TFT_BL, LOW);
+
+    digitalWrite(PIN_LED, LOW);
+}
+
 static void print_boot_info() {
     Serial.println("========================================");
     Serial.println("  ESP32-S3 GPS Lap Timer v1.0");
@@ -156,6 +182,176 @@ static void print_boot_info() {
                   ESP.getFreeHeap(), ESP.getFreePsram());
     Serial.printf("  CPU  : %u MHz\n", getCpuFrequencyMhz());
     Serial.println("========================================");
+}
+
+static void serial_console_print_help() {
+    Serial.println("[serial] Commands:");
+    Serial.println("  help");
+    Serial.println("  ls tracks");
+    Serial.println("  ls sessions");
+    Serial.println("  cat tracks/<filename>");
+    Serial.println("  cat sessions/<filename>");
+}
+
+static void serial_console_print_invalid(const SerialConsoleCommand& command) {
+    if (command.error[0] != '\0') {
+        Serial.printf("[serial] ERR: %s\n", command.error);
+    } else {
+        Serial.println("[serial] ERR: invalid command");
+    }
+    Serial.println("[serial] Type 'help' for commands");
+}
+
+static void serial_console_list_directory(const char* dir_path) {
+    if (xSemaphoreTake(spi_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        Serial.println("[serial] ERR: SD busy");
+        return;
+    }
+
+    FsFile dir;
+    if (!dir.open(dir_path, O_RDONLY)) {
+        xSemaphoreGive(spi_mutex);
+        Serial.printf("[serial] ERR: directory not found: %s\n", dir_path);
+        return;
+    }
+
+    FsFile entry;
+    char name[128];
+    int count = 0;
+    while (entry.openNext(&dir, O_RDONLY)) {
+        if (!entry.isDir()) {
+            entry.getName(name, sizeof(name));
+            Serial.println(name);
+            count++;
+        }
+        entry.close();
+    }
+    dir.close();
+    xSemaphoreGive(spi_mutex);
+
+    Serial.printf("[serial] count=%d\n", count);
+}
+
+static void serial_console_cat_file(const char* path) {
+    static constexpr size_t kCatLimitBytes = 4096;
+    uint8_t buf[128];
+    size_t total = 0;
+    bool truncated = false;
+    bool wrote_data = false;
+    char last_byte = '\n';
+
+    if (xSemaphoreTake(spi_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        Serial.println("[serial] ERR: SD busy");
+        return;
+    }
+
+    FsFile file;
+    if (!file.open(path, O_RDONLY)) {
+        xSemaphoreGive(spi_mutex);
+        Serial.printf("[serial] ERR: file not found: %s\n", path);
+        return;
+    }
+    xSemaphoreGive(spi_mutex);
+
+    Serial.printf("[serial] --- %s ---\n", path);
+
+    while (total < kCatLimitBytes) {
+        if (xSemaphoreTake(spi_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+            Serial.println("\n[serial] ERR: SD busy");
+            break;
+        }
+
+        size_t remaining = kCatLimitBytes - total;
+        size_t want = remaining < sizeof(buf) ? remaining : sizeof(buf);
+        int n = file.read(buf, want);
+        bool has_more = file.available() > 0;
+        xSemaphoreGive(spi_mutex);
+
+        if (n <= 0) {
+            break;
+        }
+
+        Serial.write(buf, static_cast<size_t>(n));
+        total += static_cast<size_t>(n);
+        wrote_data = true;
+        last_byte = static_cast<char>(buf[n - 1]);
+        if (total >= kCatLimitBytes && has_more) {
+            truncated = true;
+            break;
+        }
+    }
+
+    if (xSemaphoreTake(spi_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        file.close();
+        xSemaphoreGive(spi_mutex);
+    }
+
+    if (wrote_data && last_byte != '\n') {
+        Serial.println();
+    }
+    if (truncated) {
+        Serial.println("...[TRUNCATED]");
+    }
+}
+
+static void serial_console_handle_line(const char* line) {
+    SerialConsoleCommand command = serial_console_parse(line);
+    switch (command.type) {
+        case SerialConsoleCommandType::Help:
+            serial_console_print_help();
+            return;
+        case SerialConsoleCommandType::ListDirectory:
+            serial_console_list_directory(command.arg);
+            return;
+        case SerialConsoleCommandType::CatFile:
+            serial_console_cat_file(command.arg);
+            return;
+        case SerialConsoleCommandType::Invalid:
+        default:
+            serial_console_print_invalid(command);
+            return;
+    }
+}
+
+static void serial_console_finish_line() {
+    if (s_serial_console_overflow) {
+        Serial.println("[serial] ERR: command too long");
+    } else if (s_serial_console_line_len > 0) {
+        s_serial_console_line[s_serial_console_line_len] = '\0';
+        serial_console_handle_line(s_serial_console_line);
+    }
+
+    s_serial_console_line_len = 0;
+    s_serial_console_line[0] = '\0';
+    s_serial_console_overflow = false;
+}
+
+static void serial_console_poll() {
+    while (Serial.available() > 0) {
+        int raw = Serial.read();
+        if (raw < 0) {
+            return;
+        }
+
+        char c = static_cast<char>(raw);
+        if (c == '\r' || c == '\n') {
+            if (s_serial_console_line_len > 0 || s_serial_console_overflow) {
+                serial_console_finish_line();
+            }
+            continue;
+        }
+
+        if (s_serial_console_overflow) {
+            continue;
+        }
+
+        if (s_serial_console_line_len + 1 >= sizeof(s_serial_console_line)) {
+            s_serial_console_overflow = true;
+            continue;
+        }
+
+        s_serial_console_line[s_serial_console_line_len++] = c;
+    }
 }
 
 // --- Arduino entry points ------------------------------------
@@ -236,6 +432,9 @@ void setup() {
     const uint32_t power_hold_ms = boot_power_hold_ms(reset_reason);
     s_previous_boot_probe_phase = capture_previous_boot_probe();
     boot_probe_mark(EarlyBootProbe::SETUP_ENTRY);
+    if (reset_reason == ESP_RST_POWERON) {
+        prime_tft_cold_boot_power_path();
+    }
 
     Serial.begin(115200);
     delay(200);
@@ -535,15 +734,25 @@ RTC_NOINIT_ATTR uint16_t wm_session;
 RTC_NOINIT_ATTR uint16_t wm_wifi;
 RTC_NOINIT_ATTR uint16_t wm_laptimer;
 
-void loop() {
-    vTaskDelay(pdMS_TO_TICKS(5000));
-
-    // Snapshot stack high-water marks for crash diagnostics.
-    // xTaskGetHandle is safe from the Arduino loop task.
+static void snapshot_stack_watermarks() {
     TaskHandle_t h;
-    h = xTaskGetHandle("storage");  if (h) wm_storage  = uxTaskGetStackHighWaterMark(h);
-    h = xTaskGetHandle("display");  if (h) wm_display  = uxTaskGetStackHighWaterMark(h);
-    h = xTaskGetHandle("session");  if (h) wm_session  = uxTaskGetStackHighWaterMark(h);
-    h = xTaskGetHandle("wifi");     if (h) wm_wifi     = uxTaskGetStackHighWaterMark(h);
-    h = xTaskGetHandle("lap_timer");if (h) wm_laptimer = uxTaskGetStackHighWaterMark(h);
+    h = xTaskGetHandle("storage");   if (h) wm_storage  = uxTaskGetStackHighWaterMark(h);
+    h = xTaskGetHandle("display");   if (h) wm_display  = uxTaskGetStackHighWaterMark(h);
+    h = xTaskGetHandle("session");   if (h) wm_session  = uxTaskGetStackHighWaterMark(h);
+    h = xTaskGetHandle("wifi");      if (h) wm_wifi     = uxTaskGetStackHighWaterMark(h);
+    h = xTaskGetHandle("lap_timer"); if (h) wm_laptimer = uxTaskGetStackHighWaterMark(h);
+}
+
+void loop() {
+    serial_console_poll();
+
+    const uint32_t now_ms = millis();
+    if ((now_ms - s_last_stack_snapshot_ms) >= 5000) {
+        // Snapshot stack high-water marks for crash diagnostics.
+        // xTaskGetHandle is safe from the Arduino loop task.
+        snapshot_stack_watermarks();
+        s_last_stack_snapshot_ms = now_ms;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(20));
 }
