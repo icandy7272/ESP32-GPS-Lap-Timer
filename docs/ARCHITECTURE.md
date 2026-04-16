@@ -357,7 +357,7 @@ typedef struct {
 |------|-----------|------|------|
 | GPS_TX | GPIO 17 | IN（ESP32 侧 RX） | NMEA 数据输入，115200 baud |
 | GPS_RX | GPIO 18 | OUT（ESP32 侧 TX） | UBX 配置命令输出 |
-| GPS_PPS | GPIO 16 | IN | 秒脉冲，上升沿触发硬件中断，精度 ±30ns |
+| GPS_PPS | GPIO 16 | IN（v1.1 可选） | 秒脉冲。**BK-880 6P 线束未引出**；v1 不接，v1.1 需飞线到模块 PPS 测试焊盘。开通后上升沿触发硬件中断，精度 ±30ns |
 
 ### 按键
 

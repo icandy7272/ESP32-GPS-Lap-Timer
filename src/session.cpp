@@ -25,10 +25,13 @@ static int            s_current_sector = 0;
 
 // --- Constants ---
 
-// TEST: lowered from 15000 to match lap_timer's MIN_LAP_TIME_MS during
-// walking tests. Revert to 15000 before shipping (both files tracked in
-// memory/project_pcb_migration.md).
-static constexpr int32_t  LAP_SHORT_THRESHOLD_MS   = 5000;    // TEST: was 15000
+// Must stay in sync with lap_timer_internal.h MIN_LAP_TIME_MS — both sides
+// are gated by the same WALKING_TEST_MODE flag so they can never diverge.
+#ifdef WALKING_TEST_MODE
+static constexpr int32_t  LAP_SHORT_THRESHOLD_MS   = 5000;    // walking test
+#else
+static constexpr int32_t  LAP_SHORT_THRESHOLD_MS   = 15000;   // < 15 s
+#endif
 static constexpr int32_t  SECTOR_MIN_TIME_MS       = 5000;    // < 5 s = GPS jitter
 static constexpr int32_t  LAP_SLOW_MULTIPLIER_150  = 150;     // > best * 1.5
 static constexpr TickType_t QUEUE_POLL_TICKS = pdMS_TO_TICKS(50);

@@ -8,23 +8,30 @@
 
 namespace lap_timer_internal {
 
-// === TEMPORARY WALKING-TEST VALUES — revert before shipping ===
-// HEADING_WINDOW: 60.0f production (GPS heading is garbage below ~3 km/h,
-//                 so 180.0 effectively disables the direction gate for
-//                 walking tests).
-// ARM_DISTANCE_M: 10.0 prod, 50.0 historical. Lowered to 3.0 so a few
-//                 steps of walking can arm the line.
-// MIN_CROSSING_SPEED_KMH: rejects stationary GPS drift. Drift speed is
-//                 reported as 0 by u-blox RMC, walking is ~3-5 km/h,
-//                 so 1.0 km/h is a clean split.
-static constexpr float HEADING_WINDOW = 180.0f;  // TEST: was 60.0f
-static constexpr double ARM_DISTANCE_M = 3.0;    // TEST: was 10.0 (prod), 50.0 (shipping)
+// === Crossing gate thresholds ===
+// Two sets of values, selected at compile time by WALKING_TEST_MODE:
+//   - PRODUCTION (default, undefined WALKING_TEST_MODE):
+//       Real-track values. Rejects spurious crossings and short laps.
+//   - WALKING_TEST_MODE (-DWALKING_TEST_MODE in platformio.ini):
+//       Relaxed values so walking a small loop around the start/finish
+//       line actually produces valid laps and a best-lap reference.
+//
+// See memory/project_pcb_migration.md for the full matrix. Do NOT merge
+// WALKING_TEST_MODE builds to production firmware.
+//
+// MIN_CROSSING_SPEED_KMH is kept on BOTH paths: it rejects stationary GPS
+// drift (speed=0) without affecting any real walking/driving case.
+#ifdef WALKING_TEST_MODE
+static constexpr float HEADING_WINDOW = 180.0f;   // effectively disables direction gate
+static constexpr double ARM_DISTANCE_M = 3.0;     // ~few walking steps arms the line
+static constexpr int32_t MIN_LAP_TIME_MS = 5000;  // accept >=5 s laps
+#else
+static constexpr float HEADING_WINDOW = 60.0f;
+static constexpr double ARM_DISTANCE_M = 10.0;
+static constexpr int32_t MIN_LAP_TIME_MS = 15000;
+#endif
 static constexpr float MIN_CROSSING_SPEED_KMH = 1.0f;
 static constexpr int DEBOUNCE_SAMPLES = 2;
-// MIN_LAP_TIME_MS: prod value is 15000 (rejects spurious short laps).
-// TEST: lowered to 5000 so walking-scale crossings produce valid laps
-// and a real "best lap" reference gets established.
-static constexpr int32_t MIN_LAP_TIME_MS = 5000;  // TEST: was 15000
 static constexpr float MAX_LAP_RATIO = 1.5f;
 static constexpr int SPLINE_HISTORY = 4;
 static constexpr int BINARY_SEARCH_ITS = 12;
