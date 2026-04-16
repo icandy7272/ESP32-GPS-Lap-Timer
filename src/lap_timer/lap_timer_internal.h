@@ -10,14 +10,18 @@ namespace lap_timer_internal {
 
 // === Crossing gate thresholds ===
 // Two sets of values, selected at compile time by WALKING_TEST_MODE:
-//   - PRODUCTION (default, undefined WALKING_TEST_MODE):
+//   - PRODUCTION (default, WALKING_TEST_MODE undefined):
 //       Real-track values. Rejects spurious crossings and short laps.
-//   - WALKING_TEST_MODE (-DWALKING_TEST_MODE in platformio.ini):
+//   - WALKING_TEST_MODE (env: esp32-s3-devkitc-1-walking-test):
 //       Relaxed values so walking a small loop around the start/finish
 //       line actually produces valid laps and a best-lap reference.
+//       Opt-in only — default `pio run` never sets this.
 //
-// See memory/project_pcb_migration.md for the full matrix. Do NOT merge
-// WALKING_TEST_MODE builds to production firmware.
+// LAP_SHORT_THRESHOLD_MS in src/session.cpp is gated off the SAME macro
+// so lap_timer and session can't drift apart.
+//
+// See docs/TEST_MODES.md for the full parameter matrix and deployment
+// checklist.
 //
 // MIN_CROSSING_SPEED_KMH is kept on BOTH paths: it rejects stationary GPS
 // drift (speed=0) without affecting any real walking/driving case.

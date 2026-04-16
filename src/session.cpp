@@ -25,8 +25,8 @@ static int            s_current_sector = 0;
 
 // --- Constants ---
 
-// Must stay in sync with lap_timer_internal.h MIN_LAP_TIME_MS — both sides
-// are gated by the same WALKING_TEST_MODE flag so they can never diverge.
+// Stays in sync with lap_timer_internal.h MIN_LAP_TIME_MS via the shared
+// WALKING_TEST_MODE macro. See docs/TEST_MODES.md for the full matrix.
 #ifdef WALKING_TEST_MODE
 static constexpr int32_t  LAP_SHORT_THRESHOLD_MS   = 5000;    // walking test
 #else
