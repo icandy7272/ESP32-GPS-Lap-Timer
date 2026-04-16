@@ -25,7 +25,10 @@ static int            s_current_sector = 0;
 
 // --- Constants ---
 
-static constexpr int32_t  LAP_SHORT_THRESHOLD_MS   = 15000;   // < 15 s
+// TEST: lowered from 15000 to match lap_timer's MIN_LAP_TIME_MS during
+// walking tests. Revert to 15000 before shipping (both files tracked in
+// memory/project_pcb_migration.md).
+static constexpr int32_t  LAP_SHORT_THRESHOLD_MS   = 5000;    // TEST: was 15000
 static constexpr int32_t  SECTOR_MIN_TIME_MS       = 5000;    // < 5 s = GPS jitter
 static constexpr int32_t  LAP_SLOW_MULTIPLIER_150  = 150;     // > best * 1.5
 static constexpr TickType_t QUEUE_POLL_TICKS = pdMS_TO_TICKS(50);
@@ -114,7 +117,19 @@ void session_stop_recording()
 
     xSemaphoreTake(session_mutex, portMAX_DELAY);
     session_state.is_recording = false;
+    // Clear the running-timer timestamp so the driving screen's top-right
+    // elapsed-time field resets to 0:00.00 when we fall back into READY.
+    // Without this, the delta engine's last-written s_lap_start_us keeps
+    // being echoed back and the idle screen shows a timer that still ticks
+    // from the previous lap.
+    session_state.current_lap_start_us = 0;
     xSemaphoreGive(session_mutex);
+
+    // Also reset the lap timer's own state so s_lap_start_us / first-crossing
+    // flag are clean on next record-start (session.cpp s_lap_start_us gets
+    // reset in reset_session_state() on next record-start, but the lap timer
+    // side keeps ticking without this call).
+    lap_timer_reset();
 
     storage_end_session();
     s_phase = SESSION_FINISHED;

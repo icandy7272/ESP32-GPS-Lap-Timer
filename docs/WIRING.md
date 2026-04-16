@@ -250,8 +250,11 @@ ESP32-S3 板载 LDO 给 TFT 和少量逻辑负载供电是安全的；GPS 和当
                     │                                  │                     GND ↔ GND   GND ↔ GND
                     │  5V/VIN ─────────────────────────┼←── 5V_SW             TX  → GPIO17 MOSI←GPIO11
                     │  GND    ─────────────────────────┼↔── GND               RX  ← GPIO18 SCK ←GPIO12
-                    │                                  │                     PPS → GPIO16 MISO→GPIO13
-                    │  GPIO11 ──── MOSI (SPI共享) ────┼──→ TFT MOS           (可选)      CS  ←GPIO42
+                    │                                  │                                  MISO→GPIO13
+                    │  GPIO11 ──── MOSI (SPI共享) ────┼──→ TFT MOS                        CS  ←GPIO42
+                    │                                  │
+                    │  GPIO16 ──── (PPS 可选飞线 ── GPS 模块 PPS 测试焊盘；
+                    │                6P 线束不引出 PPS，如需使用请单独飞线)
                     │  GPIO12 ──── SCLK (SPI共享) ────┼──→ TFT CLK
                     │  GPIO10 ──── CS ────────────────┼──→ TFT CS
                     │  GPIO9  ──── DC ────────────────┼──→ TFT DC
