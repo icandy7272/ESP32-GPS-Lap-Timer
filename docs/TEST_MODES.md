@@ -65,19 +65,36 @@
 
 ## 赛道部署检查清单
 
-1. `platformio.ini` 默认 env = `esp32-s3-devkitc-1`（生产） ✓
-2. `board_build.f_cpu = 240000000L` ✓
-3. `SD_SPI_MHZ = 25`（或至少 10）✓
-4. 用 `pio run -t upload` 刷固件（不带 `-e`）
-5. 启动后串口应看到
+> ⚠️ 当前 repo 默认值仍是**面包板安全值**（`f_cpu=160MHz`、`SD_SPI_MHZ=4`）。
+> 上赛道前需要手动编辑源码把下面两项改成生产值，再重新编译上传。
+> `WALKING_TEST_MODE` 已经默认关闭（不需要额外操作）。
+
+### 需要手动编辑的源码（焊到洞洞板/PCB 之后）
+
+| 修改 | 文件 | 面包板值 → 生产值 |
+|------|------|----------------|
+| CPU 频率 | `platformio.ini`（`board_build.f_cpu`） | `160000000L` → `240000000L` |
+| SD SPI 速度 | `src/storage/storage_internal.h`（`SD_SPI_MHZ`） | `4` → `25`（或先试 `10`） |
+
+### 编译与上传（默认 env 即生产，无需 `-e`）
+
+```sh
+pio run -t upload
+```
+
+### 上电验证
+
+1. 启动后串口应看到：
    - `[track] loaded: <name>`
    - `[BOOT][...][GPS][ok] track matched: <name>`
-6. 场地低速绕一圈，应触发：
+   - **无** `BROWNOUT` 字样（如有，检查 470µF 电容和电源接线）
+2. 场地低速绕一圈，应触发：
    - `[xing] L0 ARMED at ...m`
    - `[xing] L0 CROSSED arm=...`
    - `[lap] first crossing — timer started`
-7. 反向过线应被 `[xing] side_flip hdiff=... REJECTED` 丢弃
-8. 长时间原地静止，应无任何 `[xing]` 日志（速度门槛生效）
+3. 反向过线应被 `[xing] side_flip hdiff=... REJECTED` 丢弃
+4. 长时间原地静止，应无任何 `[xing]` 日志（速度门槛生效）
+5. SD 卡生成有效的 `.vbo` 文件（通过 WiFi 下载验证）
 
 ## 历史记录
 
