@@ -5,6 +5,7 @@
 #include "time_format.h"
 
 #include <Arduino.h>
+#include <esp_timer.h>
 #include <string.h>
 
 extern SemaphoreHandle_t session_mutex;
@@ -181,6 +182,20 @@ void write_session_metadata_json(const char* vbo_path) {
     const char* vbo_name = strrchr(vbo_path, '/');
     vbo_name = vbo_name ? vbo_name + 1 : vbo_path;
 
+    // Session duration in seconds, derived from the monotonic epoch set
+    // at storage_start_session().  The previous implementation used
+    // millis()/1000 — that is uptime, not session length, and the two
+    // diverge the moment the device is used for anything before the
+    // first recording.  `esp_timer_get_time() - s_session_epoch_us` is
+    // microseconds since session start on the same clock source, so
+    // dividing by 1_000_000 gives integer seconds of actual recording.
+    int64_t session_duration_us = esp_timer_get_time() - s_session_epoch_us;
+    if (session_duration_us < 0) {
+        session_duration_us = 0;
+    }
+    unsigned long total_time_s =
+        (unsigned long)(session_duration_us / 1000000);
+
     char buf[384];
     int pos = snprintf(buf, sizeof(buf),
         "{\n"
@@ -196,7 +211,7 @@ void write_session_metadata_json(const char* vbo_path) {
         s_active_track_name,
         date_str, time_str,
         laps, (long)best_ms, best_num,
-        (unsigned long)(millis() / 1000),
+        total_time_s,
         vbo_name);
 
     if (pos <= 0 || pos >= (int)sizeof(buf)) {
