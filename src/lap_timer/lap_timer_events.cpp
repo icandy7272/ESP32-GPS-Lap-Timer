@@ -33,6 +33,19 @@ bool is_lap_valid(int32_t lap_time_ms) {
 }
 
 void handle_finish_crossing(int64_t crossing_us) {
+    // Snapshot the two flags under the mutex so the guard below sees a
+    // consistent pair.  session_stop_recording() writes is_recording and
+    // session_stopped together under s_session_mutex; without taking the
+    // same mutex here, Core 0 can observe them out-of-order on Xtensa LX7
+    // (no stdlib memory-model guarantee, only empirical cache coherency),
+    // miss the guard, and silently auto-start during a stop.
+    bool is_recording;
+    bool session_stopped;
+    xSemaphoreTake(s_session_mutex, portMAX_DELAY);
+    is_recording    = session_state.is_recording;
+    session_stopped = session_state.session_stopped;
+    xSemaphoreGive(s_session_mutex);
+
     // Guard: once the user has manually stopped a session, every subsequent
     // crossing must be ignored until a new session_start_recording().
     // Covers two regression-prone cases:
@@ -47,7 +60,7 @@ void handle_finish_crossing(int64_t crossing_us) {
     // session_state.session_stopped is set by session_stop_recording() and
     // cleared by session_start_recording(), so it cleanly distinguishes
     // "user stopped" from "fresh boot, never recorded".
-    if (session_state.session_stopped && !session_state.is_recording) {
+    if (session_stopped && !is_recording) {
         Serial.printf("[lap] crossing ignored (recording stopped)\n");
         return;
     }
@@ -61,7 +74,7 @@ void handle_finish_crossing(int64_t crossing_us) {
         delta_reset_elapsed();
         Serial.printf("[lap] first crossing — timer started\n");
 
-        if (!session_state.is_recording) {
+        if (!is_recording) {
             const char* tname = session_state.track_name[0] != '\0'
                                     ? session_state.track_name
                                     : "Unknown Track";

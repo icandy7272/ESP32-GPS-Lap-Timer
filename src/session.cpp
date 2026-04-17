@@ -267,11 +267,17 @@ static void handle_lap_finish(const LapEvent* ev)
         }
     }
 
+    // Snapshot the record before releasing the mutex — `lap` points into
+    // shared session_state storage, and storage_write_lap_timing runs
+    // outside the lock (SD I/O may block).  Without this copy, any future
+    // non-stub implementation would race with writes to session_state.laps.
+    LapRecord lap_snapshot = *lap;
+
     xSemaphoreGive(session_mutex);
     crash_bc_core1 = 33;  // session: mutex released, about to write lap
 
     // Persist lap to SD (outside mutex)
-    storage_write_lap_timing(lap);
+    storage_write_lap_timing(&lap_snapshot);
     crash_bc_core1 = 34;  // session: handle_lap_finish done
 
     // Advance lap start to this crossing; reset sector tracking
