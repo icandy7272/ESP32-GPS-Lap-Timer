@@ -141,7 +141,6 @@ USB-C 电池 (5V 3A) → Type-C 母口分线板
 | | GPIO11 | SPI MOSI |
 | | GPIO12 | SPI SCLK |
 | | GPIO13 | SPI MISO |
-| | GPIO16 | PPS 预留焊点（可选） |
 | | GPIO17 | GPS RX |
 | | GPIO18 | GPS TX |
 | | GPIO42 | SD CS |
@@ -152,7 +151,7 @@ USB-C 电池 (5V 3A) → Type-C 母口分线板
 
 **SD (1×6)：** GND, VCC, MISO, MOSI, SCK, CS
 
-**GPS (1×6 焊盘/排针)：** SDA, GND, TX, RX, VCC, SCL — GPS 是线束连接，把线束末端焊到 PCB 上的排针或焊盘；`PPS` 如需使用，单独预留测试焊点/飞线孔
+**GPS (1×6 焊盘/排针)：** SDA, GND, TX, RX, VCC, SCL — 模块板上的 2.54mm 通孔路径，焊 1×6 排针到模块，PCB/洞洞板上装对应排母座即可。BK-880 不提供 PPS，不需要预留任何 PPS 焊点。
 
 #### 步骤 3：用网络标签连线
 
@@ -182,7 +181,6 @@ USB-C 电池 (5V 3A) → Type-C 母口分线板
 | `SD_CS` | ESP32 GPIO42 → SD CS |
 | `GPS_RX` | ESP32 GPIO17 (U1RXD) ↔ GPS pin3 (TX) — 从 ESP32 视角命名：ESP32 的 RX 线 |
 | `GPS_TX` | ESP32 GPIO18 (U1TXD) ↔ GPS pin4 (RX) — 从 ESP32 视角命名：ESP32 的 TX 线 |
-| `GPS_PPS` | ESP32 GPIO16 → PPS 预留测试焊点（可选） |
 | `BTN_REC` | ESP32 GPIO4 → Record 按钮 pin1 |
 | `LED_OUT` | ESP32 GPIO2 → 220Ω 电阻 → LED 正极 |
 
@@ -640,13 +638,12 @@ GPS 焊盘旁：SDA GND TX RX VCC SCL
 
 这些不是必须照做的硬性要求，但按现在这条 worktree 里的文档和代码状态来看，下面几条会明显降低首版洞洞板翻车概率。
 
-### 1. 第一版先不要把 PPS 当成必达目标
+### 1. BK-880 完全不提供 PPS，无需预留相关焊点
 
-- 当前 `BK-880` 线束按文档是 **6P 连接器**，但 `PPS` 没有从线束直接引出
-- 这意味着你现在按线束正常焊接，首版大概率只能先稳定跑 `UART TX/RX + 5V + GND`
-- 我的建议是：**先把设备做成可稳定记录、可亮屏、可写 SD 的版本**
-- 如果后面确认确实需要 PPS，再从 GPS 模块测试焊盘飞一根线到预留焊点
-- 洞洞板上建议给 `GPIO16` 旁边留一个空焊孔，后续补飞线时不用大拆
+- 数据手册 §2.1.3 明确标注「1PPS 信号接口：无」
+- 模块板上没有可用于飞线的 PPS 测试焊盘（`PPS` LED 只是内部秒脉冲的可视指示）
+- GPIO16 代码里保留 `PIN_GPS_PPS` 定义以便兼容，但 **ISR 永不触发**
+- 洞洞板上 GPIO16 不需要布线、不需要预留焊孔，按未用处理即可
 
 ### 2. 已确认的插座规格
 

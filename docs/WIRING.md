@@ -112,7 +112,9 @@
 > 洞洞板/PCB 上装对应排母座即可插拔。避免处理 1.25mm 线束的压接工艺。
 >
 > UART TX/RX 为 **3.3V TTL** 电平，可直接接 ESP32-S3。
-> **PPS 信号未引出到 6P 连接器**，仅板上 LED 和独立测试焊盘可用。
+> **BK-880 不对外提供 PPS 信号**（数据手册 §2.1.3：「1PPS 信号接口：无」）：
+> 6P 线束和 2.54mm 通孔均未引出 PPS，模块板上也没有可飞线使用的 PPS 测试焊盘。
+> 项目按 UART 到达时间做时间基准，不依赖 PPS。
 
 | # | 模块引脚标注 | I/O | 连接位置 | 说明 |
 |---|-------------|-----|----------|------|
@@ -125,8 +127,8 @@
 
 **要点：**
 - TX/RX 必须交叉：GPS 的 TX 接 ESP32 的 RX，GPS 的 RX 接 ESP32 的 TX
-- 当前代码引脚定义见 [pins.h](/Users/wenchaodu/Documents/Claude_code_projects/ESP32_track_GPS/src/pins.h)：`RX=GPIO17`、`TX=GPIO18`、`PPS=GPIO16`
-- **PPS (GPIO16) 当前无法通过线束连接**；如需 PPS，须在模块 PCB 的 PPS 测试焊盘上飞线
+- 当前代码引脚定义见 [pins.h](/Users/wenchaodu/Documents/Claude_code_projects/ESP32_track_GPS/src/pins.h)：`RX=GPIO17`、`TX=GPIO18`
+- `PIN_GPS_PPS` (GPIO16) 在代码中保留以便兼容，**无外部连接**——BK-880 根本不向外输出 PPS，对应 ISR 在运行期永不触发
 - 当前固件会自动尝试 `115200 / 38400 / 9600` 三种常见波特率；探测到后会尽量切到 `115200`
 - 25Hz 下 NMEA 数据量较大，长期稳定运行仍建议最终工作在 `115200`
 - SDA/SCL 为 QMC5883 电子罗盘 I2C 接口，当前项目未使用，线束上预留即可
@@ -259,8 +261,7 @@ ESP32-S3 板载 LDO 给 TFT 和少量逻辑负载供电是安全的；GPS 和当
                     │                                  │                                  MISO→GPIO13
                     │  GPIO11 ──── MOSI (SPI共享) ────┼──→ TFT MOS                        CS  ←GPIO42
                     │                                  │
-                    │  GPIO16 ──── (PPS 可选飞线 ── GPS 模块 PPS 测试焊盘；
-                    │                6P 线束不引出 PPS，如需使用请单独飞线)
+                    │  GPIO16 ──── (预留未用；BK-880 不提供 PPS，无外部连接)
                     │  GPIO12 ──── SCLK (SPI共享) ────┼──→ TFT CLK
                     │  GPIO10 ──── CS ────────────────┼──→ TFT CS
                     │  GPIO9  ──── DC ────────────────┼──→ TFT DC
@@ -328,7 +329,7 @@ ESP32-S3 启动时以下引脚电平会影响启动模式，**慎用或避用**�
 
 - 上电后若 GPS 无 NMEA 输出，首先检查 TX/RX 是否接反
 - 当前实测这块 BK-880 在 5V 模块供电下，TX 仍输出约 3.0-3.3V TTL 电平，可直接接 ESP32-S3
-- PPS 灯闪烁不等于线束一定已经把 1PPS 引脚导出；接线前先确认模块焊盘或附带线束定义
+- 模块板上的 PPS LED 只是内部秒脉冲的可视指示，没有对外引出的电气接口
 - 默认等待 30-60 秒冷启动定位；首次上电或室内环境可能更久
 
 ### 5. 走线建议
@@ -361,7 +362,7 @@ ESP32-S3 启动时以下引脚电平会影响启动模式，**慎用或避用**�
 | GPIO11 | SPI MOSI | TFT + SD 共享 |
 | GPIO12 | SPI SCLK | TFT + SD 共享 |
 | GPIO13 | SPI MISO | SD 卡专用 |
-| GPIO16 | PPS 预留位 | 秒脉冲（可选；当前 1×6 线束不引出，如需使用需飞线到测试焊盘） |
+| GPIO16 | 预留未用 | BK-880 不提供 PPS 信号，此引脚无外部连接 |
 | GPIO17 | UART1 RX | 接 GPS TX |
 | GPIO18 | UART1 TX | 接 GPS RX |
 | GPIO42 | SD CS | SD 卡片选 |

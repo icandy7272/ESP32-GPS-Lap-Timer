@@ -18,8 +18,8 @@ typedef struct {
     float    heading_deg;     // 0~360, true north = 0
     float    height_m;        // WGS84 altitude, metres
     int      satellites;      // visible satellites
-    int64_t  timestamp_us;    // microsecond timestamp (PPS-corrected esp_timer)
-    bool     pps_synced;      // true if this fix used PPS correction
+    int64_t  timestamp_us;    // microsecond timestamp (UART arrival from esp_timer_get_time(); BK-880 has no PPS)
+    bool     pps_synced;      // always false — BK-880 provides no PPS output; field kept for VBO/schema compatibility
     bool     fix_3d;          // true if 3D fix (satellites >= 6)
 } GpsPoint;
 
@@ -112,7 +112,7 @@ typedef enum {
 typedef struct {
     uint8_t  event_type;      // LapEventType
     int      sector_index;    // 0 = start/finish
-    int64_t  crossing_us;     // precise crossing time (PPS-corrected, microseconds)
+    int64_t  crossing_us;     // precise crossing time (UART timestamp + spline interpolation, microseconds)
 } LapEvent;
 
 // --- Button Event (task_button -> task_session / task_display queues) ---

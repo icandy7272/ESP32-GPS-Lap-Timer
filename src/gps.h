@@ -2,7 +2,11 @@
 
 // ============================================================
 // GPS Module — ESP32-S3 GPS Lap Timer
-// UART2 NMEA reception, PPS interrupt, GpsPoint generation.
+// UART2 NMEA reception, GpsPoint generation. Timestamps use UART
+// arrival time; BK-880 does not output a PPS signal (datasheet
+// §2.1.3), so the PPS ISR attached on GPIO16 never fires in
+// practice — the pps_* symbols are retained for historical
+// compatibility but read back 0.
 // See docs/ARCHITECTURE.md for task scheduling details.
 // ============================================================
 
@@ -11,12 +15,14 @@
 #include <freertos/queue.h>
 #include <stdint.h>
 
-// PPS timestamp (microseconds) — written by ISR, read by gps_task.
-// Access via pps_read() for safe 64-bit reads on dual-core ESP32-S3.
+// Dormant on this hardware — BK-880 has no PPS output, so the ISR
+// that would write this value never triggers. Always returns 0.
+// Kept so gps_fix.cpp's defensive "if (pps_ok)" branch compiles.
 int64_t pps_read();
 
-// Initialise UART2, attach PPS interrupt, create and start gps_task.
-// The caller must create gps_queue (depth 4, sizeof GpsPoint) before calling.
+// Initialise UART2, attach a (dormant) PPS interrupt on GPIO16,
+// create and start gps_task. Caller must create gps_queue
+// (depth 4, sizeof GpsPoint) before calling.
 void gps_init(QueueHandle_t gps_queue);
 
 // FreeRTOS task function — pinned to Core 0, priority 22, 4096 stack.

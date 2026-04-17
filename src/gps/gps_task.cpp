@@ -12,9 +12,13 @@ static void IRAM_ATTR pps_isr() {
 }
 
 static void pps_init() {
-    // INPUT_PULLDOWN keeps GPIO16 LOW when PPS is not connected,
-    // preventing noise-triggered ISR calls that cause INT_WDT.
-    // When PPS IS connected, the strong digital pulse still triggers correctly.
+    // BK-880 does not output a PPS signal (datasheet §2.1.3:
+    // "1PPS 信号接口：无"), and no PPS test pad is exposed on the
+    // module either. GPIO16 has no external connection. We still
+    // register this dormant ISR + INPUT_PULLDOWN combo so that
+    // legacy pps_* code paths (pps_read(), GpsPoint.pps_synced)
+    // remain well-defined and return 0/false. Can be removed if
+    // the PPS plumbing is excised from GpsPoint in a future cleanup.
     pinMode(PIN_GPS_PPS, INPUT_PULLDOWN);
     attachInterrupt(digitalPinToInterrupt(PIN_GPS_PPS), pps_isr, RISING);
 }
