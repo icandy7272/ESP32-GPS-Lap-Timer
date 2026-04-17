@@ -114,7 +114,16 @@ void lap_timer_task(void* param) {
             s_lap_points[s_lap_point_count++] = curr;
         }
 
-        forward_vbo_entry(s_vbo_queue, &curr);
+        // Only queue VBO entries while recording.  session_stop_recording()
+        // clears is_recording before calling storage_end_session(); stopping
+        // the producer here is what lets the drain path in
+        // storage_end_session() actually reach an empty queue — otherwise
+        // lap_timer would keep refilling the queue during the stop window
+        // and the in-flight backlog would be dropped by storage_task once
+        // s_session_active flips to false.
+        if (session_state.is_recording) {
+            forward_vbo_entry(s_vbo_queue, &curr);
+        }
 
         prev = curr;
         has_prev = true;
