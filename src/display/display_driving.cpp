@@ -21,7 +21,7 @@
 
 // --- Background colour (state-aware) -----------------------------------
 //
-// driving_bg_colour(st) alone is not safe for the new IDLE / OUT_LAP
+// delta_background_colour(st) alone is not safe for the new IDLE / OUT_LAP
 // states: after a session that produced a valid delta or an off-track
 // condition, those fields stay populated in SessionState.  In the old
 // one-state renderer that was fine — but the READY / OUT LAP views do
@@ -29,12 +29,12 @@
 // read as red/green/yellow based on the last recording.
 //
 // For IDLE and OUT_LAP we always want a neutral black background.  Only
-// DRIVING_NORMAL uses the delta-driven colour.
+// DRIVING_NORMAL defers to delta_background_colour().
 static uint16_t driving_bg_colour(const SessionState& st) {
     if (get_driving_state(st) != DRIVING_NORMAL) {
         return TFT_BLACK;
     }
-    return driving_bg_colour(st);
+    return delta_background_colour(st);
 }
 
 // --- Top bar -----------------------------------------------------------
