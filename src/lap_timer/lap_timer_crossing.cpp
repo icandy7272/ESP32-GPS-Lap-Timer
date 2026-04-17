@@ -167,17 +167,10 @@ void process_line(int line_idx,
                   const DetectionLine* line,
                   const GpsPoint* prev,
                   const GpsPoint* curr) {
-    // Reject stationary GPS drift: if we're not moving, do NOT accumulate
-    // arm distance and do NOT check for crossings. Otherwise drift-driven
-    // position jitter will arm the line and then cross it randomly while
-    // the device sits still. u-blox RMC reports ~0 km/h when stationary,
-    // so any real walking/driving crosses the MIN_CROSSING_SPEED_KMH gate.
-    if (curr->speed_kmh < MIN_CROSSING_SPEED_KMH) {
-        return;
-    }
-
-    update_arm_distance(line_idx, prev, curr);
-
+    // 1) Let any in-progress debounce complete regardless of current speed.
+    //    A crossing detected at >1 km/h must be allowed to confirm even if
+    //    the driver slows / stops immediately after.  Otherwise the line
+    //    gets stuck in debounce_active forever and we miss a real lap.
     if (s_debounce_active[line_idx]) {
         if (debounce_feed(line_idx, curr, line)) {
             int64_t crossing_us = s_debounce_crossing_us[line_idx];
@@ -193,6 +186,17 @@ void process_line(int line_idx,
         }
         return;
     }
+
+    // 2) Reject stationary GPS drift from arming the line and from
+    //    triggering fresh crossings.  u-blox RMC reports ~0 km/h when
+    //    stationary, so any real walking/driving crosses the
+    //    MIN_CROSSING_SPEED_KMH gate.  Placed AFTER the debounce branch
+    //    so in-flight debounces can still complete below the threshold.
+    if (curr->speed_kmh < MIN_CROSSING_SPEED_KMH) {
+        return;
+    }
+
+    update_arm_distance(line_idx, prev, curr);
 
     if (!s_arm_ready[line_idx]) {
         return;

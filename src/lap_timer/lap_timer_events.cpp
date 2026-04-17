@@ -33,6 +33,18 @@ bool is_lap_valid(int32_t lap_time_ms) {
 }
 
 void handle_finish_crossing(int64_t crossing_us) {
+    // Guard: after a manual session_stop_recording(), is_recording is false
+    // but s_first_crossing stays false (we intentionally do NOT reset it so
+    // the first-crossing auto-start path can't fire again).  A raw crossing
+    // in that state would fall through to the "normal lap completion" path
+    // below and compute a stale lap time from the previous s_lap_start_us.
+    // Drop it silently — the device is in READY and nothing should happen
+    // until the next explicit record-start.
+    if (!session_state.is_recording && !s_first_crossing) {
+        Serial.printf("[lap] crossing ignored (recording stopped)\n");
+        return;
+    }
+
     if (s_first_crossing) {
         s_first_crossing = false;
         s_lap_start_us = crossing_us;

@@ -128,11 +128,13 @@ void session_stop_recording()
     session_state.current_lap_start_us = 0;
     xSemaphoreGive(session_mutex);
 
-    // Also reset the lap timer's own state so s_lap_start_us / first-crossing
-    // flag are clean on next record-start (session.cpp s_lap_start_us gets
-    // reset in reset_session_state() on next record-start, but the lap timer
-    // side keeps ticking without this call).
-    lap_timer_reset();
+    // NOTE: do NOT call lap_timer_reset() here.  Resetting would set
+    // s_first_crossing back to true, which means the next start/finish
+    // crossing would re-trigger handle_finish_crossing()'s first-crossing
+    // branch and auto-call storage_start_session(), silently re-enabling
+    // recording after the user explicitly stopped.  handle_finish_crossing()
+    // now guards the auto-start path on SESSION_PHASE so crossings are
+    // ignored while phase == SESSION_FINISHED.
 
     storage_end_session();
     s_phase = SESSION_FINISHED;
