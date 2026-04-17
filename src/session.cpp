@@ -90,27 +90,30 @@ void session_start_recording(const char* track_name)
         return;
     }
 
+    // Attempt storage first.  If it fails, leave SessionState untouched
+    // so session_stopped (and everything else) keeps whatever value the
+    // user left us with — otherwise a failed start would silently clear
+    // the manual-stop suppression and the next crossing would try to
+    // auto-open a session again, hitting the same SD error in a loop.
+    if (!storage_start_session(track_name)) {
+        Serial.println("[session] SD failed — cannot record");
+        return;
+    }
+
     reset_session_state();
     lap_timer_reset();  // clear arming, history, best lap, delta reference
 
     xSemaphoreTake(session_mutex, portMAX_DELAY);
     session_state.is_recording = true;
-    // Clear the "manually stopped" flag so the lap-timer auto-start path
-    // can fire again on the next first crossing (reset_session_state()
-    // already zeros the whole struct, but spell it out for clarity).
+    // Storage is up, so a real new session has started — unlock the
+    // lap-timer auto-start path.  reset_session_state() already zeros
+    // the struct, but spell it out for clarity.
     session_state.session_stopped = false;
     strncpy(session_state.track_name, track_name,
             sizeof(session_state.track_name) - 1);
     session_state.track_name[sizeof(session_state.track_name) - 1] = '\0';
     xSemaphoreGive(session_mutex);
 
-    if (!storage_start_session(track_name)) {
-        Serial.println("[session] SD failed — cannot record");
-        xSemaphoreTake(session_mutex, portMAX_DELAY);
-        session_state.is_recording = false;
-        xSemaphoreGive(session_mutex);
-        return;
-    }
     s_phase = SESSION_RECORDING;
 
     Serial.println("[session] recording started");

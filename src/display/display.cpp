@@ -117,8 +117,13 @@ static DirtyFlags compute_dirty(const SessionState& cur,
     d.gps_info     = (cur.gps_satellites != prev.gps_satellites)
                    || (cur.gps_fix_ok != prev.gps_fix_ok);
     d.off_track    = (cur.off_track != prev.off_track);
+    // A driving-state transition changes the effective bg colour too
+    // (IDLE/OUT_LAP are always neutral, NORMAL uses delta_background_colour).
+    // Force a background redraw so every region — top bar, center sprite,
+    // bottom bar — rewrites its fill with the new colour.
     d.background   = (delta_background_colour(cur) !=
-                      delta_background_colour(prev));
+                      delta_background_colour(prev))
+                   || (cur_state != prev_state);
     return d;
 }
 

@@ -19,15 +19,33 @@
 #include <esp_timer.h>
 #include <stdio.h>
 
+// --- Background colour (state-aware) -----------------------------------
+//
+// driving_bg_colour(st) alone is not safe for the new IDLE / OUT_LAP
+// states: after a session that produced a valid delta or an off-track
+// condition, those fields stay populated in SessionState.  In the old
+// one-state renderer that was fine — but the READY / OUT LAP views do
+// not show a delta, so using the delta-coloured background makes them
+// read as red/green/yellow based on the last recording.
+//
+// For IDLE and OUT_LAP we always want a neutral black background.  Only
+// DRIVING_NORMAL uses the delta-driven colour.
+static uint16_t driving_bg_colour(const SessionState& st) {
+    if (get_driving_state(st) != DRIVING_NORMAL) {
+        return TFT_BLACK;
+    }
+    return driving_bg_colour(st);
+}
+
 // --- Top bar -----------------------------------------------------------
 
 static void draw_driving_top_bar(const SessionState& st) {
     s_tft.setTextDatum(TL_DATUM);
-    s_tft.setTextColor(TFT_WHITE, delta_background_colour(st));
+    s_tft.setTextColor(TFT_WHITE, driving_bg_colour(st));
 
     // Clear the top-left label region so old text of different widths
     // (e.g. "OUT LAP" → "L3") does not leave ghosts.
-    s_tft.fillRect(0, 0, SCREEN_W / 2, INFO_BAR_H, delta_background_colour(st));
+    s_tft.fillRect(0, 0, SCREEN_W / 2, INFO_BAR_H, driving_bg_colour(st));
 
     char label[16];
     switch (get_driving_state(st)) {
@@ -47,7 +65,7 @@ static void draw_driving_top_bar(const SessionState& st) {
 
 static void draw_driving_current_time(const SessionState& st) {
     s_tft.setTextDatum(TR_DATUM);
-    s_tft.setTextColor(TFT_WHITE, delta_background_colour(st));
+    s_tft.setTextColor(TFT_WHITE, driving_bg_colour(st));
 
     // Real elapsed time from lap start (not synthetic best+delta)
     char time_buf[12];
@@ -121,7 +139,7 @@ static void draw_delta_normal(const SessionState& st) {
 }
 
 static void draw_driving_delta(const SessionState& st) {
-    uint16_t bg = delta_background_colour(st);
+    uint16_t bg = driving_bg_colour(st);
 
     s_delta_sprite.fillSprite(bg);
     s_delta_sprite.setTextDatum(MC_DATUM);
@@ -147,7 +165,7 @@ static void draw_driving_delta(const SessionState& st) {
 
 static void draw_driving_bottom_bar(const SessionState& st) {
     int y = SCREEN_H - BOTTOM_BAR_H;
-    uint16_t bg = delta_background_colour(st);
+    uint16_t bg = driving_bg_colour(st);
 
     s_tft.fillRect(0, y, SCREEN_W, BOTTOM_BAR_H, bg);
 
@@ -177,7 +195,7 @@ static void draw_driving_bottom_bar(const SessionState& st) {
 void draw_driving_screen(const DirtyFlags& df,
                          const SessionState& st) {
     if (df.full_redraw || df.background) {
-        uint16_t bg = delta_background_colour(st);
+        uint16_t bg = driving_bg_colour(st);
         s_tft.fillRect(0, 0, SCREEN_W, INFO_BAR_H, bg);
     }
 
