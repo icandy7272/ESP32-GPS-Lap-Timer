@@ -53,8 +53,14 @@ float    s_sd_free_gb     = -1.0f; // negative = not yet queried
 static uint32_t s_sd_query_ms    = 0;
 static constexpr uint32_t SD_QUERY_INTERVAL_MS = 10000; // refresh every 10s
 
-// Firmware version (displayed on status screen)
-const char* FW_VERSION = "v1.0.0";
+// Firmware version (displayed on status screen).
+// Injected at build time by tools/inject_version.py from VERSION + git SHA;
+// fallback covers direct compiler runs (e.g. host tests) where the
+// platformio script is not active.
+#ifndef FW_VERSION_STR
+#define FW_VERSION_STR "v0.0.0-nobuildtag"
+#endif
+const char* FW_VERSION = FW_VERSION_STR;
 
 // ============================================================
 // Snapshot session state under mutex (non-blocking)
