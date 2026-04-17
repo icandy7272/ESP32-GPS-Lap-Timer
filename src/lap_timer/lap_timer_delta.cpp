@@ -18,7 +18,13 @@ void update_session_delta(const GpsPoint* curr) {
         session_state.gps_lat_deg = curr->lat_deg;
         session_state.gps_lon_deg = curr->lon_deg;
         session_state.speed_kmh = curr->speed_kmh;
-        session_state.current_lap_start_us = s_lap_start_us;
+        // Only echo the lap-start timestamp into session state while we
+        // are actually recording.  Otherwise the READY / idle screen
+        // would see a running timer (session_stop_recording() zeroes
+        // current_lap_start_us, but without this gate the delta engine
+        // writes s_lap_start_us back on the very next GPS fix).
+        session_state.current_lap_start_us =
+            session_state.is_recording ? s_lap_start_us : 0;
         xSemaphoreGive(s_session_mutex);
     }
 }

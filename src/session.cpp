@@ -95,6 +95,10 @@ void session_start_recording(const char* track_name)
 
     xSemaphoreTake(session_mutex, portMAX_DELAY);
     session_state.is_recording = true;
+    // Clear the "manually stopped" flag so the lap-timer auto-start path
+    // can fire again on the next first crossing (reset_session_state()
+    // already zeros the whole struct, but spell it out for clarity).
+    session_state.session_stopped = false;
     strncpy(session_state.track_name, track_name,
             sizeof(session_state.track_name) - 1);
     session_state.track_name[sizeof(session_state.track_name) - 1] = '\0';
@@ -120,11 +124,16 @@ void session_stop_recording()
 
     xSemaphoreTake(session_mutex, portMAX_DELAY);
     session_state.is_recording = false;
-    // Clear the running-timer timestamp so the driving screen's top-right
-    // elapsed-time field resets to 0:00.00 when we fall back into READY.
-    // Without this, the delta engine's last-written s_lap_start_us keeps
-    // being echoed back and the idle screen shows a timer that still ticks
-    // from the previous lap.
+    // Mark that the user explicitly stopped.  handle_finish_crossing()
+    // reads this to reject crossings after a manual stop — including
+    // the edge case where stop happens DURING the out lap (before any
+    // start/finish crossing), where s_first_crossing is still true.
+    session_state.session_stopped = true;
+    // Clear the running-timer timestamp so the driving screen's
+    // top-right elapsed-time field returns to 0:00.00.  The
+    // complementary guard in update_session_delta() stops the delta
+    // engine from echoing stale s_lap_start_us back while recording is
+    // off, so this zero sticks.
     session_state.current_lap_start_us = 0;
     xSemaphoreGive(session_mutex);
 

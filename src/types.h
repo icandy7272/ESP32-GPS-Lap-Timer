@@ -79,6 +79,7 @@ typedef struct {
     bool     delta_valid;
     bool     off_track;           // lateral distance > 30m
     bool     is_recording;
+    bool     session_stopped;     // set by session_stop_recording(), cleared by session_start_recording(). Distinguishes "fresh boot never recorded" from "user manually stopped" so the lap-timer auto-start path can stay dormant after a stop even if it happened before the first start/finish crossing.
     bool     gps_fix_ok;
     int      gps_satellites;
     double   gps_lat_deg;            // WGS-84 decimal degrees (for web UI coordinate readout)
