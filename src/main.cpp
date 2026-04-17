@@ -591,6 +591,38 @@ void setup() {
                          BootState::OK,
                          "track loaded",
                          serial_detail);
+
+            // Debug: dump start/finish line geometry + OpenStreetMap URLs
+            // so the line position can be visually verified on a real map.
+            // Distance between lat1/lon1 and lat2/lon2 is the "width" of the
+            // detection line. Walking loops < 2x line width away will
+            // double-count crossings.
+            double lat1 = active_track.start_finish.lat1_deg;
+            double lon1 = active_track.start_finish.lon1_deg;
+            double lat2 = active_track.start_finish.lat2_deg;
+            double lon2 = active_track.start_finish.lon2_deg;
+            // Rough line-length estimate in metres:
+            //   1 deg lat ≈ 111320 m;  1 deg lon ≈ 111320 * cos(lat).
+            double lat_rad = lat1 * 0.017453292519943;
+            double dlat_m = (lat2 - lat1) * 111320.0;
+            double dlon_m = (lon2 - lon1) * 111320.0 * cos(lat_rad);
+            double line_len_m = sqrt(dlat_m * dlat_m + dlon_m * dlon_m);
+
+            Serial.printf("[track] START/FINISH line:\n");
+            Serial.printf("[track]   p1 = (%.7f, %.7f)\n", lat1, lon1);
+            Serial.printf("[track]   p2 = (%.7f, %.7f)\n", lat2, lon2);
+            Serial.printf("[track]   valid_heading = %.1f deg\n",
+                          active_track.start_finish.valid_heading_deg);
+            Serial.printf("[track]   line length = %.2f m\n", line_len_m);
+            // OpenStreetMap URLs — copy to browser/phone to verify position.
+            // The /directions URL draws a walking route between the two
+            // endpoints, which visually overlays the detection line.
+            Serial.printf("[track]   map p1: https://www.openstreetmap.org/?mlat=%.7f&mlon=%.7f#map=20/%.7f/%.7f\n",
+                          lat1, lon1, lat1, lon1);
+            Serial.printf("[track]   map p2: https://www.openstreetmap.org/?mlat=%.7f&mlon=%.7f#map=20/%.7f/%.7f\n",
+                          lat2, lon2, lat2, lon2);
+            Serial.printf("[track]   line:   https://www.openstreetmap.org/directions?engine=fossgis_osrm_foot&route=%.7f,%.7f;%.7f,%.7f\n",
+                          lat1, lon1, lat2, lon2);
         } else {
             boot_publish(BootStage::STORAGE,
                          BootState::OK,

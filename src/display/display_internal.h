@@ -102,6 +102,24 @@ void format_lap_time(char* buf, size_t len, int32_t time_ms);
 // Format delta_ms as "+0.35" or "-1.22" into buf (must be >= 10 chars).
 void format_delta(char* buf, size_t len, int32_t delta_ms);
 
+// ---- Driving screen state (shared with compute_dirty) ----
+
+enum DrivingState : uint8_t {
+    DRIVING_IDLE    = 0,  // !is_recording
+    DRIVING_OUT_LAP = 1,  // recording, before first start-line crossing
+    DRIVING_NORMAL  = 2,  // recording, after first crossing
+};
+
+// Keep this inline so compute_dirty() and draw_driving_delta() stay in sync.
+// Depends only on SessionState fields already set by session.cpp:
+// the first line crossing (handle_lap_finish, s_lap_start_us == 0) bumps
+// current_lap from 0 to 1.
+static inline DrivingState get_driving_state(const SessionState& st) {
+    if (!st.is_recording) return DRIVING_IDLE;
+    if (st.current_lap == 0) return DRIVING_OUT_LAP;
+    return DRIVING_NORMAL;
+}
+
 // ---- Per-screen render entry points ----
 
 void draw_driving_screen(const DirtyFlags& df, const SessionState& st);

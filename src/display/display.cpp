@@ -78,18 +78,52 @@ static DirtyFlags compute_dirty(const SessionState& cur,
                                 bool screen_changed) {
     DirtyFlags d = {};
     d.full_redraw  = screen_changed;
-    d.delta        = (cur.delta_ms != prev.delta_ms)
-                   || (cur.delta_valid != prev.delta_valid)
-                   || (cur.off_track != prev.off_track)
-                   || (cur.gps_fix_ok != prev.gps_fix_ok);
-    d.lap_number   = (cur.current_lap != prev.current_lap);
+    // Delta area content is state-dependent, so use state-aware triggers:
+    //   IDLE     → sats + fix (ignore speed jitter while stationary)
+    //   OUT_LAP  → speed + fix
+    //   NORMAL   → delta fields only; do NOT trigger on current_lap++,
+    //              because lap_timer only refreshes delta_ms on the next
+    //              GPS fix — an immediate repaint would show stale data.
+    // State transitions always trigger a full redraw.
+    DrivingState cur_state  = get_driving_state(cur);
+    DrivingState prev_state = get_driving_state(prev);
+    d.delta = (cur_state != prev_state);
+    switch (cur_state) {
+        case DRIVING_IDLE:
+            d.delta = d.delta
+                    || (cur.gps_satellites != prev.gps_satellites)
+                    || (cur.gps_fix_ok != prev.gps_fix_ok)
+                    || (strncmp(cur.track_name, prev.track_name,
+                                sizeof(cur.track_name)) != 0);
+            break;
+        case DRIVING_OUT_LAP:
+            d.delta = d.delta
+                    || (cur.gps_fix_ok != prev.gps_fix_ok)
+                    || ((int)(cur.speed_kmh + 0.5f)
+                        != (int)(prev.speed_kmh + 0.5f));
+            break;
+        case DRIVING_NORMAL:
+            d.delta = d.delta
+                    || (cur.delta_ms != prev.delta_ms)
+                    || (cur.delta_valid != prev.delta_valid)
+                    || (cur.off_track != prev.off_track)
+                    || (cur.gps_fix_ok != prev.gps_fix_ok);
+            break;
+    }
+    d.lap_number   = (cur.current_lap != prev.current_lap)
+                   || (cur.is_recording != prev.is_recording);
     d.current_time = true;  // always update running timer
     d.best_time    = (cur.best_lap_time_ms != prev.best_lap_time_ms);
     d.gps_info     = (cur.gps_satellites != prev.gps_satellites)
                    || (cur.gps_fix_ok != prev.gps_fix_ok);
     d.off_track    = (cur.off_track != prev.off_track);
+    // A driving-state transition changes the effective bg colour too
+    // (IDLE/OUT_LAP are always neutral, NORMAL uses delta_background_colour).
+    // Force a background redraw so every region — top bar, center sprite,
+    // bottom bar — rewrites its fill with the new colour.
     d.background   = (delta_background_colour(cur) !=
-                      delta_background_colour(prev));
+                      delta_background_colour(prev))
+                   || (cur_state != prev_state);
     return d;
 }
 

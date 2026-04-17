@@ -33,6 +33,25 @@ bool is_lap_valid(int32_t lap_time_ms) {
 }
 
 void handle_finish_crossing(int64_t crossing_us) {
+    // Guard: once the user has manually stopped a session, every subsequent
+    // crossing must be ignored until a new session_start_recording().
+    // Covers two regression-prone cases:
+    //   (a) stop AFTER first crossing — s_first_crossing is false, so a raw
+    //       crossing would fall through to the normal lap completion branch
+    //       and emit a stale lap time computed from the previous
+    //       s_lap_start_us.
+    //   (b) stop DURING the out lap (before first crossing) — s_first_crossing
+    //       is still true, and without this guard the first-crossing branch
+    //       would auto-call storage_start_session() and silently re-open a
+    //       session that the user just ended.
+    // session_state.session_stopped is set by session_stop_recording() and
+    // cleared by session_start_recording(), so it cleanly distinguishes
+    // "user stopped" from "fresh boot, never recorded".
+    if (session_state.session_stopped && !session_state.is_recording) {
+        Serial.printf("[lap] crossing ignored (recording stopped)\n");
+        return;
+    }
+
     if (s_first_crossing) {
         s_first_crossing = false;
         s_lap_start_us = crossing_us;

@@ -24,7 +24,11 @@ constexpr int PIN_SD_CS    = 42;  // separate chip-select
 // --- GPS module (BK-880, u-blox M9N, UART) ---
 constexpr int PIN_GPS_RX   = 17;  // ESP32 RX ← GPS TX
 constexpr int PIN_GPS_TX   = 18;  // ESP32 TX → GPS RX
-constexpr int PIN_GPS_PPS  = 16;  // 1 Hz / 25 Hz pulse-per-second
+// PIN_GPS_PPS retained for historical compatibility only.  BK-880 does
+// not expose a PPS signal (datasheet §2.1.3: "1PPS 信号接口：无").
+// The pin is configured INPUT_PULLDOWN and the ISR never triggers in
+// practice.  See docs/ARCHITECTURE.md pin table.
+constexpr int PIN_GPS_PPS  = 16;  // unused — BK-880 has no PPS output
 
 // --- Buttons ---
 constexpr int PIN_BTN_RECORD = 4;  // momentary: start/stop recording

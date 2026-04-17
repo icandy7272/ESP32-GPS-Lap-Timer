@@ -8,10 +8,34 @@
 
 namespace lap_timer_internal {
 
+// === Crossing gate thresholds ===
+// Two sets of values, selected at compile time by WALKING_TEST_MODE:
+//   - PRODUCTION (default, WALKING_TEST_MODE undefined):
+//       Real-track values. Rejects spurious crossings and short laps.
+//   - WALKING_TEST_MODE (env: esp32-s3-devkitc-1-walking-test):
+//       Relaxed values so walking a small loop around the start/finish
+//       line actually produces valid laps and a best-lap reference.
+//       Opt-in only — default `pio run` never sets this.
+//
+// LAP_SHORT_THRESHOLD_MS in src/session.cpp is gated off the SAME macro
+// so lap_timer and session can't drift apart.
+//
+// See docs/TEST_MODES.md for the full parameter matrix and deployment
+// checklist.
+//
+// MIN_CROSSING_SPEED_KMH is kept on BOTH paths: it rejects stationary GPS
+// drift (speed=0) without affecting any real walking/driving case.
+#ifdef WALKING_TEST_MODE
+static constexpr float HEADING_WINDOW = 180.0f;   // effectively disables direction gate
+static constexpr double ARM_DISTANCE_M = 3.0;     // ~few walking steps arms the line
+static constexpr int32_t MIN_LAP_TIME_MS = 5000;  // accept >=5 s laps
+#else
 static constexpr float HEADING_WINDOW = 60.0f;
-static constexpr double ARM_DISTANCE_M = 10.0;  // TODO: restore to 50.0 after testing
-static constexpr int DEBOUNCE_SAMPLES = 2;
+static constexpr double ARM_DISTANCE_M = 10.0;
 static constexpr int32_t MIN_LAP_TIME_MS = 15000;
+#endif
+static constexpr float MIN_CROSSING_SPEED_KMH = 1.0f;
+static constexpr int DEBOUNCE_SAMPLES = 2;
 static constexpr float MAX_LAP_RATIO = 1.5f;
 static constexpr int SPLINE_HISTORY = 4;
 static constexpr int BINARY_SEARCH_ITS = 12;

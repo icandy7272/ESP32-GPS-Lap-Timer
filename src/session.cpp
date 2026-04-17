@@ -25,7 +25,13 @@ static int            s_current_sector = 0;
 
 // --- Constants ---
 
+// Stays in sync with lap_timer_internal.h MIN_LAP_TIME_MS via the shared
+// WALKING_TEST_MODE macro. See docs/TEST_MODES.md for the full matrix.
+#ifdef WALKING_TEST_MODE
+static constexpr int32_t  LAP_SHORT_THRESHOLD_MS   = 5000;    // walking test
+#else
 static constexpr int32_t  LAP_SHORT_THRESHOLD_MS   = 15000;   // < 15 s
+#endif
 static constexpr int32_t  SECTOR_MIN_TIME_MS       = 5000;    // < 5 s = GPS jitter
 static constexpr int32_t  LAP_SLOW_MULTIPLIER_150  = 150;     // > best * 1.5
 static constexpr TickType_t QUEUE_POLL_TICKS = pdMS_TO_TICKS(50);
@@ -84,23 +90,30 @@ void session_start_recording(const char* track_name)
         return;
     }
 
+    // Attempt storage first.  If it fails, leave SessionState untouched
+    // so session_stopped (and everything else) keeps whatever value the
+    // user left us with — otherwise a failed start would silently clear
+    // the manual-stop suppression and the next crossing would try to
+    // auto-open a session again, hitting the same SD error in a loop.
+    if (!storage_start_session(track_name)) {
+        Serial.println("[session] SD failed — cannot record");
+        return;
+    }
+
     reset_session_state();
     lap_timer_reset();  // clear arming, history, best lap, delta reference
 
     xSemaphoreTake(session_mutex, portMAX_DELAY);
     session_state.is_recording = true;
+    // Storage is up, so a real new session has started — unlock the
+    // lap-timer auto-start path.  reset_session_state() already zeros
+    // the struct, but spell it out for clarity.
+    session_state.session_stopped = false;
     strncpy(session_state.track_name, track_name,
             sizeof(session_state.track_name) - 1);
     session_state.track_name[sizeof(session_state.track_name) - 1] = '\0';
     xSemaphoreGive(session_mutex);
 
-    if (!storage_start_session(track_name)) {
-        Serial.println("[session] SD failed — cannot record");
-        xSemaphoreTake(session_mutex, portMAX_DELAY);
-        session_state.is_recording = false;
-        xSemaphoreGive(session_mutex);
-        return;
-    }
     s_phase = SESSION_RECORDING;
 
     Serial.println("[session] recording started");
@@ -114,7 +127,26 @@ void session_stop_recording()
 
     xSemaphoreTake(session_mutex, portMAX_DELAY);
     session_state.is_recording = false;
+    // Mark that the user explicitly stopped.  handle_finish_crossing()
+    // reads this to reject crossings after a manual stop — including
+    // the edge case where stop happens DURING the out lap (before any
+    // start/finish crossing), where s_first_crossing is still true.
+    session_state.session_stopped = true;
+    // Clear the running-timer timestamp so the driving screen's
+    // top-right elapsed-time field returns to 0:00.00.  The
+    // complementary guard in update_session_delta() stops the delta
+    // engine from echoing stale s_lap_start_us back while recording is
+    // off, so this zero sticks.
+    session_state.current_lap_start_us = 0;
     xSemaphoreGive(session_mutex);
+
+    // NOTE: do NOT call lap_timer_reset() here.  Resetting would set
+    // s_first_crossing back to true, which means the next start/finish
+    // crossing would re-trigger handle_finish_crossing()'s first-crossing
+    // branch and auto-call storage_start_session(), silently re-enabling
+    // recording after the user explicitly stopped.  handle_finish_crossing()
+    // now guards the auto-start path on SESSION_PHASE so crossings are
+    // ignored while phase == SESSION_FINISHED.
 
     storage_end_session();
     s_phase = SESSION_FINISHED;

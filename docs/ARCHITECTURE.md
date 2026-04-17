@@ -24,7 +24,7 @@
 ```
 src/
 ├── main.cpp              # 入口：初始化所有任务和外设
-├── gps.cpp / gps.h       # GPS UART 接收、NMEA 解析、PPS 中断捕获、GpsPoint 生成
+├── gps.cpp / gps.h       # GPS UART 接收、NMEA 解析、GpsPoint 生成（时间戳取 UART 到达时间；BK-880 无 PPS）
 ├── lap_timer.cpp         # 过线检测（有符号交叉 + 样条插值）、圈速/扇区计时、无效圈过滤
 ├── delta.cpp             # Position-Based Delta 计算（参考多段线投影、航向过滤）
 ├── track.cpp             # 赛道定义加载/保存、赛道自动识别（5km 距离匹配）
@@ -40,7 +40,7 @@ src/
 
 | 模块 | 核心职责 | 依赖 |
 |------|----------|------|
-| `gps.cpp` | UART2 接收 NMEA 语句，解析 GGA/RMC，PPS 硬件中断捕获微秒时间戳，填充 GpsPoint，发送到 gps_queue | 无 |
+| `gps.cpp` | UART2 接收 NMEA 语句，解析 GGA/RMC，用 UART 到达时间（`esp_timer_get_time()`）做时间戳，填充 GpsPoint，发送到 gps_queue。BK-880 不提供 PPS，无硬件中断校时 | 无 |
 | `lap_timer.cpp` | 消费 gps_queue，执行有符号线段交叉检测，样条插值回溯精确穿越时刻，管理圈/扇区状态，写入 LapRecord | track.cpp, delta.cpp |
 | `delta.cpp` | 维护参考圈多段线，每次 GPS 更新时投影计算进度，查找参考圈同进度时间戳，输出 delta_ms | lap_timer.cpp |
 | `track.cpp` | 从 SD 卡 `tracks/` 目录加载 TrackDefinition，按距离自动识别赛道，提供赛道增删接口 | storage.cpp |
@@ -93,10 +93,7 @@ GPS 硬件
   │   [GPS Task - Core 0, 优先级 22]
   │   gps_parse_nmea()
   │   → 解析 GGA + RMC → 组装 GpsPoint (lat/lon/speed/heading)
-  │       │
-  │   PPS 硬件中断 (GPIO 16)
-  │   → 捕获 esp_timer_get_time() → 写入 pps_sync_us
-  │   → GpsPoint.timestamp_us = pps_sync_us + uart_offset_us
+  │   → GpsPoint.timestamp_us = esp_timer_get_time()（UART 到达时间）
   │       │
   │       ▼ xQueueSend(gps_queue, &point, 0)
   │
@@ -163,7 +160,7 @@ ESP32-S3 ESP-IDF FreeRTOS 优先级范围：0（最低）~ 24（最高）。中�
 
 | 任务名称 | 运行核心 | 栈大小 (bytes) | 优先级 | 执行频率 | 主要工作 |
 |----------|----------|---------------|--------|----------|----------|
-| `task_gps` | Core 0 | 4096 | 22 | 阻塞在 UART RX，25Hz 数据到来时触发 | NMEA 解析，PPS 校时，组装 GpsPoint，发送到 gps_queue |
+| `task_gps` | Core 0 | 4096 | 22 | 阻塞在 UART RX，25Hz 数据到来时触发 | NMEA 解析，用 UART 到达时间做时间戳，组装 GpsPoint，发送到 gps_queue |
 | `task_lap_timer` | Core 0 | 8192 | 20 | 每次 gps_queue 有数据时执行（约 40ms/次） | 过线检测，样条插值，Delta 计算，生成 VboEntry 和 LapEvent |
 | `task_storage` | Core 1 | 6144 | 18 | 阻塞在 vbo_write_queue，有数据时立即写 | VBO 行格式化，SD 卡 SPI 写入，30s fsync，断电恢复 |
 | `task_session` | Core 1 | 4096 | 16 | 阻塞在 lap_event_queue | 圈状态判断，更新 SessionState，参考圈管理，写入 LapRecord |
@@ -171,7 +168,7 @@ ESP32-S3 ESP-IDF FreeRTOS 优先级范围：0（最低）~ 24（最高）。中�
 | `task_button` | Core 1 | 2048 | 8 | 阻塞在 button_queue | 去抖 50ms，分发 ButtonEvent，触发界面切换 |
 | `task_wifi` | Core 1 | 8192 | 5 | 事件驱动（HTTP 请求到来） | HTTP 路由处理，VBO 下载，赛道管理 API，记录模式下限制并发 |
 
-**PPS 中断服务例程（ISR）**：运行在 Core 0，不计入 FreeRTOS 优先级体系。中断触发时调用 `esp_timer_get_time()` 捕获微秒时间戳，存入原子变量 `pps_sync_us`，然后设置 `pps_ready` 标志。
+**时间戳策略（无 PPS）**：BK-880 模块不提供 PPS 输出（数据手册 §2.1.3 明确「1PPS 信号接口：无」），模块板上也没有可飞线引出的 PPS 测试焊盘。因此 `GpsPoint.timestamp_us` 直接取 UART 数据到达时刻的 `esp_timer_get_time()`，不做秒脉冲对齐。这引入 UART 传输抖动 10-50ms，是当前 Delta/过线精度的主要限制源。
 
 **看门狗保护（Task Watchdog Timer）**：
 - `task_gps` 和 `task_lap_timer` 注册 ESP-IDF Task WDT（`esp_task_wdt_add()`），超时 5 秒
@@ -195,8 +192,8 @@ typedef struct {
     float    heading_deg;    // 航向，0~360°，正北为 0
     float    height_m;       // 海拔，WGS84，米
     int      satellites;     // 可见卫星数
-    int64_t  timestamp_us;   // 微秒时间戳（PPS 校准后的 esp_timer 值）
-    bool     pps_synced;     // 本 fix 是否使用了 PPS 校时
+    int64_t  timestamp_us;   // 微秒时间戳（UART 到达时刻的 esp_timer 值；BK-880 无 PPS）
+    bool     pps_synced;     // 保留字段，恒为 false（BK-880 不提供 PPS）
     bool     fix_3d;         // 是否获得 3D Fix（卫星 ≥ 6）
 } GpsPoint;
 
@@ -230,7 +227,7 @@ typedef struct {
     int32_t  sector_times_ms[MAX_SECTORS]; // 各扇区时间，毫秒；未完成扇区为 -1
     int      sector_count;             // 本圈实际完成的扇区数
     uint8_t  status;                   // LAP_STATUS_TIMED / SLOW / SHORT / NO_REF / OUT
-    int64_t  finish_timestamp_us;      // 完成时刻（PPS 校准的微秒时间戳）
+    int64_t  finish_timestamp_us;      // 完成时刻（UART 时间戳 + 样条插值，微秒）
 } LapRecord;
 
 // 圈状态枚举
@@ -297,7 +294,6 @@ typedef struct {
 | `btn_display_queue` | `QueueHandle_t` (ButtonEvent) | 深度 8 | `task_button` | `task_display` |
 | `session_mutex` | `SemaphoreHandle_t` (Mutex) | 互斥锁，保护 SessionState 读写 | 写：`task_session`, `task_lap_timer` | 读：`task_display`, `task_wifi` |
 | `spi_mutex` | `SemaphoreHandle_t` (Mutex) | 互斥锁，保护 SPI 总线（SD + TFT 共用） | 写：`task_storage`（优先） | `task_display`（让步） |
-| `pps_sync_us` | `_Atomic int64_t` | 原子变量，无锁 | PPS ISR | `task_gps` |
 
 ### 事件结构
 
@@ -306,7 +302,7 @@ typedef struct {
 typedef struct {
     uint8_t  event_type;     // LAP_EVENT_SECTOR / LAP_EVENT_FINISH
     int      sector_index;   // 扇区索引（0 = 起终线）
-    int64_t  crossing_us;    // 精确穿越时刻（PPS 校准，微秒）
+    int64_t  crossing_us;    // 精确穿越时刻（UART 时间戳 + 样条插值，微秒）
 } LapEvent;
 
 // 按键事件（task_button → task_display / task_session）
@@ -357,7 +353,7 @@ typedef struct {
 |------|-----------|------|------|
 | GPS_TX | GPIO 17 | IN（ESP32 侧 RX） | NMEA 数据输入，115200 baud |
 | GPS_RX | GPIO 18 | OUT（ESP32 侧 TX） | UBX 配置命令输出 |
-| GPS_PPS | GPIO 16 | IN | 秒脉冲，上升沿触发硬件中断，精度 ±30ns |
+| (GPIO 16) | GPIO 16 | — | **预留未用**。曾设计为 PPS 输入，但 BK-880 不提供 PPS 信号（数据手册 §2.1.3），此引脚无外部连接。`PIN_GPS_PPS` 定义保留以便代码兼容性，但对应 ISR 永不触发 |
 
 ### 按键
 
@@ -379,7 +375,7 @@ typedef struct {
 | 11 | SPI_MOSI | 共用 MOSI |
 | 12 | SPI_CLK | 共用 CLK |
 | 13 | SPI_MISO | 共用 MISO（SD 专用） |
-| 16 | GPS_PPS | PPS 中断 |
+| 16 | （预留） | BK-880 不提供 PPS，此引脚未使用 |
 | 17 | GPS_TX→ESP_RX | NMEA 输入 |
 | 18 | GPS_RX→ESP_TX | UBX 配置输出 |
 | 42 | CS_SD | SD 片选 |
@@ -462,7 +458,7 @@ Session 开始（首次穿越起终线）
 
 | 模块 | 功能 |
 |------|------|
-| `gps.cpp` | UART2 接收，NMEA GGA/RMC 解析，PPS 硬件中断校时，25Hz |
+| `gps.cpp` | UART2 接收，NMEA GGA/RMC 解析，25Hz；时间戳取 UART 到达时间（BK-880 不提供 PPS） |
 | `lap_timer.cpp` | 有符号线段交叉过线检测，Catmull-Rom 样条插值精确计时，去抖验证，Arming 状态机，无效圈过滤（slow/short/no_ref） |
 | `delta.cpp` | Position-Based Delta（参考多段线投影），航向过滤，OFF TRACK 检测 |
 | `track.cpp` | 从 SD 卡加载赛道 JSON，按距离 <5km 自动识别，候选冲突时优先用 Web 手动切换 |
