@@ -45,7 +45,24 @@ extern QueueHandle_t s_gps_queue;
 extern QueueHandle_t s_vbo_queue;
 extern QueueHandle_t s_lap_event_queue;
 extern SemaphoreHandle_t s_session_mutex;
+
+// --- Active track shadowing ---
+//
+// `active_track` (in main.cpp) is the canonical track definition.  It is
+// read by multiple tasks but only safe to mutate while holding
+// s_session_mutex.  lap_timer_task owns s_track_shadow — a private copy
+// refreshed from active_track under the mutex whenever
+// s_active_track_version changes.  Hot-path readers (process_line,
+// update_session_delta) dereference s_track which points at the shadow,
+// so they never race with WiFi-side writers doing memset/assignment.
+extern TrackDefinition s_track_shadow;
+extern volatile uint32_t s_active_track_version;
 extern const TrackDefinition* s_track;
+
+// Bump the active-track version counter.  Must be called with
+// s_session_mutex already held and immediately after writing active_track.
+// lap_timer_task picks up the change on its next iteration.
+void lap_timer_bump_active_track_version_locked();
 
 extern GpsPoint s_history[SPLINE_HISTORY];
 extern int s_history_count;

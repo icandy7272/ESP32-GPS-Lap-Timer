@@ -48,6 +48,14 @@ void lap_timer_reset(void);
 /// Thread-safe: called from wifi task on Core 1.
 void lap_timer_set_track(const TrackDefinition* track);
 
+/// Signal that `active_track` has been mutated in place.
+/// Caller MUST be holding session_mutex (the mutex that was passed to
+/// lap_timer_init) around the mutation and this call.  lap_timer_task
+/// picks up the change on its next iteration via a private shadow copy.
+/// Use this when an API handler writes active_track directly (e.g. the
+/// memset on delete).
+void lap_timer_active_track_changed_locked();
+
 // --- Math Helpers (exposed for unit testing) ------------------
 
 /// Haversine distance in metres between two WGS84 points.

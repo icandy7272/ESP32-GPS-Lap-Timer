@@ -387,13 +387,25 @@ void handle_api_tracks_delete() {
     }
 
     extern TrackDefinition active_track;
+
+    // Snapshot the bits of SessionState and active_track we need to make
+    // the is-this-the-active-track decision, all under session_mutex.
+    // Reading active_track.id lock-free races with any concurrent writer
+    // (e.g. a back-to-back select+delete), and lap_timer_task would
+    // otherwise see the memset below tear.
     bool is_rec = false;
+    char active_id_snapshot[sizeof(active_track.id)] = {0};
     if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         is_rec = session_state.is_recording;
+        memcpy(active_id_snapshot, active_track.id, sizeof(active_id_snapshot));
         xSemaphoreGive(session_mutex);
     }
+
+    TrackDefinition tmp_active_for_decision = {};
+    strlcpy(tmp_active_for_decision.id, active_id_snapshot,
+            sizeof(tmp_active_for_decision.id));
     TrackDeleteDecision delete_decision =
-        track_runtime_evaluate_delete(is_rec, &active_track, id);
+        track_runtime_evaluate_delete(is_rec, &tmp_active_for_decision, id);
 
     if (delete_decision == TRACK_DELETE_BLOCK_ACTIVE_RECORDING) {
         server.send(409, "application/json",
@@ -407,17 +419,22 @@ void handle_api_tracks_delete() {
         return;
     }
 
-    bool was_active = (strcmp(active_track.id, id) == 0);
+    bool was_active = (strcmp(active_id_snapshot, id) == 0);
 
     if (track_delete(id)) {
         if (was_active) {
-            memset(&active_track, 0, sizeof(TrackDefinition));
-            lap_timer_reset();
+            // Clear active_track under session_mutex and bump the version
+            // so lap_timer_task refreshes its shadow before processing
+            // the next GPS fix.  memset alone is a 120-byte non-atomic
+            // write and was the canonical cross-task tear hazard.
             if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                memset(&active_track, 0, sizeof(TrackDefinition));
+                lap_timer_active_track_changed_locked();
                 strlcpy(session_state.track_name, "No Track",
                         sizeof(session_state.track_name));
                 xSemaphoreGive(session_mutex);
             }
+            lap_timer_reset();
             track_runtime_note_track_cleared();
         }
         server.send(200, "application/json", "{\"ok\":true}");
