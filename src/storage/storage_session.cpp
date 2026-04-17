@@ -114,5 +114,13 @@ void storage_end_session() {
 }
 
 void storage_write_lap_timing(const LapRecord* lap) {
+    // Intentional no-op.  Per-lap records are written at session end by
+    // write_laptiming_lines() reading session_state.laps[] once the
+    // [laptiming] section header is emitted.  Live per-lap writes would
+    // require either appending to the [laptiming] section mid-session
+    // (which conflicts with the header/data/footer VBO structure) or a
+    // parallel sidecar file for crash durability.  Neither is required
+    // yet; the hook stays wired so that path can be added without
+    // touching session.cpp again.
     (void)lap;
 }
