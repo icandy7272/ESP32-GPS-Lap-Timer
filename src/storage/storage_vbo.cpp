@@ -76,6 +76,12 @@ void format_vbo_line(const VboEntry* entry, char* buf, int buf_len) {
     char time_buf[16];
     format_hhmmss_thousandths(time_buf, sizeof(time_buf), secs);
 
+    // Racelogic VBO spec is counter-intuitive: longitude is stored as
+    // arc-minutes with WEST positive and EAST negative.  Do not "fix"
+    // this sign into `lon_deg * 60.0` — it would break Circuit Tools
+    // import for every Eastern-hemisphere track.
+    // See docs/PRD.md §"VBO 坐标格式" and
+    // https://en.racelogic.support/VBOX_Automotive/Knowledge_Base/VBOX_Latitude_and_Longitude_Calculations
     double lat_amin = entry->lat_deg * 60.0;
     double lon_amin = entry->lon_deg * -60.0;
 
@@ -117,6 +123,7 @@ double timestamp_us_to_secs_since_midnight(int64_t timestamp_us) {
 void write_laptiming_lines() {
     char line[128];
 
+    // Same VBO sign convention as format_vbo_line: East longitude negative.
     double lat1 = s_session_track.start_finish.lat1_deg * 60.0;
     double lon1 = s_session_track.start_finish.lon1_deg * -60.0;
     double lat2 = s_session_track.start_finish.lat2_deg * 60.0;
