@@ -20,3 +20,7 @@ test_backups/
 
 # OS
 .DS_Store
+
+# Python bytecode from tools/
+**/__pycache__/
+*.py[co]

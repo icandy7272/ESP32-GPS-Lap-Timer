@@ -343,12 +343,34 @@ static void draft_sort_ascending(double* arr, int n) {
     }
 }
 
+// Classify a point-spread into a confidence tier, per the
+// 2026-04-18 finish-line debugging roadmap.  Keeps the UI-facing
+// strings in one place so the serial `[draft]` log and any future
+// screen/dashboard renderers agree.
+static const char* draft_confidence_tier(double spread_m) {
+    if (spread_m <= 1.0) return "High";
+    if (spread_m <= 2.0) return "Medium";
+    return "Low";
+}
+
 // Sample `session_state.gps_lat_deg` / `.gps_lon_deg` every 100 ms for
-// 2.0 s (up to 20 points), reject samples without a 3D fix, and return
-// the per-axis median.  Gives the operator the same 2 s "stand still
-// while it averages" experience as the phone web UI, but via serial.
-static bool draft_sample_gps_median(double* out_lat, double* out_lon) {
-    constexpr int kMaxSamples = 20;
+// 5.0 s (up to 50 points), reject samples without a 3D fix, and return
+// the per-axis median plus a point-spread estimate.
+//
+// The 5 s window (extended from the original 2 s) comes from the
+// roadmap: absolute GPS error accumulates over a longer window, so a
+// longer sample lets the median settle closer to the true geodetic
+// point and gives us enough samples to compute a meaningful spread.
+//
+// `out_spread_m` returns the largest haversine distance from any
+// accepted sample to the reported median — a conservative worst-case
+// measure that maps directly to what the user sees on an error-circle
+// overlay in the live map.
+static bool draft_sample_gps_median(double* out_lat,
+                                    double* out_lon,
+                                    double* out_spread_m,
+                                    int* out_sample_count) {
+    constexpr int kMaxSamples = 50;
     double lats[kMaxSamples];
     double lons[kMaxSamples];
     int count = 0;
@@ -375,10 +397,38 @@ static bool draft_sample_gps_median(double* out_lat, double* out_lon) {
         return false;
     }
 
-    draft_sort_ascending(lats, count);
-    draft_sort_ascending(lons, count);
-    *out_lat = lats[count / 2];
-    *out_lon = lons[count / 2];
+    // Per-axis median — robust to the occasional u-blox glitch sample.
+    // Note: sorting mutates the arrays, so we snapshot them first if
+    // we still need the originals for spread.
+    double lats_sorted[kMaxSamples];
+    double lons_sorted[kMaxSamples];
+    for (int i = 0; i < count; i++) {
+        lats_sorted[i] = lats[i];
+        lons_sorted[i] = lons[i];
+    }
+    draft_sort_ascending(lats_sorted, count);
+    draft_sort_ascending(lons_sorted, count);
+    const double median_lat = lats_sorted[count / 2];
+    const double median_lon = lons_sorted[count / 2];
+    *out_lat = median_lat;
+    *out_lon = median_lon;
+
+    // Spread = max haversine distance from any sample to the median.
+    // A worst-case estimate rather than p95 because the operator
+    // cares about the circle that CONTAINS all samples, not a
+    // statistical inlier bound.  Uses the same flat-earth projection
+    // elsewhere in the draft pipeline — fine at metre scales.
+    const double lat_ref_rad = median_lat * M_PI / 180.0;
+    const double cos_lat = cos(lat_ref_rad);
+    double max_spread_m = 0.0;
+    for (int i = 0; i < count; i++) {
+        const double dx_m = (lons[i] - median_lon) * 111000.0 * cos_lat;
+        const double dy_m = (lats[i] - median_lat) * 111000.0;
+        const double d_m  = sqrt(dx_m * dx_m + dy_m * dy_m);
+        if (d_m > max_spread_m) max_spread_m = d_m;
+    }
+    if (out_spread_m)      *out_spread_m      = max_spread_m;
+    if (out_sample_count)  *out_sample_count  = count;
     return true;
 }
 
@@ -415,28 +465,37 @@ static void serial_console_handle_track_mark(int which) {
         Serial.println("[draft] ERR: no active draft — run 'track draft <name>' first");
         return;
     }
-    Serial.printf("[draft] sampling P%d for 2.0 s...\n", which);
-    double lat = 0.0, lon = 0.0;
-    if (!draft_sample_gps_median(&lat, &lon)) {
+    Serial.printf("[draft] sampling P%d for 5.0 s...\n", which);
+    double lat = 0.0, lon = 0.0, spread_m = 0.0;
+    int sample_count = 0;
+    if (!draft_sample_gps_median(&lat, &lon, &spread_m, &sample_count)) {
         Serial.println("[draft] ERR: not enough 3D GPS fixes during sample window");
         return;
     }
+    const char* tier = draft_confidence_tier(spread_m);
     if (which == 1) {
         s_draft_p1_lat = lat;
         s_draft_p1_lon = lon;
         s_draft_has_p1 = true;
-        Serial.printf("[draft] p1 = (%.7f, %.7f)\n", lat, lon);
+        // Append spread and tier AFTER the `(lat, lon)` block so live_map's
+        // existing `_DRAFT_P1_RE` regex still matches the coords, and the
+        // new `_DRAFT_SPREAD_RE` regex picks up the confidence metadata.
+        Serial.printf("[draft] p1 = (%.7f, %.7f) spread=%.2fm tier=%s samples=%d\n",
+                      lat, lon, spread_m, tier, sample_count);
     } else {
         s_draft_p2_lat = lat;
         s_draft_p2_lon = lon;
         s_draft_has_p2 = true;
         draft_compute_heading_locked();
         if (s_draft_has_p1) {
-            Serial.printf("[draft] p2 = (%.7f, %.7f) heading=%.1f\n",
-                          lat, lon, s_draft_heading);
+            Serial.printf(
+                "[draft] p2 = (%.7f, %.7f) heading=%.1f spread=%.2fm tier=%s samples=%d\n",
+                lat, lon, s_draft_heading, spread_m, tier, sample_count);
         } else {
-            Serial.printf("[draft] p2 = (%.7f, %.7f) — warning: p1 not marked\n",
-                          lat, lon);
+            Serial.printf(
+                "[draft] p2 = (%.7f, %.7f) spread=%.2fm tier=%s samples=%d "
+                "— warning: p1 not marked\n",
+                lat, lon, spread_m, tier, sample_count);
         }
     }
 }
@@ -451,14 +510,17 @@ static void serial_console_handle_track_save() {
         return;
     }
     // Match the web-UI server-side minimum so saved tracks are always
-    // usable at runtime.
+    // usable at runtime.  The exact threshold is compile-time selected
+    // (5 m production, 2 m walking-test) — see
+    // track_creation_min_save_line_length_m().
     double dy_m = (s_draft_p2_lat - s_draft_p1_lat) * 111000.0;
     double cos_lat = cos(((s_draft_p1_lat + s_draft_p2_lat) * 0.5) * M_PI / 180.0);
     double dx_m = (s_draft_p2_lon - s_draft_p1_lon) * 111000.0 * cos_lat;
     double line_len_m = sqrt(dx_m * dx_m + dy_m * dy_m);
-    if (line_len_m < 1.0) {
-        Serial.printf("[draft] ERR: line too short (%.2f m, need >= 1.0 m)\n",
-                      line_len_m);
+    const double min_len_m = track_creation_min_save_line_length_m();
+    if (line_len_m < min_len_m) {
+        Serial.printf("[draft] ERR: line too short (%.2f m, need >= %.1f m)\n",
+                      line_len_m, min_len_m);
         return;
     }
 
