@@ -88,6 +88,33 @@ bool is_allowed_cat_path(const char* path) {
     return true;
 }
 
+// Validate a draft track name the same way the web-UI does on the
+// server (api_tracks.cpp:is_ascii_safe): printable ASCII, no
+// filesystem-reserved characters, not empty.  Keeps the serial entry
+// point from writing track files that would later be rejected by the
+// normal POST /api/tracks flow.
+bool is_track_name_valid(const char* name) {
+    if (!name || name[0] == '\0') {
+        return false;
+    }
+    for (int i = 0; name[i]; i++) {
+        char c = name[i];
+        if (c < 0x20 || c > 0x7E) return false;
+        if (c == '"' || c == '\\' || c == '/' || c == ':' ||
+            c == '*' || c == '?' || c == '<' || c == '>' || c == '|') {
+            return false;
+        }
+    }
+    return true;
+}
+
+const char* skip_spaces(const char* p) {
+    while (*p && isspace(static_cast<unsigned char>(*p))) {
+        p++;
+    }
+    return p;
+}
+
 }  // namespace
 
 SerialConsoleCommand serial_console_parse(const char* line) {
@@ -107,10 +134,7 @@ SerialConsoleCommand serial_console_parse(const char* line) {
     }
 
     if (starts_with(trimmed, "ls")) {
-        const char* arg = trimmed + 2;
-        while (*arg && isspace(static_cast<unsigned char>(*arg))) {
-            arg++;
-        }
+        const char* arg = skip_spaces(trimmed + 2);
         if (!is_allowed_directory(arg)) {
             set_error(&cmd, "ls expects tracks or sessions");
             return cmd;
@@ -121,16 +145,60 @@ SerialConsoleCommand serial_console_parse(const char* line) {
     }
 
     if (starts_with(trimmed, "cat")) {
-        const char* arg = trimmed + 3;
-        while (*arg && isspace(static_cast<unsigned char>(*arg))) {
-            arg++;
-        }
+        const char* arg = skip_spaces(trimmed + 3);
         if (!is_allowed_cat_path(arg)) {
             set_error(&cmd, "cat expects tracks/<file> or sessions/<file>");
             return cmd;
         }
         cmd.type = SerialConsoleCommandType::CatFile;
         snprintf(cmd.arg, sizeof(cmd.arg), "%s", arg);
+        return cmd;
+    }
+
+    // "track save", "track cancel", "track status", "track draft <name>"
+    if (starts_with(trimmed, "track")) {
+        const char* tail = skip_spaces(trimmed + strlen("track"));
+        if (strcmp(tail, "save") == 0) {
+            cmd.type = SerialConsoleCommandType::TrackSave;
+            return cmd;
+        }
+        if (strcmp(tail, "cancel") == 0) {
+            cmd.type = SerialConsoleCommandType::TrackCancel;
+            return cmd;
+        }
+        if (strcmp(tail, "status") == 0) {
+            cmd.type = SerialConsoleCommandType::TrackStatus;
+            return cmd;
+        }
+        if (starts_with(tail, "draft")) {
+            const char* name = skip_spaces(tail + strlen("draft"));
+            if (!is_track_name_valid(name)) {
+                set_error(&cmd, "track draft expects a valid name");
+                return cmd;
+            }
+            if (strlen(name) >= sizeof(cmd.arg)) {
+                set_error(&cmd, "track name too long");
+                return cmd;
+            }
+            cmd.type = SerialConsoleCommandType::TrackDraftStart;
+            snprintf(cmd.arg, sizeof(cmd.arg), "%s", name);
+            return cmd;
+        }
+        set_error(&cmd, "track expects draft|save|cancel|status");
+        return cmd;
+    }
+
+    if (starts_with(trimmed, "mark")) {
+        const char* tail = skip_spaces(trimmed + strlen("mark"));
+        if (strcmp(tail, "p1") == 0) {
+            cmd.type = SerialConsoleCommandType::TrackMarkP1;
+            return cmd;
+        }
+        if (strcmp(tail, "p2") == 0) {
+            cmd.type = SerialConsoleCommandType::TrackMarkP2;
+            return cmd;
+        }
+        set_error(&cmd, "mark expects p1 or p2");
         return cmd;
     }
 

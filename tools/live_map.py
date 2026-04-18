@@ -68,6 +68,19 @@ state = {
     "trail": [],
     "events": [],
     "started_at": time.time(),
+    # Live state of the firmware's [draft] track-marking machine,
+    # populated by parse_line() as serial events arrive.  Consumed by
+    # the browser UI to enable/disable the Mark/Save/Cancel buttons
+    # and to draw the draft line in a different colour than a saved
+    # line.
+    "draft": {
+        "active": False,
+        "name": "",
+        "p1": None,          # [lat, lon] after mark p1
+        "p2": None,
+        "heading": None,     # deg after mark p2
+        "status": "",        # last firmware message for the UI
+    },
 }
 
 # Shared reference to the open serial port so the bootstrap thread
@@ -117,6 +130,79 @@ _Q_RE = re.compile(r"q=(\d+)\s+tier=(\d+)")
 _HDOP_RE = re.compile(r"hdop=([0-9.\-]+)")
 _TRACK_FILE_RE = re.compile(r"^(track_\d+\.json)\s*$")
 _SERIAL_HEADER_RE = re.compile(r"^\[serial\] --- tracks/([^ ]+) ---")
+_DRAFT_STARTED_RE = re.compile(r"\[draft\] started: (\S+)")
+_DRAFT_P1_RE = re.compile(
+    r"\[draft\] p1\s*=\s*\(([0-9.\-]+),\s*([0-9.\-]+)\)"
+)
+_DRAFT_P2_RE = re.compile(
+    r"\[draft\] p2\s*=\s*\(([0-9.\-]+),\s*([0-9.\-]+)\)(?:\s+heading=([0-9.\-]+))?"
+)
+_DRAFT_SAVED_RE = re.compile(
+    r"\[draft\] saved: (\S+) \(([^)]+)\) length=([0-9.\-]+)m heading=([0-9.\-]+)"
+)
+
+
+def _parse_draft_event(line: str) -> None:
+    m = _DRAFT_STARTED_RE.search(line)
+    if m:
+        with state_lock:
+            state["draft"] = {
+                "active": True,
+                "name": m.group(1),
+                "p1": None,
+                "p2": None,
+                "heading": None,
+                "status": f"Draft '{m.group(1)}' started. Mark P1.",
+            }
+        return
+    m = _DRAFT_P1_RE.search(line)
+    if m:
+        with state_lock:
+            state["draft"]["p1"] = [float(m.group(1)), float(m.group(2))]
+            state["draft"]["status"] = "P1 marked. Walk to P2."
+        return
+    m = _DRAFT_P2_RE.search(line)
+    if m:
+        with state_lock:
+            state["draft"]["p2"] = [float(m.group(1)), float(m.group(2))]
+            if m.group(3):
+                state["draft"]["heading"] = float(m.group(3))
+            state["draft"]["status"] = "P2 marked. Review and Save."
+        return
+    m = _DRAFT_SAVED_RE.search(line)
+    if m:
+        with state_lock:
+            state["draft"] = {
+                "active": False,
+                "name": "",
+                "p1": None,
+                "p2": None,
+                "heading": None,
+                "status": (f"Saved {m.group(1)} ({m.group(2)}) — "
+                           f"line {m.group(3)} m, heading {m.group(4)}°"),
+            }
+        return
+    if "[draft] cancelled" in line:
+        with state_lock:
+            state["draft"] = {
+                "active": False,
+                "name": "",
+                "p1": None,
+                "p2": None,
+                "heading": None,
+                "status": "Cancelled.",
+            }
+        return
+    if "[draft] ERR:" in line:
+        with state_lock:
+            # Preserve current p1/p2/name on error so the operator can
+            # retry the failing step without losing context.
+            state["draft"]["status"] = line.split("[draft] ERR:", 1)[1].strip()
+        return
+    if "[draft] sampling" in line:
+        with state_lock:
+            state["draft"]["status"] = line.split("[draft]", 1)[1].strip()
+        return
 
 # Bootstrap state for the on-startup "cat tracks/<first>.json" query.
 # The parser holds a small JSON-capture state machine that activates
@@ -220,6 +306,12 @@ def parse_line(line: str) -> None:
     if ("[lap]" in line) or ("[session]" in line) or ("[xing]" in line):
         _locked_append_event(line)
 
+    # Firmware [draft] events — keep the browser panel in sync with
+    # the on-device state machine instead of polling `track status`.
+    if line.startswith("[draft]"):
+        _locked_append_event(line)
+        _parse_draft_event(line)
+
 
 def serial_reader() -> None:
     ser = serial.Serial()
@@ -311,6 +403,20 @@ HTML = r"""<!doctype html>
  #map{position:absolute;inset:0}
  #info{position:absolute;top:8px;left:8px;z-index:1000;padding:8px 12px;background:rgba(0,0,0,.78);border:1px solid #444;min-width:240px;border-radius:6px}
  #events{position:absolute;bottom:8px;left:8px;right:8px;max-height:150px;overflow-y:auto;padding:6px 10px;background:rgba(0,0,0,.78);border:1px solid #444;font-size:11px;z-index:1000;border-radius:6px}
+ #draft{position:absolute;top:8px;right:8px;z-index:1000;padding:10px 12px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px;min-width:260px}
+ #draft h3{margin:0 0 8px 0;font-size:13px;color:#fc5;font-weight:normal}
+ #draft label{display:block;font-size:11px;color:#aaa;margin-top:6px}
+ #draft input[type=text]{width:100%;box-sizing:border-box;padding:5px 7px;background:#111;color:#eee;border:1px solid #555;border-radius:3px;font-family:inherit;font-size:12px}
+ #draft button{margin:4px 4px 0 0;padding:6px 10px;border:1px solid #666;background:#222;color:#eee;font-family:inherit;font-size:12px;border-radius:3px;cursor:pointer}
+ #draft button:hover:not([disabled]){background:#2a2a2a;border-color:#999}
+ #draft button[disabled]{opacity:.4;cursor:not-allowed}
+ #draft button.primary{background:#253;border-color:#385;color:#cfc}
+ #draft button.primary:hover:not([disabled]){background:#284}
+ #draft button.danger{background:#422;border-color:#855;color:#fcc}
+ #draft-status{margin-top:8px;padding:6px 8px;background:#111;border-left:3px solid #fc5;font-size:11px;min-height:14px}
+ #draft-markers{display:flex;gap:14px;font-size:11px;margin-top:4px}
+ #draft-markers .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#444;margin-right:4px;vertical-align:middle}
+ #draft-markers .on .dot{background:#5f5}
  #events .lap{color:#5f5}
  #events .xing{color:#fc5}
  #events .session{color:#ff5}
@@ -320,6 +426,25 @@ HTML = r"""<!doctype html>
 </style></head><body>
 <div id="map"></div>
 <div id="info">Waiting for serial data…</div>
+<div id="draft">
+  <h3>Mark Start/Finish</h3>
+  <label>Track name</label>
+  <input id="draft-name" type="text" placeholder="e.g. home_west" autocomplete="off"/>
+  <div><button id="btn-new" class="primary">Start Draft</button></div>
+  <div id="draft-markers">
+    <span id="p1-ind"><span class="dot"></span>P1</span>
+    <span id="p2-ind"><span class="dot"></span>P2</span>
+  </div>
+  <div>
+    <button id="btn-mark-p1" disabled>Mark P1</button>
+    <button id="btn-mark-p2" disabled>Mark P2</button>
+  </div>
+  <div>
+    <button id="btn-save" class="primary" disabled>Save</button>
+    <button id="btn-cancel" class="danger" disabled>Cancel</button>
+  </div>
+  <div id="draft-status">idle — press Start Draft</div>
+</div>
 <div id="events"></div>
 <script>
 const map=L.map('map',{zoomControl:true,attributionControl:true}).setView([0,0],2);
@@ -337,6 +462,7 @@ const END_TOL_M=2.0;
 let lineLayer=null, extLayer=null, headingLayer=null;
 let trailLayer=L.polyline([],{color:'#59f',weight:2,opacity:0.85}).addTo(map);
 let currentLayer=null;
+let draftLineLayer=null, draftP1Layer=null, draftP2Layer=null;
 let fittedOnce=false;
 
 const info=document.getElementById('info');
@@ -461,15 +587,105 @@ function update(state){
     const ago=Math.max(0,Math.round(now-e.t));
     return `<div><span style="color:#666">[${ago}s]</span> <span class="${cls}">${e.text.replace(/</g,'&lt;')}</span></div>`;
   }).join('');
+
+  // draft
+  renderDraft(state.draft||{});
 }
+
+function renderDraft(d){
+  const active=!!d.active;
+  const hasP1=!!d.p1, hasP2=!!d.p2;
+  document.getElementById('btn-mark-p1').disabled=!active;
+  document.getElementById('btn-mark-p2').disabled=!active;
+  document.getElementById('btn-save').disabled=!(active&&hasP1&&hasP2);
+  document.getElementById('btn-cancel').disabled=!active;
+  document.getElementById('btn-new').disabled=active;
+  document.getElementById('draft-name').disabled=active;
+  document.getElementById('p1-ind').className=hasP1?'on':'';
+  document.getElementById('p2-ind').className=hasP2?'on':'';
+  document.getElementById('draft-status').textContent=d.status||(active?'…':'idle — press Start Draft');
+
+  // draft markers + line (orange, distinct from saved red)
+  if(hasP1){
+    if(!draftP1Layer)draftP1Layer=L.circleMarker(d.p1,{radius:6,color:'#fa0',fillColor:'#fa0',fillOpacity:1}).bindTooltip('P1 draft',{permanent:false}).addTo(map);
+    else draftP1Layer.setLatLng(d.p1);
+  }else if(draftP1Layer){map.removeLayer(draftP1Layer);draftP1Layer=null;}
+
+  if(hasP2){
+    if(!draftP2Layer)draftP2Layer=L.circleMarker(d.p2,{radius:6,color:'#fa0',fillColor:'#fa0',fillOpacity:1}).bindTooltip('P2 draft',{permanent:false}).addTo(map);
+    else draftP2Layer.setLatLng(d.p2);
+  }else if(draftP2Layer){map.removeLayer(draftP2Layer);draftP2Layer=null;}
+
+  if(hasP1&&hasP2){
+    if(!draftLineLayer)draftLineLayer=L.polyline([d.p1,d.p2],{color:'#fa0',weight:4,opacity:0.9,dashArray:'4,4'}).addTo(map);
+    else draftLineLayer.setLatLngs([d.p1,d.p2]);
+  }else if(draftLineLayer){map.removeLayer(draftLineLayer);draftLineLayer=null;}
+}
+
+async function sendCommand(cmd){
+  try{
+    const r=await fetch('/command',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cmd:cmd}),
+    });
+    if(!r.ok){
+      const body=await r.json().catch(()=>({}));
+      alert('command failed: '+(body.error||r.status));
+    }
+  }catch(e){alert('command error: '+e);}
+}
+
+document.getElementById('btn-new').addEventListener('click',()=>{
+  const name=(document.getElementById('draft-name').value||'').trim();
+  if(!name){alert('Enter a track name first');return;}
+  sendCommand('track draft '+name);
+});
+document.getElementById('btn-mark-p1').addEventListener('click',()=>sendCommand('mark p1'));
+document.getElementById('btn-mark-p2').addEventListener('click',()=>sendCommand('mark p2'));
+document.getElementById('btn-save').addEventListener('click',()=>{
+  if(!confirm('Save this draft as a new active track?'))return;
+  sendCommand('track save');
+});
+document.getElementById('btn-cancel').addEventListener('click',()=>sendCommand('track cancel'));
 
 poll();
 </script></body></html>
 """
 
 
+_ALLOWED_COMMANDS = {
+    "track cancel",
+    "track save",
+    "track status",
+    "mark p1",
+    "mark p2",
+}
+
+
+def _is_allowed_command(cmd: str) -> bool:
+    # Whitelist the exact command tokens the UI can emit.  Draft-start
+    # is allowed with any body matching `track draft <name>` where the
+    # firmware's own is_track_name_valid() will do the final check;
+    # we just keep raw shell-meta out of the forwarded bytes.
+    cmd = cmd.strip()
+    if cmd in _ALLOWED_COMMANDS:
+        return True
+    if cmd.startswith("track draft "):
+        body = cmd[len("track draft "):]
+        if not body:
+            return False
+        for ch in body:
+            if ord(ch) < 0x20 or ord(ch) > 0x7E:
+                return False
+            if ch in '"\\/:*?<>|':
+                return False
+        return True
+    return False
+
+
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
+    def do_GET(self) -> None:
         if self.path == "/":
             body = HTML.encode()
             self.send_response(200)
@@ -491,7 +707,46 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def log_message(self, *args, **kwargs):
+    def do_POST(self) -> None:
+        if self.path != "/command":
+            self.send_response(404)
+            self.end_headers()
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length > 0 else b""
+        try:
+            payload = json.loads(raw.decode("utf-8") or "{}")
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b'{"error":"invalid json"}')
+            return
+        cmd = (payload.get("cmd") or "").strip()
+        if not _is_allowed_command(cmd):
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b'{"error":"command not allowed"}')
+            return
+        ser = _ser_ref[0]
+        if ser is None:
+            self.send_response(503)
+            self.end_headers()
+            self.wfile.write(b'{"error":"serial not open"}')
+            return
+        try:
+            ser.write((cmd + "\r\n").encode("utf-8"))
+            ser.flush()
+        except Exception as exc:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(f'{{"error":"{exc}"}}'.encode())
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"ok":true}')
+
+    def log_message(self, *args, **kwargs) -> None:
         return
 
 
