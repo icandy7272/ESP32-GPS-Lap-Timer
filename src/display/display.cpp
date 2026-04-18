@@ -12,7 +12,7 @@
 #include "types.h"
 #include "pins.h"
 #include "boot_sequence.h"
-#include "gps/gps_filter.h"
+#include "gps_filter.h"
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>

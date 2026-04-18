@@ -1,5 +1,5 @@
 #include "gps/gps_internal.h"
-#include "gps/gps_filter.h"
+#include "gps_filter.h"
 
 #include <esp_timer.h>
 

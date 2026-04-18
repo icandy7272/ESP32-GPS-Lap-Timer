@@ -1,4 +1,4 @@
-#include "gps/gps_filter.h"
+#include "gps_filter.h"
 
 #if defined(ARDUINO)
 #include <freertos/FreeRTOS.h>
