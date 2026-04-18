@@ -10,6 +10,7 @@
 // ============================================================
 
 #include "delta.h"
+#include "delta_continuity.h"
 #include "lap_timer.h"  // for math helpers
 
 #include <Arduino.h>
@@ -23,6 +24,15 @@ static const double OFF_TRACK_ENTER_M  = 30.0;  // go off-track above this
 static const double OFF_TRACK_EXIT_M   = 20.0;  // return on-track below this
 static const float  HEADING_FILTER_DEG = 90.0f;  // skip segments with heading diff > this
 static const int    MAX_REFERENCE_PTS  = 4096;    // max points per reference lap (~164s at 25Hz)
+
+// Continuity bias added to the lateral-distance match score.  The
+// pure helper interprets the weight as "for every metre of off-progress
+// between the candidate and the previous match, add W metres to the
+// geometric score".  0.25 keeps the bias mild — it only changes the
+// decision when two candidates are within 4:1 lateral-distance of each
+// other, which is the exact "matcher flipped between two crossover
+// segments" situation it's meant to break.  Set to 0 to disable.
+static const double MATCH_CONTINUITY_WEIGHT = 0.25;
 
 // --- Module State (file-scoped) -------------------------------
 
@@ -48,6 +58,12 @@ static int32_t   s_frozen_delta_ms = 0;  // delta value when off-track detected
 
 // Last matched segment index for search locality
 static int       s_last_seg_idx    = 0;
+// Last normalised progress along reference (0..1), -1 = uninitialised.
+// Used as the continuity anchor for project_to_polyline scoring so the
+// match loop prefers candidates near the previous good match and resists
+// snapping to a distant segment just because the lateral distance is
+// marginally smaller (the classic crossover / near-return glitch).
+static double    s_last_progress   = -1.0;
 
 // --- Internal: Pre-computation --------------------------------
 
@@ -109,9 +125,11 @@ static ProjectionResult project_to_polyline(const GpsPoint* pt) {
 
     if (s_ref_count < 2) return result;
 
-    double best_dist = 1e9;
-    int    best_seg  = -1;
-    double best_t    = 0.0;
+    double best_score = 1e18;   // lateral_m + continuity_penalty_m
+    double best_dist  = 1e9;    // lateral in degrees (kept to rebuild
+                                // result.lateral_dist_m at the end)
+    int    best_seg   = -1;
+    double best_t     = 0.0;
 
     // Convert current position to flat coordinates relative to first ref point
     // (approximation valid for short distances on a track)
@@ -121,6 +139,12 @@ static ProjectionResult project_to_polyline(const GpsPoint* pt) {
     double py = (pt->lon_deg - s_ref_points[0].lon_deg) * cos_lat;
 
     int seg_count = s_ref_count - 1;
+
+    // Lateral distance comes out of point_to_segment_distance in the
+    // same "degrees (flat-earth scaled by cos_lat)" units as px/py.
+    // Convert once here; the score loop reuses it to combine with
+    // the continuity penalty which is already in metres.
+    const double deg_to_m = EARTH_RADIUS_M * M_PI / 180.0;
 
     // Search window: check nearby segments first, expand if needed
     // Start from last matched segment for temporal locality
@@ -140,11 +164,26 @@ static ProjectionResult project_to_polyline(const GpsPoint* pt) {
 
         double t;
         double dist = point_to_segment_distance(px, py, ax, ay, bx, by, &t);
+        double dist_m = dist * deg_to_m;
 
-        if (dist < best_dist) {
-            best_dist = dist;
-            best_seg  = i;
-            best_t    = t;
+        // Candidate progress along the polyline for this segment.
+        double cand_along_m = s_ref_cum_dist[i]
+                            + t * (s_ref_cum_dist[i + 1]
+                                   - s_ref_cum_dist[i]);
+        double cand_progress = (s_ref_total_dist > 0.0)
+                             ? (cand_along_m / s_ref_total_dist)
+                             : 0.0;
+
+        double penalty_m = delta_continuity::continuity_penalty_m(
+                s_last_progress, cand_progress,
+                s_ref_total_dist, MATCH_CONTINUITY_WEIGHT);
+        double score = dist_m + penalty_m;
+
+        if (score < best_score) {
+            best_score   = score;
+            best_dist    = dist;
+            best_seg     = i;
+            best_t       = t;
             result.valid = true;
         }
     }
@@ -153,7 +192,6 @@ static ProjectionResult project_to_polyline(const GpsPoint* pt) {
 
     // Convert flat-coordinate distance back to metres
     // The flat coords are in degrees; multiply by ~111km for lat
-    double deg_to_m = EARTH_RADIUS_M * M_PI / 180.0;
     result.lateral_dist_m = best_dist * deg_to_m;
 
     // Calculate progress along polyline
@@ -169,7 +207,8 @@ static ProjectionResult project_to_polyline(const GpsPoint* pt) {
     if (result.progress > 1.0) result.progress = 1.0;
 
     result.segment_idx = best_seg;
-    s_last_seg_idx = best_seg;
+    s_last_seg_idx     = best_seg;
+    s_last_progress    = result.progress;
 
     return result;
 }
@@ -239,6 +278,7 @@ void delta_init(void) {
     s_frozen_delta_ms = 0;
     s_lap_start_us   = 0;
     s_last_seg_idx   = 0;
+    s_last_progress  = -1.0;
 }
 
 void delta_free_reference(void) {
@@ -262,6 +302,7 @@ void delta_free_reference(void) {
     s_ref_total_dist = 0.0;
     s_has_reference  = false;
     s_last_seg_idx   = 0;
+    s_last_progress  = -1.0;
 }
 
 void delta_set_reference(const GpsPoint* points, int count) {
@@ -301,6 +342,7 @@ void delta_set_reference(const GpsPoint* points, int count) {
     s_has_reference = true;
     s_off_track     = false;
     s_last_seg_idx  = 0;
+    s_last_progress = -1.0;
 }
 
 int32_t delta_calculate(const GpsPoint* current) {
@@ -360,6 +402,7 @@ void delta_reset_elapsed(void) {
     s_off_track       = false;
     s_frozen_delta_ms = 0;
     s_last_seg_idx    = 0;
+    s_last_progress   = -1.0;
 }
 
 void delta_set_lap_start(int64_t start_us) {
