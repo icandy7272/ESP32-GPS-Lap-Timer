@@ -145,6 +145,82 @@ int main() {
               false);
     }
 
+    // =========================================================
+    // segments_intersect_extended: axial end tolerance coverage
+    // =========================================================
+    using line_geometry::segments_intersect_extended;
+
+    // Zero tolerance is equivalent to strict segments_intersect.
+    check("extended: zero fraction matches strict (miss)",
+          segments_intersect_extended(-1.0, 50.0, 1.0, 50.0,
+                                      0.0, 0.0, 0.0, 10.0,
+                                      0.0),
+          false);
+    check("extended: zero fraction matches strict (hit)",
+          segments_intersect_extended(-1.0, 5.0, 1.0, 5.0,
+                                      0.0, 0.0, 0.0, 10.0,
+                                      0.0),
+          true);
+    check("extended: negative fraction treated as zero",
+          segments_intersect_extended(-1.0, 50.0, 1.0, 50.0,
+                                      0.0, 0.0, 0.0, 10.0,
+                                      -0.5),
+          false);
+
+    // Axial end-tolerance absorbs a small overshoot past the P2 endpoint.
+    // Line y=[0,10] on x=0; path crosses x=0 at y=11 (1 unit past P2).
+    // With 20 % extension (line length 10 → 2-unit extension) the
+    // crossing sits inside the extended segment [-2, 12].
+    check("extended: 1 unit past P2, 20% fraction (should pass)",
+          segments_intersect_extended(-1.0, 11.0, 1.0, 11.0,
+                                      0.0, 0.0, 0.0, 10.0,
+                                      0.20),
+          true);
+    // 5 % extension only gives 0.5-unit tolerance — 1 unit past is still
+    // outside the extended segment [-0.5, 10.5].
+    check("extended: 1 unit past P2, 5% fraction (should still fail)",
+          segments_intersect_extended(-1.0, 11.0, 1.0, 11.0,
+                                      0.0, 0.0, 0.0, 10.0,
+                                      0.05),
+          false);
+
+    // Tolerance extends BOTH ends.  Path 1.5 units BEFORE P1 with
+    // 20 % extension (2-unit tolerance) should pass.
+    check("extended: 1.5 units before P1, 20% fraction (should pass)",
+          segments_intersect_extended(-1.0, -1.5, 1.0, -1.5,
+                                      0.0, 0.0, 0.0, 10.0,
+                                      0.20),
+          true);
+
+    // 2026-04-18 WALK REGRESSION, recreated in this coordinate system.
+    // Walker's recorded path came within 0.22 m of the P2 endpoint of a
+    // 10.4 m line with the recorded coordinates showing no intersection.
+    // Using the firmware's 2 m tolerance on a 10.4 m line gives
+    // fraction ≈ 0.192.  A path 0.22 m past P2 with that fraction must
+    // now register as a crossing.
+    {
+        const double line_len = 10.4;  // metres in local toy units
+        const double tolerance_m = 2.0;
+        const double frac = tolerance_m / line_len;
+        // Line from (0,0) to (0, line_len).  Path crosses x=0 at
+        // y = line_len + 0.22 (0.22 m past P2).
+        const double y_past = line_len + 0.22;
+        check("extended: 2026-04-18 0.22m past P2 with 2m tolerance",
+              segments_intersect_extended(-1.0, y_past, 1.0, y_past,
+                                          0.0, 0.0, 0.0, line_len,
+                                          frac),
+              true);
+        // Same geometry with only 0.1 m tolerance (fraction ≈ 0.0096)
+        // must still reject — a real track mis-alignment should not be
+        // masked by an aggressive tolerance setting.
+        const double frac_tight = 0.1 / line_len;
+        check("extended: 0.22m past P2 with only 0.1m tolerance rejects",
+              segments_intersect_extended(-1.0, y_past, 1.0, y_past,
+                                          0.0, 0.0, 0.0, line_len,
+                                          frac_tight),
+              false);
+    }
+
     if (fail_count == 0) {
         printf("test_line_geometry: OK\n");
         return 0;
