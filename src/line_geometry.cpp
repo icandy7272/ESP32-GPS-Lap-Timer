@@ -40,4 +40,26 @@ bool segments_intersect(double ax, double ay,
     return true;
 }
 
+bool segments_intersect_extended(double ax, double ay,
+                                 double bx, double by,
+                                 double cx, double cy,
+                                 double dx, double dy,
+                                 double extension_fraction) {
+    if (extension_fraction <= 0.0) {
+        return segments_intersect(ax, ay, bx, by, cx, cy, dx, dy);
+    }
+    // Extend C-D axially by (extension_fraction * (D - C)) on each end.
+    // Works in whatever coordinate system the caller uses; no sqrt / no
+    // lat-to-meter conversion needed because the fraction is unitless.
+    const double cdx = dx - cx;
+    const double cdy = dy - cy;
+    const double cx_ext = cx - cdx * extension_fraction;
+    const double cy_ext = cy - cdy * extension_fraction;
+    const double dx_ext = dx + cdx * extension_fraction;
+    const double dy_ext = dy + cdy * extension_fraction;
+    return segments_intersect(ax, ay, bx, by,
+                              cx_ext, cy_ext,
+                              dx_ext, dy_ext);
+}
+
 }  // namespace line_geometry

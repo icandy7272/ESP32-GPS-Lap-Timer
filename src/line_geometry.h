@@ -33,4 +33,25 @@ bool segments_intersect(double ax, double ay,
                         double cx, double cy,
                         double dx, double dy);
 
+// Like segments_intersect, but first extends the C-D segment axially
+// outward on each end by (extension_fraction * |CD|).  Exists to
+// absorb absolute GPS position error: when the user marks track points
+// and when they later walk past them, both recorded coordinates carry
+// 1-3 m of independent noise.  Strict segment intersection rejects the
+// "I walked 0.22 m past the P2 endpoint" case even though the walker
+// physically crossed the line — see the 2026-04-18 walk-test where this
+// was the exact failure mode.  Axial extension absorbs that noise
+// without re-opening the infinite-line bug the bare segment check was
+// introduced to fix.
+//
+// extension_fraction <= 0 is equivalent to segments_intersect().
+// Typical values: 0.1–0.3 (10–30 % on each end).  Callers that want a
+// meter-scale tolerance should compute the fraction themselves from the
+// line's real length (fraction = tolerance_m / length_m).
+bool segments_intersect_extended(double ax, double ay,
+                                 double bx, double by,
+                                 double cx, double cy,
+                                 double dx, double dy,
+                                 double extension_fraction);
+
 }  // namespace line_geometry

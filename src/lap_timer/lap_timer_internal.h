@@ -41,10 +41,20 @@ static constexpr double ARM_DISTANCE_M = 6.0;
 // Keep the 8s floor; see 2026-04-18 walk analysis.  A ~10m loop at
 // brisk walk pace comes out to ≈ 9s, which is still accepted.
 static constexpr int32_t MIN_LAP_TIME_MS = 8000;
+// 2026-04-18 third pass: allow a 2 m axial overshoot on each end of
+// the detection segment so absolute GPS noise (typically 1-3 m on
+// consumer hardware) does not reject a real crossing that just
+// grazes past an endpoint.  See segments_intersect_extended().
+static constexpr double CROSSING_END_TOLERANCE_M = 2.0;
 #else
 static constexpr float HEADING_WINDOW = 60.0f;
 static constexpr double ARM_DISTANCE_M = 10.0;
 static constexpr int32_t MIN_LAP_TIME_MS = 15000;
+// Tighter tolerance on the real track: professional-built start/finish
+// geometries should be sub-metre accurate and the walker isn't there
+// to "just graze" the line.  Still non-zero to absorb momentary GPS
+// bias during the crossing sample.
+static constexpr double CROSSING_END_TOLERANCE_M = 0.5;
 #endif
 static constexpr float MIN_CROSSING_SPEED_KMH = 1.0f;
 static constexpr int DEBOUNCE_SAMPLES = 2;

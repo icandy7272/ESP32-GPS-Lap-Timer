@@ -38,6 +38,7 @@
 | `MIN_LAP_TIME_MS` (lap_timer) | 8000 ms | 步行绕一小圈 8-15 秒可以算有效（2026-04-18 从 5000 ms 上调，避免在起终线附近的折返触发假短圈） |
 | `LAP_SHORT_THRESHOLD_MS` (session) | 8000 ms | 两层阈值同步切换，避免 split-brain |
 | `MIN_CROSSING_SPEED_KMH` | 1.0 km/h | 保留 |
+| `CROSSING_END_TOLERANCE_M` | 2.0 m | 检测线段轴向两端各延伸 2 m 再做相交判定。吸收 u-blox M9N 在消费级场景下 1-3 m 的绝对定位误差（打点时 + 走圈时两次叠加）。2026-04-18 第三次走测出现了"绕过 P2 端点 0.22 m，物理上明明穿过了线但 segment 严格判定拒绝"的情况，就是靠这个容差修的。生产模式用 0.5 m（真实赛道打点更准，容差收紧）。 |
 
 ⚠️ **仍然不要把此模式的固件带到真赛道。** 虽然 HEADING_WINDOW 现在与生产一致，
 `ARM_DISTANCE_M` 和 `MIN_LAP_TIME_MS` 仍然放宽了，真赛道上会接受太短的假圈。

@@ -105,14 +105,28 @@ static bool has_crossed_line(const GpsPoint* prev, const GpsPoint* curr,
     // flip on the infinite line through P1-P2.  The old
     // side_of_line-only check treated walks along the line's EXTENSION
     // as crossings, which produced the 63.6s → 4.7s false lap pair
-    // observed on the 2026-04-18 walking test.
-    // See src/line_geometry.cpp for the pure geometry predicate and
-    // tests_host/test_line_geometry.cpp for the regression coverage.
-    if (!line_geometry::segments_intersect(
+    // observed on the 2026-04-17 walking test.
+    //
+    // The segment is axially extended by CROSSING_END_TOLERANCE_M on
+    // each end so a 1-3 m absolute GPS error (either at track-creation
+    // point-marking time or during the walk) does not reject a real
+    // crossing that grazes past an endpoint.  The 2026-04-18 walk
+    // produced exactly this failure mode: closest approach 0.22 m past
+    // P2 in recorded coordinates while the walker physically crossed
+    // the line.  See docs/TEST_MODES.md for the chosen tolerance value.
+    double line_len_m = haversine_m(line->lat1_deg, line->lon1_deg,
+                                    line->lat2_deg, line->lon2_deg);
+    double ext_fraction = 0.0;
+    if (line_len_m > 0.1) {
+        ext_fraction = CROSSING_END_TOLERANCE_M / line_len_m;
+    }
+
+    if (!line_geometry::segments_intersect_extended(
             prev->lat_deg, prev->lon_deg,
             curr->lat_deg, curr->lon_deg,
             line->lat1_deg, line->lon1_deg,
-            line->lat2_deg, line->lon2_deg)) {
+            line->lat2_deg, line->lon2_deg,
+            ext_fraction)) {
         return false;
     }
 
