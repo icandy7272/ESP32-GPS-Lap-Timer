@@ -1,6 +1,7 @@
 #include "gps/gps_filter.h"
 
 #include <assert.h>
+#include <math.h>
 
 static GpsPoint make_point(double lat_deg,
                            double lon_deg,
@@ -94,10 +95,53 @@ static void test_filter_tracks_separate_raw_and_display_paths() {
     assert(display_fix.lon_deg == out_b.display_fix.lon_deg);
 }
 
+static void test_low_speed_jitter_is_smoothed_for_display_path() {
+    gps_filter_reset();
+
+    const double base_lat = 31.100000;
+    const double base_lon = 121.200000;
+    const GpsPoint samples[] = {
+        make_point(base_lat + 0.000000, base_lon + 0.000000, 1.6f, 35.0f, 1000000),
+        make_point(base_lat + 0.000008, base_lon - 0.000007, 1.5f, 210.0f, 1040000),
+        make_point(base_lat - 0.000007, base_lon + 0.000006, 1.4f, 180.0f, 1080000),
+        make_point(base_lat + 0.000006, base_lon - 0.000005, 1.7f, 300.0f, 1120000),
+        make_point(base_lat - 0.000005, base_lon + 0.000004, 1.5f, 120.0f, 1160000),
+    };
+
+    GpsFilterProcessResult out = {};
+    for (const GpsPoint& sample : samples) {
+        GpsPoint adjusted = sample;
+        adjusted.heading_reliable = false;
+        out = gps_filter_process(adjusted);
+    }
+
+    assert(fabs(out.display_fix.lat_deg - base_lat) <
+           fabs(samples[4].lat_deg - base_lat));
+    assert(fabs(out.display_fix.lon_deg - base_lon) <
+           fabs(samples[4].lon_deg - base_lon));
+}
+
+static void test_low_speed_unreliable_heading_is_frozen() {
+    gps_filter_reset();
+
+    GpsPoint first = make_point(31.100000, 121.200000, 2.0f, 45.0f, 1000000);
+    first.heading_reliable = false;
+    GpsPoint second = make_point(31.100002, 121.200001, 1.8f, 220.0f, 1040000);
+    second.heading_reliable = false;
+
+    GpsFilterProcessResult out_first = gps_filter_process(first);
+    GpsFilterProcessResult out_second = gps_filter_process(second);
+
+    assert(out_first.display_fix.heading_deg == 45.0f);
+    assert(out_second.display_fix.heading_deg == 45.0f);
+}
+
 int main() {
     test_high_quality_3d_fix_scores_well();
     test_low_speed_2d_fix_keeps_heading_unreliable();
     test_missing_gsa_falls_back_to_fix_quality_and_satellites();
     test_filter_tracks_separate_raw_and_display_paths();
+    test_low_speed_jitter_is_smoothed_for_display_path();
+    test_low_speed_unreliable_heading_is_frozen();
     return 0;
 }
