@@ -35,11 +35,25 @@ void lap_timer_task(void* param) {
     GpsPoint prev;
     bool has_prev = false;
     bool auto_detected = false;
+    uint32_t shadow_version_seen = 0;
 
     for (;;) {
         if (xQueueReceive(s_gps_queue, &curr, pdMS_TO_TICKS(200)) != pdTRUE) {
             esp_task_wdt_reset();
             continue;
+        }
+
+        // Refresh the track shadow if a writer has bumped the version
+        // since our last copy.  The volatile read + version-counter
+        // pattern means we only pay the mutex cost on actual change
+        // (user-initiated track select/delete), not on every fix.
+        if (s_active_track_version != shadow_version_seen) {
+            if (xSemaphoreTake(s_session_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                extern TrackDefinition active_track;
+                s_track_shadow = active_track;
+                shadow_version_seen = s_active_track_version;
+                xSemaphoreGive(s_session_mutex);
+            }
         }
 
         if (!auto_detected && curr.fix_3d) {
@@ -73,16 +87,25 @@ void lap_timer_task(void* param) {
             if (detected != nullptr) {
                 extern TrackDefinition active_track;
                 char detected_name[sizeof(session_state.track_name)] = {0};
-                if (track_runtime_sync_detected_track(
+                // Mutate active_track, bump version, and self-refresh the
+                // shadow in one critical section so the current iteration
+                // can process_line against the new geometry immediately.
+                bool synced = false;
+                if (xSemaphoreTake(s_session_mutex, portMAX_DELAY) == pdTRUE) {
+                    synced = track_runtime_sync_detected_track(
                         &active_track, detected,
-                        detected_name, sizeof(detected_name))) {
-                    s_track = &active_track;
-                    lap_timer_reset();
-                    if (xSemaphoreTake(s_session_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                        detected_name, sizeof(detected_name));
+                    if (synced) {
+                        lap_timer_bump_active_track_version_locked();
+                        s_track_shadow = active_track;
+                        shadow_version_seen = s_active_track_version;
                         strlcpy(session_state.track_name, detected_name,
                                 sizeof(session_state.track_name));
-                        xSemaphoreGive(s_session_mutex);
                     }
+                    xSemaphoreGive(s_session_mutex);
+                }
+                if (synced) {
+                    lap_timer_reset();
                     Serial.printf("[lap_timer] Auto-detected: %s (%d candidate(s) within 5km)\n",
                                   detected_name, candidates);
                 }

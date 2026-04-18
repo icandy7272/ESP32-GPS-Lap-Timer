@@ -1,6 +1,7 @@
 #include "lap_timer_internal.h"
 
 #include "../delta.h"
+#include "../lap_timer_guard.h"
 #include "../session.h"
 #include "../storage.h"
 
@@ -46,26 +47,22 @@ void handle_finish_crossing(int64_t crossing_us) {
     session_stopped = session_state.session_stopped;
     xSemaphoreGive(s_session_mutex);
 
-    // Guard: once the user has manually stopped a session, every subsequent
-    // crossing must be ignored until a new session_start_recording().
-    // Covers two regression-prone cases:
-    //   (a) stop AFTER first crossing — s_first_crossing is false, so a raw
-    //       crossing would fall through to the normal lap completion branch
-    //       and emit a stale lap time computed from the previous
-    //       s_lap_start_us.
-    //   (b) stop DURING the out lap (before first crossing) — s_first_crossing
-    //       is still true, and without this guard the first-crossing branch
-    //       would auto-call storage_start_session() and silently re-open a
-    //       session that the user just ended.
-    // session_state.session_stopped is set by session_stop_recording() and
-    // cleared by session_start_recording(), so it cleanly distinguishes
-    // "user stopped" from "fresh boot, never recorded".
-    if (session_stopped && !is_recording) {
+    // Decide what this crossing means.  Pure truth table lives in
+    // lap_timer_guard so it can be host-tested; this handler only
+    // performs the side effects.  Reject covers both "stop AFTER first
+    // crossing" and "stop DURING out lap"; the AutoStartSession branch
+    // also runs the storage_start_session rollback on SD failure.
+    CrossingDecision decision = classify_crossing(session_stopped,
+                                                  is_recording,
+                                                  s_first_crossing);
+
+    if (decision == CrossingDecision::Reject) {
         Serial.printf("[lap] crossing ignored (recording stopped)\n");
         return;
     }
 
-    if (s_first_crossing) {
+    if (decision == CrossingDecision::AutoStartSession
+        || decision == CrossingDecision::StartLapTimer) {
         s_first_crossing = false;
         s_lap_start_us = crossing_us;
         s_sector_start_us = crossing_us;
@@ -74,7 +71,7 @@ void handle_finish_crossing(int64_t crossing_us) {
         delta_reset_elapsed();
         Serial.printf("[lap] first crossing — timer started\n");
 
-        if (!is_recording) {
+        if (decision == CrossingDecision::AutoStartSession) {
             const char* tname = session_state.track_name[0] != '\0'
                                     ? session_state.track_name
                                     : "Unknown Track";
@@ -92,6 +89,8 @@ void handle_finish_crossing(int64_t crossing_us) {
         emit_lap_event(LAP_EVENT_FINISH, 0, crossing_us);
         return;
     }
+
+    // decision == CompleteLap — fall through to normal lap timing below.
 
     int64_t elapsed_us = crossing_us - s_lap_start_us;
     int32_t lap_time_ms = (int32_t)(elapsed_us / 1000);

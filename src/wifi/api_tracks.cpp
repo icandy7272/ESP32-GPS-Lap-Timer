@@ -43,6 +43,8 @@ void handle_api_tracks() {
 // ============================================================
 
 /// Parse a float from JSON body by key name. Returns 0.0 if not found.
+/// Prefer json_extract_double_checked() in new code — this variant
+/// cannot distinguish "missing" from "present and zero".
 static double json_extract_double(const char* json, const char* key) {
     char needle[64];
     snprintf(needle, sizeof(needle), "\"%s\"", key);
@@ -51,6 +53,85 @@ static double json_extract_double(const char* json, const char* key) {
     p = strchr(p + strlen(needle), ':');
     if (!p) return 0.0;
     return strtod(p + 1, nullptr);
+}
+
+/// Returns true iff `key` exists in `json` and its value parses as a double.
+static bool json_extract_double_checked(const char* json, const char* key,
+                                        double* out) {
+    char needle[64];
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    const char* p = strstr(json, needle);
+    if (!p) return false;
+    p = strchr(p + strlen(needle), ':');
+    if (!p) return false;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+    char* end = nullptr;
+    double val = strtod(p, &end);
+    if (end == p) return false;  // no digits parsed
+    *out = val;
+    return true;
+}
+
+static bool is_valid_lat(double deg) { return deg >= -90.0  && deg <= 90.0;  }
+static bool is_valid_lon(double deg) { return deg >= -180.0 && deg <= 180.0; }
+static bool is_valid_heading(double deg) { return deg >= 0.0 && deg < 360.0; }
+
+// Returns true and leaves `line` populated iff all 5 required fields of a
+// detection line are present in `json` and each coordinate falls within
+// the valid range.  Heading must be in [0, 360).  The detection-line
+// object in `json` is expected at the top level (no sector prefix); the
+// caller is responsible for slicing the right block when parsing the
+// sectors array.
+//
+// Passing nullptr for *_err_out suppresses the error message output.
+static bool extract_detection_line(const char* json,
+                                   const char* lat1_key,
+                                   const char* lon1_key,
+                                   const char* lat2_key,
+                                   const char* lon2_key,
+                                   const char* heading_key,
+                                   DetectionLine* line,
+                                   const char** err_out) {
+    double lat1 = 0, lon1 = 0, lat2 = 0, lon2 = 0, heading = 0;
+    if (!json_extract_double_checked(json, lat1_key, &lat1)) {
+        if (err_out) *err_out = "missing coordinate";
+        return false;
+    }
+    if (!json_extract_double_checked(json, lon1_key, &lon1)) {
+        if (err_out) *err_out = "missing coordinate";
+        return false;
+    }
+    if (!json_extract_double_checked(json, lat2_key, &lat2)) {
+        if (err_out) *err_out = "missing coordinate";
+        return false;
+    }
+    if (!json_extract_double_checked(json, lon2_key, &lon2)) {
+        if (err_out) *err_out = "missing coordinate";
+        return false;
+    }
+    if (!json_extract_double_checked(json, heading_key, &heading)) {
+        if (err_out) *err_out = "missing heading";
+        return false;
+    }
+    if (!is_valid_lat(lat1) || !is_valid_lat(lat2)) {
+        if (err_out) *err_out = "latitude out of range";
+        return false;
+    }
+    if (!is_valid_lon(lon1) || !is_valid_lon(lon2)) {
+        if (err_out) *err_out = "longitude out of range";
+        return false;
+    }
+    if (!is_valid_heading(heading)) {
+        if (err_out) *err_out = "heading out of range (0-360)";
+        return false;
+    }
+    line->lat1_deg = lat1;
+    line->lon1_deg = lon1;
+    line->lat2_deg = lat2;
+    line->lon2_deg = lon2;
+    line->valid_heading_deg = (float)heading;
+    return true;
 }
 
 /// Extract a string from JSON by key. Writes to out, returns false if missing.
@@ -111,16 +192,21 @@ void handle_api_tracks_post() {
         return;
     }
 
-    // Start/finish line (required)
-    track.start_finish.lat1_deg = json_extract_double(json, "sf_lat1");
-    track.start_finish.lon1_deg = json_extract_double(json, "sf_lon1");
-    track.start_finish.lat2_deg = json_extract_double(json, "sf_lat2");
-    track.start_finish.lon2_deg = json_extract_double(json, "sf_lon2");
-    track.start_finish.valid_heading_deg = (float)json_extract_double(json, "sf_heading");
-
-    // Validate: start/finish must have non-zero coords
-    if (track.start_finish.lat1_deg == 0.0 && track.start_finish.lon1_deg == 0.0) {
-        server.send(400, "application/json", "{\"error\":\"missing start/finish coordinates\"}");
+    // Start/finish line — all five fields required with valid ranges.
+    // Previously the handler accepted missing fields (json_extract_double
+    // silently returned 0.0), so a half-formed request could write a
+    // track whose geometry sat at (0,0) or had an invalid heading.
+    const char* sf_err = nullptr;
+    if (!extract_detection_line(json,
+                                "sf_lat1", "sf_lon1",
+                                "sf_lat2", "sf_lon2",
+                                "sf_heading",
+                                &track.start_finish,
+                                &sf_err)) {
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+                 "{\"error\":\"start/finish: %s\"}", sf_err);
+        server.send(400, "application/json", buf);
         return;
     }
     if (!track_creation_has_min_start_finish_separation(&track.start_finish, 1.0)) {
@@ -155,14 +241,16 @@ void handle_api_tracks_post() {
                     blk[blen] = '\0';
 
                     DetectionLine* sl = &track.sectors[sector_lines];
-                    sl->lat1_deg = json_extract_double(blk, "lat1");
-                    sl->lon1_deg = json_extract_double(blk, "lon1");
-                    sl->lat2_deg = json_extract_double(blk, "lat2");
-                    sl->lon2_deg = json_extract_double(blk, "lon2");
-                    sl->valid_heading_deg = (float)json_extract_double(blk, "heading");
-
-                    // Only count if coords are non-zero
-                    if (sl->lat1_deg != 0.0 || sl->lon1_deg != 0.0) {
+                    // Accept sector only when every required field is
+                    // present and in range.  Silently skipping malformed
+                    // sectors preserves the old "best-effort" behaviour
+                    // while still refusing to persist an invalid
+                    // geometry.
+                    if (extract_detection_line(blk,
+                                               "lat1", "lon1",
+                                               "lat2", "lon2",
+                                               "heading",
+                                               sl, nullptr)) {
                         sector_lines++;
                     }
                 }
@@ -299,13 +387,25 @@ void handle_api_tracks_delete() {
     }
 
     extern TrackDefinition active_track;
+
+    // Snapshot the bits of SessionState and active_track we need to make
+    // the is-this-the-active-track decision, all under session_mutex.
+    // Reading active_track.id lock-free races with any concurrent writer
+    // (e.g. a back-to-back select+delete), and lap_timer_task would
+    // otherwise see the memset below tear.
     bool is_rec = false;
+    char active_id_snapshot[sizeof(active_track.id)] = {0};
     if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         is_rec = session_state.is_recording;
+        memcpy(active_id_snapshot, active_track.id, sizeof(active_id_snapshot));
         xSemaphoreGive(session_mutex);
     }
+
+    TrackDefinition tmp_active_for_decision = {};
+    strlcpy(tmp_active_for_decision.id, active_id_snapshot,
+            sizeof(tmp_active_for_decision.id));
     TrackDeleteDecision delete_decision =
-        track_runtime_evaluate_delete(is_rec, &active_track, id);
+        track_runtime_evaluate_delete(is_rec, &tmp_active_for_decision, id);
 
     if (delete_decision == TRACK_DELETE_BLOCK_ACTIVE_RECORDING) {
         server.send(409, "application/json",
@@ -319,17 +419,22 @@ void handle_api_tracks_delete() {
         return;
     }
 
-    bool was_active = (strcmp(active_track.id, id) == 0);
+    bool was_active = (strcmp(active_id_snapshot, id) == 0);
 
     if (track_delete(id)) {
         if (was_active) {
-            memset(&active_track, 0, sizeof(TrackDefinition));
-            lap_timer_reset();
+            // Clear active_track under session_mutex and bump the version
+            // so lap_timer_task refreshes its shadow before processing
+            // the next GPS fix.  memset alone is a 120-byte non-atomic
+            // write and was the canonical cross-task tear hazard.
             if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                memset(&active_track, 0, sizeof(TrackDefinition));
+                lap_timer_active_track_changed_locked();
                 strlcpy(session_state.track_name, "No Track",
                         sizeof(session_state.track_name));
                 xSemaphoreGive(session_mutex);
             }
+            lap_timer_reset();
             track_runtime_note_track_cleared();
         }
         server.send(200, "application/json", "{\"ok\":true}");

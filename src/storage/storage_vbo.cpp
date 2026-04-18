@@ -5,6 +5,7 @@
 #include "time_format.h"
 
 #include <Arduino.h>
+#include <esp_timer.h>
 #include <string.h>
 
 extern SemaphoreHandle_t session_mutex;
@@ -76,6 +77,12 @@ void format_vbo_line(const VboEntry* entry, char* buf, int buf_len) {
     char time_buf[16];
     format_hhmmss_thousandths(time_buf, sizeof(time_buf), secs);
 
+    // Racelogic VBO spec is counter-intuitive: longitude is stored as
+    // arc-minutes with WEST positive and EAST negative.  Do not "fix"
+    // this sign into `lon_deg * 60.0` — it would break Circuit Tools
+    // import for every Eastern-hemisphere track.
+    // See docs/PRD.md §"VBO 坐标格式" and
+    // https://en.racelogic.support/VBOX_Automotive/Knowledge_Base/VBOX_Latitude_and_Longitude_Calculations
     double lat_amin = entry->lat_deg * 60.0;
     double lon_amin = entry->lon_deg * -60.0;
 
@@ -114,9 +121,21 @@ double timestamp_us_to_secs_since_midnight(int64_t timestamp_us) {
     return tod;
 }
 
-void write_laptiming_lines() {
-    char line[128];
+static const char* lap_status_label(uint8_t status) {
+    switch (status) {
+        case LAP_STATUS_TIMED:  return "TIMED";
+        case LAP_STATUS_SLOW:   return "SLOW";
+        case LAP_STATUS_SHORT:  return "SHORT";
+        case LAP_STATUS_NO_REF: return "NO_REF";
+        case LAP_STATUS_OUT:    return "OUT";
+        default:                return "UNKNOWN";
+    }
+}
 
+void write_laptiming_lines() {
+    char line[160];
+
+    // Same VBO sign convention as format_vbo_line: East longitude negative.
     double lat1 = s_session_track.start_finish.lat1_deg * 60.0;
     double lon1 = s_session_track.start_finish.lon1_deg * -60.0;
     double lat2 = s_session_track.start_finish.lat2_deg * 60.0;
@@ -135,6 +154,54 @@ void write_laptiming_lines() {
                  "Split  %+012.5f %+012.5f %+012.5f %+012.5f Split %d\r\n",
                  lat1, lon1, lat2, lon2, i + 1);
         s_vbo_file.write(line, strlen(line));
+    }
+
+    // Per-lap records.  The RaceLogic VBO spec allows arbitrary free-form
+    // lines in the [laptiming] section; Circuit Tools normally computes
+    // lap times from the detection-line geometry plus the GPS stream, so
+    // these lines are extra human-readable durability for tools that want
+    // explicit records.  Format: key=value pairs so future readers can
+    // parse without a full VBO grammar.
+    //
+    // Safe to read session_state.laps[] lock-free here: the only writer
+    // (handle_lap_finish in session.cpp) runs on the same task that called
+    // storage_end_session(), so no concurrent mutation is possible on
+    // this critical path.
+    int lap_count = session_state.lap_count;
+    if (lap_count > MAX_LAPS_PER_SESSION) {
+        lap_count = MAX_LAPS_PER_SESSION;
+    }
+    for (int i = 0; i < lap_count; i++) {
+        const LapRecord* lap = &session_state.laps[i];
+        int pos = snprintf(line, sizeof(line),
+                           "Lap %d lap_time_ms=%ld status=%s sectors=",
+                           lap->lap_number,
+                           (long)lap->lap_time_ms,
+                           lap_status_label(lap->status));
+        int sectors_to_write = lap->sector_count;
+        if (sectors_to_write > MAX_SECTORS) {
+            sectors_to_write = MAX_SECTORS;
+        }
+        for (int si = 0; si < sectors_to_write && pos < (int)sizeof(line) - 1; si++) {
+            int n = snprintf(line + pos, sizeof(line) - pos,
+                             "%s%ld",
+                             (si == 0) ? "" : ",",
+                             (long)lap->sector_times_ms[si]);
+            if (n <= 0) { break; }
+            pos += n;
+        }
+        if (pos < (int)sizeof(line) - 2) {
+            line[pos++] = '\r';
+            line[pos++] = '\n';
+            line[pos]   = '\0';
+        } else {
+            // Clamp: ensure CRLF terminator even if we ran out of room.
+            line[sizeof(line) - 3] = '\r';
+            line[sizeof(line) - 2] = '\n';
+            line[sizeof(line) - 1] = '\0';
+            pos = sizeof(line) - 1;
+        }
+        s_vbo_file.write(line, pos);
     }
 
     s_vbo_file.write("\r\n", 2);
@@ -174,6 +241,20 @@ void write_session_metadata_json(const char* vbo_path) {
     const char* vbo_name = strrchr(vbo_path, '/');
     vbo_name = vbo_name ? vbo_name + 1 : vbo_path;
 
+    // Session duration in seconds, derived from the monotonic epoch set
+    // at storage_start_session().  The previous implementation used
+    // millis()/1000 — that is uptime, not session length, and the two
+    // diverge the moment the device is used for anything before the
+    // first recording.  `esp_timer_get_time() - s_session_epoch_us` is
+    // microseconds since session start on the same clock source, so
+    // dividing by 1_000_000 gives integer seconds of actual recording.
+    int64_t session_duration_us = esp_timer_get_time() - s_session_epoch_us;
+    if (session_duration_us < 0) {
+        session_duration_us = 0;
+    }
+    unsigned long total_time_s =
+        (unsigned long)(session_duration_us / 1000000);
+
     char buf[384];
     int pos = snprintf(buf, sizeof(buf),
         "{\n"
@@ -189,7 +270,7 @@ void write_session_metadata_json(const char* vbo_path) {
         s_active_track_name,
         date_str, time_str,
         laps, (long)best_ms, best_num,
-        (unsigned long)(millis() / 1000),
+        total_time_s,
         vbo_name);
 
     if (pos <= 0 || pos >= (int)sizeof(buf)) {
