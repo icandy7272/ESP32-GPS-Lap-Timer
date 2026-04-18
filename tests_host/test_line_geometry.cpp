@@ -192,6 +192,29 @@ int main() {
                                       0.20),
           true);
 
+    // Excessive fraction documents pure-function behaviour: the helper
+    // does NOT clamp internally.  Callers whose tolerance can exceed
+    // the segment length (e.g. lap_timer has_crossed_line on a 1 m
+    // detection line with a 2 m walker tolerance) MUST clamp the
+    // fraction themselves, otherwise a 10-unit line with fraction 2.0
+    // becomes a 50-unit effective hitbox and re-opens the
+    // infinite-line false-positive regression.
+    //   Line [0,0]..[0,10] extended by fraction 2.0 on each end covers
+    //   y ∈ [-20, 30].  A path at y = 25 (15 past the original end)
+    //   must therefore intersect.
+    check("extended: fraction=2.0 extends 2x line length each end",
+          segments_intersect_extended(-1.0, 25.0, 1.0, 25.0,
+                                      0.0, 0.0, 0.0, 10.0,
+                                      2.0),
+          true);
+    //   Same geometry with fraction 1.0 (the cap lap_timer applies)
+    //   covers y ∈ [-10, 20] — y = 25 must be rejected.
+    check("extended: fraction=1.0 caps extension at one line length",
+          segments_intersect_extended(-1.0, 25.0, 1.0, 25.0,
+                                      0.0, 0.0, 0.0, 10.0,
+                                      1.0),
+          false);
+
     // 2026-04-18 WALK REGRESSION, recreated in this coordinate system.
     // Walker's recorded path came within 0.22 m of the P2 endpoint of a
     // 10.4 m line with the recorded coordinates showing no intersection.

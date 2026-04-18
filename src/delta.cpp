@@ -207,8 +207,13 @@ static ProjectionResult project_to_polyline(const GpsPoint* pt) {
     if (result.progress > 1.0) result.progress = 1.0;
 
     result.segment_idx = best_seg;
+    // s_last_seg_idx is a SEARCH-ORDER hint only and is safe to update
+    // every call.  s_last_progress, by contrast, feeds the CONTINUITY
+    // PENALTY that biases the match loop — advancing it on an off-track
+    // sample poisons the anchor and penalises the correct re-entry
+    // segment on the way back.  So it's deliberately not touched here;
+    // delta_calculate() updates it only after the on-track check.
     s_last_seg_idx     = best_seg;
-    s_last_progress    = result.progress;
 
     return result;
 }
@@ -359,7 +364,11 @@ int32_t delta_calculate(const GpsPoint* current) {
 
     // Off-track check with hysteresis
     if (check_off_track(proj.lateral_dist_m)) {
-        // Off-track: freeze delta at last known value
+        // Off-track: freeze delta at last known value.  Intentionally
+        // do NOT advance s_last_progress — the off-track projection is
+        // unreliable and feeding it into the continuity anchor would
+        // bias the re-entry match toward whatever stale polyline
+        // section the off-track samples landed on.
         return s_frozen_delta_ms;
     }
 
@@ -370,8 +379,15 @@ int32_t delta_calculate(const GpsPoint* current) {
     // in the first few seconds.
     int64_t current_elapsed_us = current->timestamp_us - s_lap_start_us;
     if (current_elapsed_us < 5000000 && proj.progress > 0.75) {
+        // Same anchor rationale as the off-track branch: do not advance
+        // s_last_progress on a rejected sample.
         return 0;
     }
+
+    // Accepted on-track sample: now safe to advance the continuity
+    // anchor.  project_to_polyline() intentionally leaves this update
+    // to the caller so every rejection path above freezes the anchor.
+    s_last_progress = proj.progress;
 
     // Look up reference time at the same progress
     int64_t ref_elapsed_us = ref_time_at_progress(proj.progress);

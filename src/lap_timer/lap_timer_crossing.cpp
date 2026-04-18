@@ -119,6 +119,18 @@ static bool has_crossed_line(const GpsPoint* prev, const GpsPoint* curr,
     double ext_fraction = 0.0;
     if (line_len_m > 0.1) {
         ext_fraction = CROSSING_END_TOLERANCE_M / line_len_m;
+        // Clamp the extension to at most one segment length per side.
+        // Without this, a short detection line (e.g. a 1 m start/finish,
+        // which track_creation_has_min_start_finish_separation permits)
+        // combined with walking-test's 2 m tolerance would extend each
+        // end by 2 m — effectively 5 m total, wider than the intended
+        // detection line, and re-introduces the infinite-line false
+        // positive the T10 work was meant to close.  Capping the
+        // fraction at 1.0 means a 1 m line becomes at most a 3 m
+        // effective hitbox: still accommodating, still bounded.
+        if (ext_fraction > 1.0) {
+            ext_fraction = 1.0;
+        }
     }
 
     if (!line_geometry::segments_intersect_extended(
