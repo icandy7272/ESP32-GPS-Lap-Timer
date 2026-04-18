@@ -117,10 +117,14 @@ static DirtyFlags compute_dirty(const SessionState& cur,
                                 sizeof(cur.track_name)) != 0);
             break;
         case DRIVING_OUT_LAP:
+            // Compare at the tenths place since draw_delta_out_lap now
+            // renders one decimal.  Coarser-than-display dirty checks
+            // would let the visible digit go stale between redraws
+            // while the underlying fix stream kept moving.
             d.delta = d.delta
                     || (cur.gps_fix_ok != prev.gps_fix_ok)
-                    || ((int)(cur.speed_kmh + 0.5f)
-                        != (int)(prev.speed_kmh + 0.5f));
+                    || ((int)(cur.speed_kmh * 10.0f + 0.5f)
+                        != (int)(prev.speed_kmh * 10.0f + 0.5f));
             break;
         case DRIVING_NORMAL:
             d.delta = d.delta
