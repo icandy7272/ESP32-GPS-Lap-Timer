@@ -27,6 +27,14 @@ struct RmcData {
     bool  valid;
 };
 
+struct GsaData {
+    int   fix_type;
+    float pdop;
+    float hdop;
+    float vdop;
+    bool  valid;
+};
+
 extern volatile int64_t pps_sync_us;
 extern portMUX_TYPE pps_mux;
 
@@ -37,6 +45,7 @@ extern int64_t FIX_INTERVAL_US;
 
 extern GgaData s_gga;
 extern RmcData s_rmc;
+extern GsaData s_gsa;
 extern bool    s_rtc_synced;
 extern int     s_fix_idx;
 extern int64_t s_last_pps_seen;

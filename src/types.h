@@ -21,6 +21,10 @@ typedef struct {
     int64_t  timestamp_us;    // microsecond timestamp (UART arrival from esp_timer_get_time(); BK-880 has no PPS)
     bool     pps_synced;      // always false — BK-880 provides no PPS output; field kept for VBO/schema compatibility
     bool     fix_3d;          // true if 3D fix (satellites >= 6)
+    float    hdop;            // horizontal dilution of precision from GSA; negative if unavailable
+    uint8_t  quality_score;   // 0~100 first-pass GPS confidence score
+    uint8_t  quality_tier;    // GpsQualityTier numeric value
+    bool     heading_reliable;// true when COG heading is usable for matching/display
 } GpsPoint;
 
 // --- Detection Line (start/finish line or sector split) ---

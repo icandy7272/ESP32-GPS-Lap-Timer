@@ -13,6 +13,7 @@ int64_t FIX_INTERVAL_US = 40000;
 
 GgaData s_gga = {};
 RmcData s_rmc = {};
+GsaData s_gsa = {};
 bool    s_rtc_synced = false;
 int     s_fix_idx = 0;
 int64_t s_last_pps_seen = 0;

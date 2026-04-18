@@ -1,4 +1,5 @@
 #include "gps/gps_internal.h"
+#include "gps/gps_filter.h"
 
 #include <esp_timer.h>
 
@@ -22,6 +23,15 @@ static int64_t compute_timestamp(int fix_index) {
 static GpsPoint assemble_point(const GgaData* gga, const RmcData* rmc) {
     bool pps_ok = is_pps_fresh();
 
+    GpsQualityInput quality_input = {};
+    quality_input.fix_quality = gga->fix_quality;
+    quality_input.fix_type = s_gsa.valid ? s_gsa.fix_type : 0;
+    quality_input.satellites = gga->satellites;
+    quality_input.speed_kmh = rmc->speed_kmh;
+    quality_input.hdop = s_gsa.valid ? s_gsa.hdop : -1.0f;
+    quality_input.pdop = s_gsa.valid ? s_gsa.pdop : -1.0f;
+    GpsQualityResult quality = gps_filter_assess_quality(quality_input);
+
     GpsPoint point = {};
     point.lat_deg      = gga->lat_deg;
     point.lon_deg      = gga->lon_deg;
@@ -30,9 +40,12 @@ static GpsPoint assemble_point(const GgaData* gga, const RmcData* rmc) {
     point.speed_kmh    = rmc->speed_kmh;
     point.heading_deg  = rmc->heading_deg;
 
-    int fq = gga->fix_quality;
-    point.fix_3d     = (fq == 1 || fq == 2 || fq == 4 || fq == 5);
-    point.pps_synced = pps_ok;
+    point.fix_3d           = quality.fix_3d;
+    point.pps_synced       = pps_ok;
+    point.hdop             = quality_input.hdop;
+    point.quality_score    = quality.quality_score;
+    point.quality_tier     = quality.quality_tier;
+    point.heading_reliable = quality.heading_reliable;
 
     if (pps_ok) {
         point.timestamp_us = compute_timestamp(s_fix_idx);
@@ -90,11 +103,15 @@ void gps_send_fix_if_ready() {
         int min_sats = (accepted_since_last > 0) ? min_sats_since_last : 0;
         int max_sats = (accepted_since_last > 0) ? max_sats_since_last : 0;
         Serial.printf("[gps] accepted=%u/s drops=%u sats=%d-%d low=%u "
-                      "fix_q=%d fix_3d=%d pps=%d lat=%.5f lon=%.5f\n",
+                      "fix_q=%d fix_3d=%d hdop=%.1f q=%u tier=%u head=%d "
+                      "pps=%d lat=%.5f lon=%.5f\n",
                       accepted_since_last, drops_since_last,
                       min_sats, max_sats, low_speed_since_last,
                       s_gga.fix_quality,
-                      point.fix_3d ? 1 : 0, point.pps_synced ? 1 : 0,
+                      point.fix_3d ? 1 : 0, point.hdop,
+                      point.quality_score, point.quality_tier,
+                      point.heading_reliable ? 1 : 0,
+                      point.pps_synced ? 1 : 0,
                       point.lat_deg, point.lon_deg);
         last_diag_ms = now_ms;
         accepted_since_last = 0;
