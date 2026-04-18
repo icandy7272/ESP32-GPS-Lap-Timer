@@ -70,6 +70,11 @@ state = {
     "started_at": time.time(),
 }
 
+# Shared reference to the open serial port so the bootstrap thread
+# below can write query commands.  Set inside serial_reader once the
+# port is open.
+_ser_ref: list = [None]
+
 
 def _locked_update(**kwargs):
     with state_lock:
@@ -110,9 +115,48 @@ _SATS_RE = re.compile(r"sats=(\d+)(?:-(\d+))?")
 _FIX3D_RE = re.compile(r"fix_3d=(\d)")
 _Q_RE = re.compile(r"q=(\d+)\s+tier=(\d+)")
 _HDOP_RE = re.compile(r"hdop=([0-9.\-]+)")
+_TRACK_FILE_RE = re.compile(r"^(track_\d+\.json)\s*$")
+_SERIAL_HEADER_RE = re.compile(r"^\[serial\] --- tracks/([^ ]+) ---")
+
+# Bootstrap state for the on-startup "cat tracks/<first>.json" query.
+# The parser holds a small JSON-capture state machine that activates
+# when it sees the serial-console header and deactivates once it has
+# consumed a complete top-level object (matched braces).  This keeps
+# the feature entirely client-side — no firmware changes needed.
+_track_discovery = {
+    "ls_reply_seen": False,
+    "first_track": None,
+    "requested_ls": False,
+    "requested_cat": False,
+    "in_json": False,
+    "brace_depth": 0,
+    "buf": [],
+}
 
 
-def parse_line(line):
+def _try_parse_track_json(raw_lines: list[str]) -> None:
+    try:
+        data = json.loads("\n".join(raw_lines))
+    except json.JSONDecodeError:
+        return
+    sf = data.get("start_finish") if isinstance(data, dict) else None
+    if not isinstance(sf, dict):
+        return
+    lat1, lon1 = sf.get("lat1"), sf.get("lon1")
+    lat2, lon2 = sf.get("lat2"), sf.get("lon2")
+    heading = sf.get("heading")
+    if lat1 is None or lon1 is None or lat2 is None or lon2 is None:
+        return
+    _locked_set_line("p1", float(lat1), float(lon1))
+    _locked_set_line("p2", float(lat2), float(lon2))
+    if heading is not None:
+        _locked_set_line("heading", float(heading))
+    print(f"[live_map] track loaded from serial: "
+          f"P1=({lat1}, {lon1}) P2=({lat2}, {lon2}) heading={heading}")
+
+
+def parse_line(line: str) -> None:
+    # Boot-log track geometry (arrives once, at boot).
     m = _P1_RE.search(line)
     if m:
         _locked_set_line("p1", float(m.group(1)), float(m.group(2)))
@@ -122,6 +166,33 @@ def parse_line(line):
     m = _HEAD_RE.search(line)
     if m:
         _locked_set_line("heading", float(m.group(1)))
+
+    # Serial-console "ls tracks" response: capture first track filename.
+    if _track_discovery["requested_ls"] and not _track_discovery["ls_reply_seen"]:
+        m = _TRACK_FILE_RE.match(line.strip())
+        if m and _track_discovery["first_track"] is None:
+            _track_discovery["first_track"] = m.group(1)
+        if line.startswith("[serial] count="):
+            _track_discovery["ls_reply_seen"] = True
+
+    # Serial-console "cat tracks/XXX.json" response: buffer between the
+    # header line and the matching closing brace, then parse as JSON.
+    if _SERIAL_HEADER_RE.match(line):
+        _track_discovery["in_json"] = True
+        _track_discovery["brace_depth"] = 0
+        _track_discovery["buf"] = []
+        return
+    if _track_discovery["in_json"]:
+        _track_discovery["buf"].append(line)
+        _track_discovery["brace_depth"] += line.count("{") - line.count("}")
+        # A complete top-level object is one that reaches depth 0 after
+        # at least one opening brace has been seen.
+        joined = "\n".join(_track_discovery["buf"])
+        if "{" in joined and _track_discovery["brace_depth"] == 0:
+            _try_parse_track_json(_track_discovery["buf"])
+            _track_discovery["in_json"] = False
+            _track_discovery["buf"] = []
+        return
 
     if line.startswith("[gps]"):
         m = _LATLON_RE.search(line)
@@ -150,7 +221,7 @@ def parse_line(line):
         _locked_append_event(line)
 
 
-def serial_reader():
+def serial_reader() -> None:
     ser = serial.Serial()
     ser.port = PORT
     ser.baudrate = BAUD
@@ -162,6 +233,7 @@ def serial_reader():
     except Exception as exc:
         print(f"[live_map] cannot open {PORT}: {exc}")
         sys.exit(2)
+    _ser_ref[0] = ser
 
     buf = b""
     while True:
@@ -182,161 +254,177 @@ def serial_reader():
                 parse_line(line)
 
 
+def track_query_bootstrap() -> None:
+    """Once the port is open and the board is past boot, ask the serial
+    console for the first track.json so the map has geometry even if the
+    script was started after boot (the boot log has already scrolled by).
+    """
+    # Wait for port to be ready.
+    for _ in range(60):
+        if _ser_ref[0] is not None:
+            break
+        time.sleep(0.1)
+    ser = _ser_ref[0]
+    if ser is None:
+        return
+
+    # Give the board a moment in case it's mid-boot.  A 4 s wait lets
+    # a cold boot finish its GPS timeout and reach runtime where the
+    # serial console is actually processing input.
+    time.sleep(4)
+
+    def send(cmd: str) -> None:
+        try:
+            ser.write((cmd + "\r\n").encode("utf-8"))
+            ser.flush()
+        except Exception as exc:
+            print(f"[live_map] serial write failed: {exc}")
+
+    send("ls tracks")
+    _track_discovery["requested_ls"] = True
+
+    # Poll up to 5 s for the ls reply (reader thread populates first_track).
+    for _ in range(50):
+        if _track_discovery["ls_reply_seen"]:
+            break
+        time.sleep(0.1)
+
+    track_name = _track_discovery["first_track"]
+    if track_name is None:
+        print("[live_map] no track_*.json found on SD — geometry unavailable "
+              "until the board reboots and prints the [track] boot log.")
+        return
+
+    send(f"cat tracks/{track_name}")
+    _track_discovery["requested_cat"] = True
+    print(f"[live_map] requested tracks/{track_name} over serial")
+
+
 HTML = r"""<!doctype html>
 <html><head>
 <meta charset="utf-8"/>
 <title>KartGPS Live Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
- html,body{margin:0;height:100%;background:#0a0a0a;color:#ddd;font:13px/1.4 ui-monospace,monospace}
- #map{display:block;width:100vw;height:100vh}
- #info{position:absolute;top:8px;left:8px;padding:8px 12px;background:rgba(0,0,0,.75);border:1px solid #333;min-width:220px}
- #events{position:absolute;bottom:8px;left:8px;right:8px;max-height:160px;overflow-y:auto;padding:6px 10px;background:rgba(0,0,0,.75);border:1px solid #333;font-size:11px}
+ html,body{margin:0;height:100%;background:#0a0a0a;color:#eee;font:13px/1.4 ui-monospace,monospace}
+ #map{position:absolute;inset:0}
+ #info{position:absolute;top:8px;left:8px;z-index:1000;padding:8px 12px;background:rgba(0,0,0,.78);border:1px solid #444;min-width:240px;border-radius:6px}
+ #events{position:absolute;bottom:8px;left:8px;right:8px;max-height:150px;overflow-y:auto;padding:6px 10px;background:rgba(0,0,0,.78);border:1px solid #444;font-size:11px;z-index:1000;border-radius:6px}
  #events .lap{color:#5f5}
  #events .xing{color:#fc5}
  #events .session{color:#ff5}
  .metric{color:#aaa}
  .bold{color:#fff;font-weight:bold}
+ .leaflet-container{background:#0a0a0a}
 </style></head><body>
-<canvas id="map"></canvas>
-<div id="info"></div>
+<div id="map"></div>
+<div id="info">Waiting for serial data…</div>
 <div id="events"></div>
 <script>
-const canvas=document.getElementById('map');
-const ctx=canvas.getContext('2d');
-const info=document.getElementById('info');
-const events=document.getElementById('events');
+const map=L.map('map',{zoomControl:true,attributionControl:true}).setView([0,0],2);
+const osm=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  maxZoom:23,maxNativeZoom:19,attribution:'© OpenStreetMap',
+});
+const sat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{
+  maxZoom:23,maxNativeZoom:19,attribution:'Esri World Imagery',
+});
+sat.addTo(map);
+L.control.layers({Satellite:sat,Street:osm},null,{position:'topright'}).addTo(map);
 
-function resize(){canvas.width=innerWidth;canvas.height=innerHeight}
-addEventListener('resize',resize);resize();
-
-const M_LAT=111000;
-const m_lon=(lat)=>111000*Math.cos(lat*Math.PI/180);
 const END_TOL_M=2.0;
 
-let state={};
+let lineLayer=null, extLayer=null, headingLayer=null;
+let trailLayer=L.polyline([],{color:'#59f',weight:2,opacity:0.85}).addTo(map);
+let currentLayer=null;
+let fittedOnce=false;
+
+const info=document.getElementById('info');
+const events=document.getElementById('events');
 
 async function poll(){
   try{
     const r=await fetch('/state');
-    state=await r.json();
-    draw();
-  }catch(e){/* ignore */}
+    const state=await r.json();
+    update(state);
+  }catch(e){/*ignore*/}
   setTimeout(poll,300);
 }
 
-function proj(lat,lon,c,s){
-  const dx=(lon-c[1])*m_lon(c[0]);
-  const dy=(lat-c[0])*M_LAT;
-  return [canvas.width/2+dx*s,canvas.height/2-dy*s];
+function renderLine(line){
+  if(!(line&&line.p1&&line.p2))return;
+  const p1=line.p1, p2=line.p2;
+  if(lineLayer){lineLayer.setLatLngs([p1,p2]);}
+  else{
+    lineLayer=L.polyline([p1,p2],{color:'#f33',weight:5,opacity:0.95}).addTo(map);
+    L.circleMarker(p1,{radius:5,color:'#f33',fillColor:'#f33',fillOpacity:1})
+      .bindTooltip('P1',{permanent:true,direction:'top',offset:[0,-6]}).addTo(map);
+    L.circleMarker(p2,{radius:5,color:'#f33',fillColor:'#f33',fillOpacity:1})
+      .bindTooltip('P2',{permanent:true,direction:'top',offset:[0,-6]}).addTo(map);
+  }
+  // extension
+  const dLat=p2[0]-p1[0], dLon=p2[1]-p1[1];
+  const lineLenM=metersBetween(p1,p2);
+  const frac=lineLenM>0?Math.min(END_TOL_M/lineLenM,1.0):0;
+  const e1=[p1[0]-dLat*frac,p1[1]-dLon*frac];
+  const e2=[p2[0]+dLat*frac,p2[1]+dLon*frac];
+  if(extLayer){extLayer.setLatLngs([e1,e2]);}
+  else{
+    extLayer=L.polyline([e1,e2],{color:'#ff0',weight:3,opacity:0.75,dashArray:'8,6'}).addTo(map);
+  }
+  // heading arrow
+  if(typeof line.heading==='number'){
+    const midLat=(p1[0]+p2[0])/2, midLon=(p1[1]+p2[1])/2;
+    const rad=line.heading*Math.PI/180;
+    const arrowM=Math.max(3,lineLenM*0.5);
+    // rough projection: 1 deg lat ≈ 111 km, 1 deg lon ≈ 111km * cos(lat)
+    const dyDeg=Math.cos(rad)*arrowM/111000;
+    const dxDeg=Math.sin(rad)*arrowM/(111000*Math.cos(midLat*Math.PI/180));
+    const tip=[midLat+dyDeg,midLon+dxDeg];
+    if(headingLayer){headingLayer.setLatLngs([[midLat,midLon],tip]);}
+    else{
+      headingLayer=L.polyline([[midLat,midLon],tip],{color:'#5f5',weight:3,opacity:0.9}).addTo(map);
+      L.circleMarker(tip,{radius:4,color:'#5f5',fillColor:'#5f5',fillOpacity:1}).addTo(map);
+    }
+  }
 }
 
-function draw(){
-  ctx.fillStyle='#0a0a0a';
-  ctx.fillRect(0,0,canvas.width,canvas.height);
+function metersBetween(a,b){
+  const R=6371000;
+  const la1=a[0]*Math.PI/180, la2=b[0]*Math.PI/180;
+  const dla=(b[0]-a[0])*Math.PI/180, dlo=(b[1]-a[1])*Math.PI/180;
+  const h=Math.sin(dla/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dlo/2)**2;
+  return R*2*Math.atan2(Math.sqrt(h),Math.sqrt(1-h));
+}
 
+function fitInitial(line,cur){
+  const pts=[];
+  if(line&&line.p1)pts.push(line.p1);
+  if(line&&line.p2)pts.push(line.p2);
+  if(cur)pts.push(cur);
+  if(pts.length===0)return false;
+  if(pts.length===1)map.setView(pts[0],21);
+  else map.fitBounds(L.latLngBounds(pts).pad(0.6),{maxZoom:21});
+  return true;
+}
+
+function update(state){
   const line=state.line||{};
   const cur=state.current;
-  if(!cur && !(line.p1&&line.p2)){
-    info.innerHTML='<span class="metric">Waiting for serial data…<br>Need either a [track] boot line or a [gps] fix.</span>';
-    return;
-  }
-
-  let cLat,cLon;
-  if(line.p1&&line.p2){cLat=(line.p1[0]+line.p2[0])/2;cLon=(line.p1[1]+line.p2[1])/2}
-  else{cLat=cur[0];cLon=cur[1]}
-  const center=[cLat,cLon];
-
-  // auto scale
-  let pts=[];
-  if(line.p1)pts.push(line.p1);
-  if(line.p2)pts.push(line.p2);
-  if(cur)pts.push(cur);
   const trail=state.trail||[];
-  for(const p of trail.slice(-80))pts.push(p);
-  let max_m=8;
-  for(const p of pts){
-    const dx=(p[1]-cLon)*m_lon(cLat);
-    const dy=(p[0]-cLat)*M_LAT;
-    max_m=Math.max(max_m,Math.abs(dx),Math.abs(dy));
-  }
-  const margin=1.35;
-  const s=Math.min(canvas.width,canvas.height)/(2*max_m*margin);
 
-  // grid every 5 m
-  const gm=5, gp=gm*s;
-  ctx.strokeStyle='#1a1a1a';ctx.lineWidth=1;
-  for(let x=canvas.width/2%gp;x<canvas.width;x+=gp){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,canvas.height);ctx.stroke();}
-  for(let y=canvas.height/2%gp;y<canvas.height;y+=gp){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(canvas.width,y);ctx.stroke();}
+  renderLine(line);
+  trailLayer.setLatLngs(trail);
 
-  // line + extension
-  if(line.p1&&line.p2){
-    const dLat=line.p2[0]-line.p1[0], dLon=line.p2[1]-line.p1[1];
-    const dm_lat=dLat*M_LAT, dm_lon=dLon*m_lon(cLat);
-    const linelen=Math.hypot(dm_lat,dm_lon);
-    const frac=Math.min(END_TOL_M/linelen,1.0);
-    const e1=[line.p1[0]-dLat*frac,line.p1[1]-dLon*frac];
-    const e2=[line.p2[0]+dLat*frac,line.p2[1]+dLon*frac];
-    const sE1=proj(e1[0],e1[1],center,s);
-    const sE2=proj(e2[0],e2[1],center,s);
-    ctx.strokeStyle='#ff0';ctx.setLineDash([8,6]);ctx.lineWidth=2;
-    ctx.beginPath();ctx.moveTo(...sE1);ctx.lineTo(...sE2);ctx.stroke();
-    ctx.setLineDash([]);
-
-    const sP1=proj(line.p1[0],line.p1[1],center,s);
-    const sP2=proj(line.p2[0],line.p2[1],center,s);
-    ctx.strokeStyle='#f44';ctx.lineWidth=5;
-    ctx.beginPath();ctx.moveTo(...sP1);ctx.lineTo(...sP2);ctx.stroke();
-    ctx.fillStyle='#f44';
-    [sP1,sP2].forEach(pt=>{ctx.beginPath();ctx.arc(pt[0],pt[1],5,0,Math.PI*2);ctx.fill();});
-    ctx.fillStyle='#fff';ctx.font='12px ui-monospace';
-    ctx.fillText('P1',sP1[0]+7,sP1[1]-7);
-    ctx.fillText('P2',sP2[0]+7,sP2[1]-7);
-    ctx.fillText(linelen.toFixed(2)+' m',(sP1[0]+sP2[0])/2+8,(sP1[1]+sP2[1])/2+14);
-
-    // valid heading
-    if(typeof line.heading==='number'){
-      const midLat=(line.p1[0]+line.p2[0])/2, midLon=(line.p1[1]+line.p2[1])/2;
-      const sMid=proj(midLat,midLon,center,s);
-      const rad=line.heading*Math.PI/180;
-      const arr_m=Math.max(3,linelen*0.4);
-      const ax=sMid[0]+Math.sin(rad)*arr_m*s;
-      const ay=sMid[1]-Math.cos(rad)*arr_m*s;
-      ctx.strokeStyle='#5f5';ctx.lineWidth=2;
-      ctx.beginPath();ctx.moveTo(...sMid);ctx.lineTo(ax,ay);ctx.stroke();
-      // arrowhead
-      const back=(x,y,dx,dy)=>{ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x-dx,y-dy);ctx.stroke();};
-      const bx=-Math.sin(rad-0.4)*6, by=Math.cos(rad-0.4)*6;
-      const cx=-Math.sin(rad+0.4)*6, cy=Math.cos(rad+0.4)*6;
-      back(ax,ay,bx,by);back(ax,ay,cx,cy);
-    }
-  }
-
-  // trail
-  if(trail.length>1){
-    ctx.strokeStyle='#59f';ctx.lineWidth=1.5;
-    ctx.beginPath();
-    for(let i=0;i<trail.length;i++){
-      const pt=proj(trail[i][0],trail[i][1],center,s);
-      if(i===0)ctx.moveTo(...pt);else ctx.lineTo(...pt);
-    }
-    ctx.stroke();
-  }
-
-  // current pos
   if(cur){
-    const pt=proj(cur[0],cur[1],center,s);
-    ctx.fillStyle='#5f5';ctx.beginPath();ctx.arc(pt[0],pt[1],9,0,Math.PI*2);ctx.fill();
-    ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();
-
-    // distance to line midpoint
-    if(line.p1&&line.p2){
-      const midLat=(line.p1[0]+line.p2[0])/2, midLon=(line.p1[1]+line.p2[1])/2;
-      const dx=(cur[1]-midLon)*m_lon(midLat);
-      const dy=(cur[0]-midLat)*M_LAT;
-      const d=Math.hypot(dx,dy);
-      ctx.fillStyle='#fff';ctx.font='11px ui-monospace';
-      ctx.fillText('d='+d.toFixed(1)+'m',pt[0]+12,pt[1]+4);
+    if(currentLayer){currentLayer.setLatLng(cur);}
+    else{
+      currentLayer=L.circleMarker(cur,{radius:9,color:'#fff',weight:2,fillColor:'#5f5',fillOpacity:1}).addTo(map);
     }
+  }
+
+  if(!fittedOnce){
+    if(fitInitial(line,cur))fittedOnce=true;
   }
 
   // info panel
@@ -346,15 +434,20 @@ function draw(){
   const tierNames=['Poor','Fair','Good','Excellent'];
   const tname=tierNames[state.quality_tier]||'?';
   const hdop=(state.hdop===-1||state.hdop==null)?'—':state.hdop.toFixed(1);
+  let distStr='—';
+  if(cur&&line.p1&&line.p2){
+    const mid=[(line.p1[0]+line.p2[0])/2,(line.p1[1]+line.p2[1])/2];
+    distStr=metersBetween(cur,mid).toFixed(1)+' m';
+  }
+  const lineLen=line.p1&&line.p2?metersBetween(line.p1,line.p2).toFixed(2)+' m':'—';
   info.innerHTML=`
+    <div class="bold" style="font-size:14px;margin-bottom:4px">KartGPS Live</div>
     <span class="bold">lat</span> ${lat}<br>
     <span class="bold">lon</span> ${lon}<br>
     <span class="metric">sats</span> ${state.sats||0} · ${fix}<br>
-    <span class="metric">quality</span> ${state.quality_score||0} <span class="metric">(${tname})</span><br>
-    <span class="metric">hdop</span> ${hdop}<br>
-    <span class="metric">trail</span> ${trail.length} pts<br>
-    <span class="metric">line</span> ${line.p1&&line.p2?'loaded':'—'}<br>
-    <span class="metric">scale</span> ~${(50/s).toFixed(1)} m / 50 px
+    <span class="metric">quality</span> ${state.quality_score||0} <span class="metric">(${tname})</span> · <span class="metric">hdop</span> ${hdop}<br>
+    <span class="metric">line</span> ${lineLen} · <span class="metric">dist</span> ${distStr}<br>
+    <span class="metric">trail</span> ${trail.length} pts
   `;
 
   // events
@@ -365,7 +458,7 @@ function draw(){
     if(e.text.includes('[lap]'))cls='lap';
     else if(e.text.includes('[xing]'))cls='xing';
     else if(e.text.includes('[session]'))cls='session';
-    const ago=Math.round(now-e.t);
+    const ago=Math.max(0,Math.round(now-e.t));
     return `<div><span style="color:#666">[${ago}s]</span> <span class="${cls}">${e.text.replace(/</g,'&lt;')}</span></div>`;
   }).join('');
 }
@@ -402,8 +495,9 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
-def main():
+def main() -> None:
     threading.Thread(target=serial_reader, daemon=True).start()
+    threading.Thread(target=track_query_bootstrap, daemon=True).start()
     print(f"[live_map] serial: {PORT} @ {BAUD}")
     print(f"[live_map] open http://{LISTEN[0]}:{LISTEN[1]}")
     try:
