@@ -28,7 +28,12 @@ namespace lap_timer_internal {
 #ifdef WALKING_TEST_MODE
 static constexpr float HEADING_WINDOW = 180.0f;   // effectively disables direction gate
 static constexpr double ARM_DISTANCE_M = 3.0;     // ~few walking steps arms the line
-static constexpr int32_t MIN_LAP_TIME_MS = 5000;  // accept >=5 s laps
+// 2026-04-18 bumped 5s → 8s.  Under walking-test thresholds a loop
+// around the line's immediate neighbourhood can complete in <6 s; the
+// 8 s floor (≈ 10 m at a brisk walk) costs us almost no real laps and
+// keeps residual sub-lap noise out of the session even when segment
+// intersection already handles the obvious false triggers.
+static constexpr int32_t MIN_LAP_TIME_MS = 8000;
 #else
 static constexpr float HEADING_WINDOW = 60.0f;
 static constexpr double ARM_DISTANCE_M = 10.0;
