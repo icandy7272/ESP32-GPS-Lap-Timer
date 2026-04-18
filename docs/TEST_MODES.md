@@ -35,8 +35,8 @@
 |------|-----|------|
 | `HEADING_WINDOW` | 180° | GPS 步行速度下航向抖动大，等于禁用方向门 |
 | `ARM_DISTANCE_M` | 3 m | 走几步即可武装 |
-| `MIN_LAP_TIME_MS` (lap_timer) | 5000 ms | 步行绕圈 5-15 秒可以算有效 |
-| `LAP_SHORT_THRESHOLD_MS` (session) | 5000 ms | 两层阈值同步切换，避免 split-brain |
+| `MIN_LAP_TIME_MS` (lap_timer) | 8000 ms | 步行绕一小圈 8-15 秒可以算有效（2026-04-18 从 5000 ms 上调，避免在起终线附近的折返触发假短圈） |
+| `LAP_SHORT_THRESHOLD_MS` (session) | 8000 ms | 两层阈值同步切换，避免 split-brain |
 | `MIN_CROSSING_SPEED_KMH` | 1.0 km/h | 保留 |
 
 ⚠️ **不要把此模式的固件带到真赛道。** 方向门禁用后，反向过线（折返）也会

@@ -1,5 +1,7 @@
 #include "lap_timer_internal.h"
 
+#include "../line_geometry.h"
+
 #include <Arduino.h>
 #include <math.h>
 
@@ -99,10 +101,18 @@ static int64_t compute_crossing_time(const DetectionLine* line) {
 
 static bool has_crossed_line(const GpsPoint* prev, const GpsPoint* curr,
                              const DetectionLine* line) {
-    double s_prev = side_of_line(prev->lat_deg, prev->lon_deg, line);
-    double s_curr = side_of_line(curr->lat_deg, curr->lon_deg, line);
-
-    if ((s_prev > 0.0) == (s_curr > 0.0)) {
+    // Require an actual segment-segment intersection, not just a sign
+    // flip on the infinite line through P1-P2.  The old
+    // side_of_line-only check treated walks along the line's EXTENSION
+    // as crossings, which produced the 63.6s → 4.7s false lap pair
+    // observed on the 2026-04-18 walking test.
+    // See src/line_geometry.cpp for the pure geometry predicate and
+    // tests_host/test_line_geometry.cpp for the regression coverage.
+    if (!line_geometry::segments_intersect(
+            prev->lat_deg, prev->lon_deg,
+            curr->lat_deg, curr->lon_deg,
+            line->lat1_deg, line->lon1_deg,
+            line->lat2_deg, line->lon2_deg)) {
         return false;
     }
 

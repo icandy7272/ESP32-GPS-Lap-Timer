@@ -109,10 +109,22 @@ static void draw_delta_idle(const SessionState& st) {
     s_delta_sprite.drawString(track_str, SCREEN_W / 2, ROW3_Y, 4);
 }
 
+// Display-level dead-zone for raw GPS speed.  u-blox M9N reports
+// ~0.2–1 km/h of drift when the device is stationary, which the
+// OUT_LAP view would otherwise render as a twitching "1 km/h".  The
+// crossing detector already rejects speeds below MIN_CROSSING_SPEED_KMH
+// (lap_timer_internal.h = 1.0 km/h); we mirror that threshold here so
+// the on-screen number matches "you are not moving".  The VBO log
+// still records the raw value for post-analysis.
+static constexpr float DISPLAY_MIN_SPEED_KMH = 1.0f;
+
 static void draw_delta_out_lap(const SessionState& st) {
     // Big speed (km/h) + unit label + "OUT LAP" indicator.
-    int speed = (int)(st.speed_kmh + 0.5f);
-    if (speed < 0) speed = 0;
+    int speed = 0;
+    if (st.speed_kmh >= DISPLAY_MIN_SPEED_KMH) {
+        speed = (int)(st.speed_kmh + 0.5f);
+        if (speed < 0) speed = 0;
+    }
     char num_buf[8];
     snprintf(num_buf, sizeof(num_buf), "%d", speed);
     s_delta_sprite.drawString(num_buf, SCREEN_W / 2, ROW1_Y, 7);
