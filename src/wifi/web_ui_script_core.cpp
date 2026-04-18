@@ -18,7 +18,7 @@ var POINT_SAMPLE_HIGH_SPREAD_M=1.2;
 var POINT_SAMPLE_MEDIUM_SPREAD_M=2.5;
 var SHORT_LINE_MIN_LENGTH_M=5;
 var SHORT_LINE_SPREAD_FACTOR=4;
-var REPEATABILITY_CHECK_ENABLED=false;
+var REPEATABILITY_CHECK_ENABLED=true;
 var _pointSampling=null;
 var _trackDraft={
   gps:{fix:false,satellites:0,lat:0,lon:0},
