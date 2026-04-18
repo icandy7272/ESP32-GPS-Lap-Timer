@@ -119,14 +119,20 @@ static void draw_delta_idle(const SessionState& st) {
 static constexpr float DISPLAY_MIN_SPEED_KMH = 1.0f;
 
 static void draw_delta_out_lap(const SessionState& st) {
-    // Big speed (km/h) + unit label + "OUT LAP" indicator.
-    int speed = 0;
+    // Big speed (km/h to one decimal) + unit label + "OUT LAP" indicator.
+    // Showing the tenths place is the cheapest perceived-refresh win
+    // available at walking pace: the integer-only readout previously
+    // only ticked on whole-km changes, so 0-5 km/h felt stuck even
+    // while new GPS fixes were arriving every 40 ms.  Font 7 is
+    // 7-segment numeric and does render '.', which is confirmed by
+    // the existing format_lap_time output that also uses it.
+    float speed = 0.0f;
     if (st.speed_kmh >= DISPLAY_MIN_SPEED_KMH) {
-        speed = (int)(st.speed_kmh + 0.5f);
-        if (speed < 0) speed = 0;
+        speed = st.speed_kmh;
+        if (speed < 0.0f) speed = 0.0f;
     }
     char num_buf[8];
-    snprintf(num_buf, sizeof(num_buf), "%d", speed);
+    snprintf(num_buf, sizeof(num_buf), "%.1f", speed);
     s_delta_sprite.drawString(num_buf, SCREEN_W / 2, ROW1_Y, 7);
     s_delta_sprite.drawString("km/h", SCREEN_W / 2, ROW2_Y, 4);
     s_delta_sprite.drawString("OUT LAP", SCREEN_W / 2, ROW3_Y, 4);
