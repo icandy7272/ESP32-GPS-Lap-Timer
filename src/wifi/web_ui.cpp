@@ -29,5 +29,16 @@ void handle_root() {
         return;
     }
 
+    // Dashboard HTML is regenerated on every firmware flash and embeds
+    // both UI markup and inline JS feature flags (e.g.
+    // REPEATABILITY_CHECK_ENABLED).  Without explicit cache-bust
+    // headers, mobile browsers happily keep serving a stale copy of
+    // the whole page — so a user who had the dashboard open across a
+    // firmware update would silently keep seeing the old feature set.
+    // The triple header covers the cache directives that various
+    // browsers actually honour.
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "0");
     server.send(200, "text/html", build_dashboard_html());
 }
