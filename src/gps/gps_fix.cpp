@@ -2,6 +2,12 @@
 
 #include <esp_timer.h>
 
+namespace {
+
+static constexpr float GPS_DIAG_LOW_SPEED_KMH = 5.0f;
+
+}
+
 static bool is_pps_fresh() {
     int64_t now = esp_timer_get_time();
     int64_t last_pps = pps_read();
@@ -59,24 +65,43 @@ void gps_send_fix_if_ready() {
     }
 
     static uint32_t last_diag_ms = 0;
-    static uint16_t fixes_since_last = 0;
+    static uint16_t accepted_since_last = 0;
     static uint16_t drops_since_last = 0;
-    fixes_since_last++;
+    static uint16_t low_speed_since_last = 0;
+    static int min_sats_since_last = 99;
+    static int max_sats_since_last = 0;
+
+    accepted_since_last++;
     if (queue_was_full) {
         drops_since_last++;
+    }
+    if (point.speed_kmh < GPS_DIAG_LOW_SPEED_KMH) {
+        low_speed_since_last++;
+    }
+    if (point.satellites < min_sats_since_last) {
+        min_sats_since_last = point.satellites;
+    }
+    if (point.satellites > max_sats_since_last) {
+        max_sats_since_last = point.satellites;
     }
 
     uint32_t now_ms = millis();
     if (now_ms - last_diag_ms >= 1000) {
-        Serial.printf("[gps] %u/s drops=%u fix_q=%d sats=%d "
-                      "fix_3d=%d pps=%d lat=%.5f lon=%.5f\n",
-                      fixes_since_last, drops_since_last,
-                      s_gga.fix_quality, s_gga.satellites,
+        int min_sats = (accepted_since_last > 0) ? min_sats_since_last : 0;
+        int max_sats = (accepted_since_last > 0) ? max_sats_since_last : 0;
+        Serial.printf("[gps] accepted=%u/s drops=%u sats=%d-%d low=%u "
+                      "fix_q=%d fix_3d=%d pps=%d lat=%.5f lon=%.5f\n",
+                      accepted_since_last, drops_since_last,
+                      min_sats, max_sats, low_speed_since_last,
+                      s_gga.fix_quality,
                       point.fix_3d ? 1 : 0, point.pps_synced ? 1 : 0,
                       point.lat_deg, point.lon_deg);
         last_diag_ms = now_ms;
-        fixes_since_last = 0;
+        accepted_since_last = 0;
         drops_since_last = 0;
+        low_speed_since_last = 0;
+        min_sats_since_last = 99;
+        max_sats_since_last = 0;
     }
 
     s_fix_idx++;
