@@ -68,6 +68,7 @@ void gps_send_fix_if_ready() {
     }
 
     GpsPoint point = assemble_point(&s_gga, &s_rmc);
+    gps_filter_process(point);
 
     bool queue_was_full = false;
     if (xQueueSend(s_gps_queue, &point, 0) == errQUEUE_FULL) {

@@ -1,8 +1,32 @@
 #include "gps/gps_filter.h"
 
+#if defined(ARDUINO)
+#include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
+#endif
+
+#if defined(ARDUINO)
+static portMUX_TYPE s_filter_mux = portMUX_INITIALIZER_UNLOCKED;
+#define GPS_FILTER_LOCK() portENTER_CRITICAL(&s_filter_mux)
+#define GPS_FILTER_UNLOCK() portEXIT_CRITICAL(&s_filter_mux)
+#else
+#define GPS_FILTER_LOCK()
+#define GPS_FILTER_UNLOCK()
+#endif
+
 namespace {
 
 static constexpr float HEADING_RELIABLE_SPEED_KMH = 5.0f;
+
+struct GpsFilterState {
+    bool display_valid;
+    bool match_valid;
+    GpsPoint display_fix;
+    GpsPoint match_fix;
+    GpsFilterDiagnostics diagnostics;
+};
+
+static GpsFilterState s_state = {};
 
 static int clamp_score(int value) {
     if (value < 0) {
@@ -82,6 +106,15 @@ static uint8_t tier_for_score(uint8_t score) {
     return GPS_QUALITY_TIER_POOR;
 }
 
+static void store_filter_outputs(const GpsFilterProcessResult& result) {
+    GPS_FILTER_LOCK();
+    s_state.display_valid = result.display_valid;
+    s_state.match_valid = result.match_valid;
+    s_state.display_fix = result.display_fix;
+    s_state.match_fix = result.match_fix;
+    GPS_FILTER_UNLOCK();
+}
+
 }  // namespace
 
 GpsQualityResult gps_filter_assess_quality(const GpsQualityInput& input) {
@@ -106,4 +139,57 @@ GpsQualityResult gps_filter_assess_quality(const GpsQualityInput& input) {
                            && input.speed_kmh >= HEADING_RELIABLE_SPEED_KMH
                            && result.quality_score >= 50;
     return result;
+}
+
+void gps_filter_reset() {
+    GPS_FILTER_LOCK();
+    s_state = {};
+    GPS_FILTER_UNLOCK();
+}
+
+GpsFilterProcessResult gps_filter_process(const GpsPoint& raw_fix) {
+    GpsFilterProcessResult result = {};
+    result.raw_fix = raw_fix;
+    result.display_fix = raw_fix;
+    result.match_fix = raw_fix;
+    result.display_valid = true;
+    result.match_valid = true;
+
+    store_filter_outputs(result);
+    return result;
+}
+
+bool gps_filter_get_display_fix(GpsPoint* out) {
+    if (out == nullptr) {
+        return false;
+    }
+
+    GPS_FILTER_LOCK();
+    bool valid = s_state.display_valid;
+    if (valid) {
+        *out = s_state.display_fix;
+    }
+    GPS_FILTER_UNLOCK();
+    return valid;
+}
+
+bool gps_filter_get_match_fix(GpsPoint* out) {
+    if (out == nullptr) {
+        return false;
+    }
+
+    GPS_FILTER_LOCK();
+    bool valid = s_state.match_valid;
+    if (valid) {
+        *out = s_state.match_fix;
+    }
+    GPS_FILTER_UNLOCK();
+    return valid;
+}
+
+GpsFilterDiagnostics gps_filter_get_diagnostics() {
+    GPS_FILTER_LOCK();
+    GpsFilterDiagnostics diagnostics = s_state.diagnostics;
+    GPS_FILTER_UNLOCK();
+    return diagnostics;
 }
