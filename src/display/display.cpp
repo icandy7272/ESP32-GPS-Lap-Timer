@@ -12,6 +12,7 @@
 #include "types.h"
 #include "pins.h"
 #include "boot_sequence.h"
+#include "gps/gps_filter.h"
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
@@ -73,6 +74,19 @@ static bool snapshot_session_state() {
     memcpy(&s_cached_state, &session_state, sizeof(SessionState));
     xSemaphoreGive(s_session_mtx);
     return true;
+}
+
+static void apply_display_gps_fix() {
+    GpsPoint display_fix = {};
+    if (!gps_filter_get_display_fix(&display_fix)) {
+        return;
+    }
+
+    s_cached_state.gps_fix_ok = display_fix.fix_3d;
+    s_cached_state.gps_satellites = display_fix.satellites;
+    s_cached_state.gps_lat_deg = display_fix.lat_deg;
+    s_cached_state.gps_lon_deg = display_fix.lon_deg;
+    s_cached_state.speed_kmh = display_fix.speed_kmh;
 }
 
 // ============================================================
@@ -417,6 +431,7 @@ void display_task(void* param) {
         if (!snapshot_session_state()) {
             continue;
         }
+        apply_display_gps_fix();
 
         // 2. Handle button input, determine if screen changed
         bool screen_changed = handle_button_events() || first_frame;

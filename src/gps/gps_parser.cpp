@@ -7,6 +7,7 @@
 
 enum class NmeaType {
     GGA,
+    GSA,
     RMC,
     UNKNOWN
 };
@@ -152,9 +153,29 @@ static RmcData parse_rmc(char* body) {
     return result;
 }
 
+static GsaData parse_gsa(char* body) {
+    GsaData result = {};
+    char* fields[MAX_FIELDS] = {};
+    int count = nmea_split_fields(body, fields, MAX_FIELDS);
+
+    if (count < 17) {
+        return result;
+    }
+
+    result.fix_type = atoi(fields[1]);
+    result.pdop = (fields[14][0] != '\0') ? static_cast<float>(atof(fields[14])) : -1.0f;
+    result.hdop = (fields[15][0] != '\0') ? static_cast<float>(atof(fields[15])) : -1.0f;
+    result.vdop = (fields[16][0] != '\0') ? static_cast<float>(atof(fields[16])) : -1.0f;
+    result.valid = true;
+    return result;
+}
+
 static NmeaType detect_sentence_type(const char* sentence) {
     if (strncmp(sentence + 3, "GGA", 3) == 0) {
         return NmeaType::GGA;
+    }
+    if (strncmp(sentence + 3, "GSA", 3) == 0) {
+        return NmeaType::GSA;
     }
     if (strncmp(sentence + 3, "RMC", 3) == 0) {
         return NmeaType::RMC;
@@ -198,6 +219,8 @@ static void process_sentence(char* sentence, int len) {
 
     if (type == NmeaType::GGA) {
         s_gga = parse_gga(body);
+    } else if (type == NmeaType::GSA) {
+        s_gsa = parse_gsa(body);
     } else {
         s_rmc = parse_rmc(body);
         gps_send_fix_if_ready();
