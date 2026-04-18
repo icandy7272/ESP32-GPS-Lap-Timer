@@ -244,6 +244,107 @@ int main() {
               false);
     }
 
+    // --- project_to_line: basic midpoint ---
+    //
+    // A unit horizontal line from (0,0) to (1,0). A point at (0.5, 0.25)
+    // should project to u = 0.5 (midpoint), signed_d = 0.25 (above the
+    // line). cross(CD=(1,0), CP=(0.5, 0.25)) = 1*0.25 - 0*0.5 = 0.25.
+    {
+        double u = -999.0, signed_d = -999.0;
+        line_geometry::project_to_line(0.5, 0.25,
+                                       0.0, 0.0, 1.0, 0.0,
+                                       &u, &signed_d);
+        check("project: midpoint u",
+              std::fabs(u - 0.5) < 1e-12, true);
+        check("project: midpoint signed_d",
+              std::fabs(signed_d - 0.25) < 1e-12, true);
+    }
+
+    // --- project_to_line: endpoints ---
+    // P at C gives u = 0; P at D gives u = 1; both signed_d = 0.
+    {
+        double u = 0.0, signed_d = 0.0;
+        line_geometry::project_to_line(0.0, 0.0,
+                                       0.0, 0.0, 1.0, 0.0,
+                                       &u, &signed_d);
+        check("project: P at C gives u=0",
+              std::fabs(u) < 1e-12 && std::fabs(signed_d) < 1e-12, true);
+
+        line_geometry::project_to_line(1.0, 0.0,
+                                       0.0, 0.0, 1.0, 0.0,
+                                       &u, &signed_d);
+        check("project: P at D gives u=1",
+              std::fabs(u - 1.0) < 1e-12 && std::fabs(signed_d) < 1e-12,
+              true);
+    }
+
+    // --- project_to_line: extension past D ---
+    // 2m past D on a 10m line ⇒ u = 1.2.  Firmware expects the overshoot
+    // (u-1)*line_len to recover the physical 2m endpoint overshoot.
+    {
+        double u = 0.0, signed_d = 0.0;
+        line_geometry::project_to_line(12.0, 0.0,
+                                       0.0, 0.0, 10.0, 0.0,
+                                       &u, &signed_d);
+        check("project: 2m past D on 10m line → u=1.2",
+              std::fabs(u - 1.2) < 1e-12, true);
+        check("project: u=1.2 overshoot recovers 2m",
+              std::fabs((u - 1.0) * 10.0 - 2.0) < 1e-12, true);
+    }
+
+    // --- project_to_line: extension past C ---
+    // 3m past C on a 10m line ⇒ u = -0.3.
+    {
+        double u = 0.0, signed_d = 0.0;
+        line_geometry::project_to_line(-3.0, 0.0,
+                                       0.0, 0.0, 10.0, 0.0,
+                                       &u, &signed_d);
+        check("project: 3m past C → u=-0.3",
+              std::fabs(u - (-0.3)) < 1e-12, true);
+        check("project: u=-0.3 overshoot recovers 3m",
+              std::fabs((-u) * 10.0 - 3.0) < 1e-12, true);
+    }
+
+    // --- project_to_line: sign convention ---
+    // A vertical line C=(0,0) to D=(0,1).  A point at (1, 0.5) is to the
+    // right when facing C→D.  cross(CD=(0,1), CP=(1,0.5)) = 0*0.5 - 1*1
+    // = -1.  So signed_d = -1 for the right side (convention check).
+    {
+        double u = 0.0, signed_d = 0.0;
+        line_geometry::project_to_line(1.0, 0.5,
+                                       0.0, 0.0, 0.0, 1.0,
+                                       &u, &signed_d);
+        check("project: right of C→D gives negative signed_d",
+              signed_d < 0.0, true);
+        check("project: vertical line midpoint u=0.5",
+              std::fabs(u - 0.5) < 1e-12, true);
+    }
+
+    // --- project_to_line: degenerate zero-length line ---
+    {
+        double u = 42.0, signed_d = 42.0;
+        line_geometry::project_to_line(5.0, 5.0,
+                                       1.0, 1.0, 1.0, 1.0,
+                                       &u, &signed_d);
+        check("project: degenerate line → u=0, signed_d=0",
+              u == 0.0 && signed_d == 0.0, true);
+    }
+
+    // --- project_to_line: 2026-04-18 0.22m past P2 scenario ---
+    // 10m vertical line from (0,0) to (0,10).  Walker crosses the
+    // line's extension at y = 10.22.  Expect u = 1.022 and overshoot
+    // = 0.22 m.
+    {
+        double u = 0.0, signed_d = 0.0;
+        line_geometry::project_to_line(0.0, 10.22,
+                                       0.0, 0.0, 0.0, 10.0,
+                                       &u, &signed_d);
+        check("project: 2026-04-18 scenario — u ≈ 1.022",
+              std::fabs(u - 1.022) < 1e-9, true);
+        check("project: 2026-04-18 scenario — overshoot ≈ 0.22m",
+              std::fabs((u - 1.0) * 10.0 - 0.22) < 1e-9, true);
+    }
+
     if (fail_count == 0) {
         printf("test_line_geometry: OK\n");
         return 0;

@@ -1,5 +1,7 @@
 #include "line_geometry.h"
 
+#include <math.h>
+
 namespace line_geometry {
 
 namespace {
@@ -60,6 +62,31 @@ bool segments_intersect_extended(double ax, double ay,
     return segments_intersect(ax, ay, bx, by,
                               cx_ext, cy_ext,
                               dx_ext, dy_ext);
+}
+
+void project_to_line(double px, double py,
+                     double cx, double cy,
+                     double dx, double dy,
+                     double* out_u,
+                     double* out_signed_d) {
+    const double cdx = dx - cx;
+    const double cdy = dy - cy;
+    const double cd_len_sq = cdx * cdx + cdy * cdy;
+    if (cd_len_sq <= 0.0) {
+        if (out_u)        *out_u = 0.0;
+        if (out_signed_d) *out_signed_d = 0.0;
+        return;
+    }
+    const double cpx = px - cx;
+    const double cpy = py - cy;
+    // u = dot(CP, CD) / |CD|^2 — parameter along the line (unitless).
+    const double u = (cpx * cdx + cpy * cdy) / cd_len_sq;
+    // signed_d = cross(CD, CP) / |CD| — perpendicular distance with
+    // sign, in the same units as the inputs.
+    const double cd_len = sqrt(cd_len_sq);
+    const double signed_d = cross2d(cdx, cdy, cpx, cpy) / cd_len;
+    if (out_u)        *out_u = u;
+    if (out_signed_d) *out_signed_d = signed_d;
 }
 
 }  // namespace line_geometry

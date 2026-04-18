@@ -49,6 +49,7 @@ BAUD = int(sys.argv[2]) if len(sys.argv) > 2 else 115200
 LISTEN = ("127.0.0.1", 8080)
 TRAIL_MAX = 600
 EVENT_MAX = 60
+CANDIDATE_MAX = 40
 
 # Tolerance displayed on the map.  Keep in sync with the walking-test
 # value of CROSSING_END_TOLERANCE_M in lap_timer_internal.h so the
@@ -67,6 +68,11 @@ state = {
     "hdop": -1.0,
     "trail": [],
     "events": [],
+    # Structured [xing] `candidate` events parsed from the firmware.  Used
+    # by the Crossing Candidates panel and the Finish-Line Relative View
+    # (View B) so the UI can show PASS/REJECT + reason without re-running
+    # the geometry.
+    "candidates": [],
     "started_at": time.time(),
     # Live state of the firmware's [draft] track-marking machine,
     # populated by parse_line() as serial events arrive.  Consumed by
@@ -140,6 +146,63 @@ _DRAFT_P2_RE = re.compile(
 _DRAFT_SAVED_RE = re.compile(
     r"\[draft\] saved: (\S+) \(([^)]+)\) length=([0-9.\-]+)m heading=([0-9.\-]+)"
 )
+# Spread + confidence tier appended to `[draft] p1/p2` lines by the
+# 5-second sampling path.  Optional so old firmwares that do not emit
+# these fields still yield a valid P1/P2 parse.
+_DRAFT_SPREAD_RE = re.compile(
+    r"spread=([0-9.\-]+)m\s+tier=(\w+)(?:\s+samples=(\d+))?"
+)
+# Structured crossing candidate — emitted by lap_timer_crossing.cpp on
+# every side-flip of a detection line (both PASS and REJECT cases).  See
+# emit_candidate_event() in that file for the field contract.
+_XING_CANDIDATE_RE = re.compile(
+    r"\[xing\] L(\d+) candidate u=(-?[\d.]+) overshoot=(-?[\d.]+) "
+    r"hdiff=([+-]?[\d.]+) result=(\w+) reason=(\w+)"
+)
+
+
+def _extract_draft_spread(line: str):
+    """Pull spread_m / tier / samples from a `[draft] p1/p2` line.
+
+    Returns (spread_m | None, tier | None, samples | None).  Absent
+    fields are tolerated so an older firmware that does not emit them
+    still works.
+    """
+    m = _DRAFT_SPREAD_RE.search(line)
+    if not m:
+        return (None, None, None)
+    spread = float(m.group(1))
+    tier = m.group(2)
+    samples = int(m.group(3)) if m.group(3) else None
+    return (spread, tier, samples)
+
+
+def _parse_xing_candidate(line: str) -> None:
+    """Extract one `[xing] ... candidate ...` line into structured state.
+
+    The firmware emits one candidate per side-flip of the infinite line
+    through P1-P2 — whether or not the crossing is accepted.  The live
+    UI renders these on the Finish-Line Relative View (View B) and in a
+    Crossing Candidates panel so the operator can see exactly why the
+    latest pass / miss was classified the way it was.
+    """
+    m = _XING_CANDIDATE_RE.search(line)
+    if not m:
+        return
+    ev = {
+        "t": time.time(),
+        "line_idx": int(m.group(1)),
+        "u": float(m.group(2)),
+        "overshoot": float(m.group(3)),
+        "hdiff": float(m.group(4)),
+        "result": m.group(5),
+        "reason": m.group(6),
+    }
+    with state_lock:
+        cands = state["candidates"]
+        cands.append(ev)
+        if len(cands) > CANDIDATE_MAX:
+            del cands[: len(cands) - CANDIDATE_MAX]
 
 
 def _parse_draft_event(line: str) -> None:
@@ -157,17 +220,27 @@ def _parse_draft_event(line: str) -> None:
         return
     m = _DRAFT_P1_RE.search(line)
     if m:
+        spread, tier, samples = _extract_draft_spread(line)
         with state_lock:
             state["draft"]["p1"] = [float(m.group(1)), float(m.group(2))]
-            state["draft"]["status"] = "P1 marked. Walk to P2."
+            state["draft"]["p1_spread_m"] = spread
+            state["draft"]["p1_tier"] = tier
+            state["draft"]["p1_samples"] = samples
+            tier_note = f" ({tier}, ±{spread:.2f}m)" if spread is not None else ""
+            state["draft"]["status"] = f"P1 marked{tier_note}. Walk to P2."
         return
     m = _DRAFT_P2_RE.search(line)
     if m:
+        spread, tier, samples = _extract_draft_spread(line)
         with state_lock:
             state["draft"]["p2"] = [float(m.group(1)), float(m.group(2))]
             if m.group(3):
                 state["draft"]["heading"] = float(m.group(3))
-            state["draft"]["status"] = "P2 marked. Review and Save."
+            state["draft"]["p2_spread_m"] = spread
+            state["draft"]["p2_tier"] = tier
+            state["draft"]["p2_samples"] = samples
+            tier_note = f" ({tier}, ±{spread:.2f}m)" if spread is not None else ""
+            state["draft"]["status"] = f"P2 marked{tier_note}. Review and Save."
         return
     m = _DRAFT_SAVED_RE.search(line)
     if m:
@@ -306,6 +379,11 @@ def parse_line(line: str) -> None:
     if ("[lap]" in line) or ("[session]" in line) or ("[xing]" in line):
         _locked_append_event(line)
 
+    # Structured candidate events — extracted into a typed list so the
+    # UI does not need to re-parse the free-text event log.
+    if "[xing]" in line and "candidate" in line:
+        _parse_xing_candidate(line)
+
     # Firmware [draft] events — keep the browser panel in sync with
     # the on-device state machine instead of polling `track status`.
     if line.startswith("[draft]"):
@@ -402,7 +480,18 @@ HTML = r"""<!doctype html>
  html,body{margin:0;height:100%;background:#0a0a0a;color:#eee;font:13px/1.4 ui-monospace,monospace}
  #map{position:absolute;inset:0}
  #info{position:absolute;top:8px;left:8px;z-index:1000;padding:8px 12px;background:rgba(0,0,0,.78);border:1px solid #444;min-width:240px;border-radius:6px}
- #events{position:absolute;bottom:8px;left:8px;right:8px;max-height:150px;overflow-y:auto;padding:6px 10px;background:rgba(0,0,0,.78);border:1px solid #444;font-size:11px;z-index:1000;border-radius:6px}
+ #events{position:absolute;bottom:8px;left:8px;right:400px;max-height:150px;overflow-y:auto;padding:6px 10px;background:rgba(0,0,0,.78);border:1px solid #444;font-size:11px;z-index:1000;border-radius:6px}
+ #viewb{position:absolute;bottom:8px;right:8px;z-index:1000;padding:10px 12px;background:rgba(0,0,0,.85);border:1px solid #555;border-radius:6px;width:380px}
+ #viewb h3{margin:0 0 6px 0;font-size:12px;color:#9cf;font-weight:normal}
+ #viewb canvas{display:block;background:#0a0f14;border:1px solid #333;border-radius:3px}
+ #viewb .legend{font-size:10px;color:#999;margin-top:4px;display:flex;gap:12px}
+ #viewb .legend span.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:3px;vertical-align:middle}
+ #cands{position:absolute;top:200px;right:8px;z-index:1000;padding:8px 10px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px;width:260px;max-height:260px;overflow-y:auto;font-size:11px}
+ #cands h3{margin:0 0 6px 0;font-size:12px;color:#9cf;font-weight:normal}
+ #cands .row{margin:2px 0;padding:2px 4px;border-left:3px solid #444}
+ #cands .pass{border-left-color:#5f5;color:#cfc}
+ #cands .reject{border-left-color:#f55;color:#fcc}
+ #cands .reason{color:#aaa;font-size:10px}
  #draft{position:absolute;top:8px;right:8px;z-index:1000;padding:10px 12px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px;min-width:260px}
  #draft h3{margin:0 0 8px 0;font-size:13px;color:#fc5;font-weight:normal}
  #draft label{display:block;font-size:11px;color:#aaa;margin-top:6px}
@@ -445,6 +534,19 @@ HTML = r"""<!doctype html>
   </div>
   <div id="draft-status">idle — press Start Draft</div>
 </div>
+<div id="cands">
+  <h3>Crossing Candidates</h3>
+  <div id="cand-list">(none yet — walk toward the line)</div>
+</div>
+<div id="viewb">
+  <h3>Finish-Line Relative View (View B)</h3>
+  <canvas id="viewb-canvas" width="356" height="180"></canvas>
+  <div class="legend">
+    <span><span class="sw" style="background:#1f4">segment u∈[0,1]</span></span>
+    <span><span class="sw" style="background:#552">extension</span></span>
+    <span><span class="sw" style="background:#222;border:1px solid #555">outside</span></span>
+  </div>
+</div>
 <div id="events"></div>
 <script>
 const map=L.map('map',{zoomControl:true,attributionControl:true}).setView([0,0],2);
@@ -463,6 +565,7 @@ let lineLayer=null, extLayer=null, headingLayer=null;
 let trailLayer=L.polyline([],{color:'#59f',weight:2,opacity:0.85}).addTo(map);
 let currentLayer=null;
 let draftLineLayer=null, draftP1Layer=null, draftP2Layer=null;
+let draftP1CircleLayer=null, draftP2CircleLayer=null;
 let fittedOnce=false;
 
 const info=document.getElementById('info');
@@ -590,6 +693,174 @@ function update(state){
 
   // draft
   renderDraft(state.draft||{});
+
+  // crossing candidates list + View B
+  renderCandidates(state.candidates||[]);
+  renderViewB(line, trail, cur, state.candidates||[]);
+}
+
+// ---- Finish-line-local projection (client-side, pure math). ----
+//
+// Returns [u, signed_d_m] where:
+//   u = 0 at P1, 1 at P2, outside [0,1] means the extension.
+//   signed_d_m = perpendicular metres from the infinite line through P1-P2.
+// Uses a flat-earth projection with the line midpoint as the latitude
+// reference, fine for detection-line-scale distances.
+function projectToLineM(pll, p1, p2){
+  const latRef=(p1[0]+p2[0])/2;
+  const cosLat=Math.cos(latRef*Math.PI/180);
+  const toM=(ll)=>[(ll[1]-p1[1])*111000*cosLat, (ll[0]-p1[0])*111000];
+  const P=toM(pll), D=toM(p2);
+  const cdx=D[0], cdy=D[1];
+  const len2=cdx*cdx+cdy*cdy;
+  if(len2<=0) return [0,0];
+  const cpx=P[0], cpy=P[1];
+  const u=(cpx*cdx+cpy*cdy)/len2;
+  const cdLen=Math.sqrt(len2);
+  const signedDm=(cdx*cpy-cdy*cpx)/cdLen;
+  return [u, signedDm];
+}
+
+function renderCandidates(cands){
+  const el=document.getElementById('cand-list');
+  if(!cands||cands.length===0){
+    el.textContent='(none yet — walk toward the line)';
+    return;
+  }
+  const now=Date.now()/1000;
+  // Newest first, capped at 12 rows.
+  const rows=cands.slice(-12).reverse().map(c=>{
+    const ago=Math.max(0,Math.round(now-c.t));
+    const cls=c.result==='PASS'?'pass':'reject';
+    const uStr=c.u.toFixed(3);
+    const ovStr=c.overshoot.toFixed(2);
+    const hdStr=(c.hdiff>=0?'+':'')+c.hdiff.toFixed(0);
+    return `<div class="row ${cls}">`+
+      `[${ago}s] L${c.line_idx} ${c.result} `+
+      `<span class="reason">u=${uStr} over=${ovStr}m hd=${hdStr}° `+
+      `${c.reason}</span></div>`;
+  });
+  el.innerHTML=rows.join('');
+}
+
+function renderViewB(line, trail, cur, cands){
+  const canvas=document.getElementById('viewb-canvas');
+  const ctx=canvas.getContext('2d');
+  const W=canvas.width, H=canvas.height;
+  ctx.clearRect(0,0,W,H);
+  if(!(line&&line.p1&&line.p2)){
+    ctx.fillStyle='#666';
+    ctx.font='11px monospace';
+    ctx.fillText('waiting for line geometry...', 10, H/2);
+    return;
+  }
+
+  // X axis: u ∈ [-0.5, 1.5]; Y axis: signed_d ∈ [-3 m, +3 m].
+  const uMin=-0.5, uMax=1.5;
+  const dMin=-3.0, dMax=3.0;
+  const margin={left:36, right:10, top:10, bottom:22};
+  const plotW=W-margin.left-margin.right;
+  const plotH=H-margin.top-margin.bottom;
+  const xAt=(u)=>margin.left+((u-uMin)/(uMax-uMin))*plotW;
+  const yAt=(d)=>margin.top+((dMax-d)/(dMax-dMin))*plotH;
+
+  // Background bands: segment (green), extension (amber), outside (default).
+  const lineLenM=metersBetween(line.p1,line.p2);
+  const extFrac=lineLenM>0?Math.min(END_TOL_M/lineLenM,1.0):0;
+  // outside (full canvas, subtle)
+  ctx.fillStyle='#1a1f26';
+  ctx.fillRect(margin.left,margin.top,plotW,plotH);
+  // extension band
+  ctx.fillStyle='#3a2a10';
+  ctx.fillRect(xAt(-extFrac),margin.top,xAt(1+extFrac)-xAt(-extFrac),plotH);
+  // segment band
+  ctx.fillStyle='#0e2a14';
+  ctx.fillRect(xAt(0),margin.top,xAt(1)-xAt(0),plotH);
+
+  // The line itself at signed_d = 0.
+  ctx.strokeStyle='#f55';
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  ctx.moveTo(xAt(0),yAt(0));
+  ctx.lineTo(xAt(1),yAt(0));
+  ctx.stroke();
+  // Extension (dashed yellow).
+  ctx.setLineDash([4,3]);
+  ctx.strokeStyle='#fd5';
+  ctx.beginPath();
+  ctx.moveTo(xAt(-extFrac),yAt(0));
+  ctx.lineTo(xAt(0),yAt(0));
+  ctx.moveTo(xAt(1),yAt(0));
+  ctx.lineTo(xAt(1+extFrac),yAt(0));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Axes ticks and labels.
+  ctx.strokeStyle='#444';
+  ctx.fillStyle='#888';
+  ctx.font='10px monospace';
+  ctx.lineWidth=1;
+  // vertical gridlines at u = -0.5, 0, 0.5, 1, 1.5
+  [-0.5,0,0.5,1.0,1.5].forEach(u=>{
+    ctx.beginPath();
+    ctx.moveTo(xAt(u),margin.top);
+    ctx.lineTo(xAt(u),margin.top+plotH);
+    ctx.stroke();
+    ctx.fillText(u.toFixed(1),xAt(u)-8,H-margin.bottom+12);
+  });
+  // horizontal gridlines at d = -2, -1, 0, 1, 2 m
+  [-2,-1,0,1,2].forEach(d=>{
+    ctx.beginPath();
+    ctx.moveTo(margin.left,yAt(d));
+    ctx.lineTo(margin.left+plotW,yAt(d));
+    ctx.stroke();
+    ctx.fillText(d+'m',2,yAt(d)+3);
+  });
+
+  // Trail points projected into (u, signed_d).
+  const keep=Math.min(trail.length,200);
+  for(let i=trail.length-keep;i<trail.length;i++){
+    const p=trail[i];
+    const [u,d]=projectToLineM(p,line.p1,line.p2);
+    if(u<uMin||u>uMax||d<dMin||d>dMax) continue;
+    // Older points fade to blue-grey, newer stay bright blue.
+    const age=(trail.length-1-i)/keep;
+    const alpha=1-age*0.8;
+    ctx.fillStyle=`rgba(100,160,255,${alpha.toFixed(2)})`;
+    ctx.beginPath();
+    ctx.arc(xAt(u),yAt(d),2,0,Math.PI*2);
+    ctx.fill();
+  }
+
+  // Candidate crossings: markers on the y=0 line at their u value.
+  (cands||[]).slice(-10).forEach(c=>{
+    const x=xAt(c.u);
+    if(c.u<uMin||c.u>uMax) return;
+    ctx.fillStyle=c.result==='PASS'?'#5f5':'#f55';
+    ctx.beginPath();
+    ctx.arc(x,yAt(0),4,0,Math.PI*2);
+    ctx.fill();
+  });
+
+  // Current GPS point.
+  if(cur){
+    const [u,d]=projectToLineM(cur,line.p1,line.p2);
+    if(u>=uMin&&u<=uMax&&d>=dMin&&d<=dMax){
+      ctx.strokeStyle='#fff';
+      ctx.fillStyle='#5f5';
+      ctx.lineWidth=2;
+      ctx.beginPath();
+      ctx.arc(xAt(u),yAt(d),5,0,Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+
+  // Title line with line length + tolerance info.
+  ctx.fillStyle='#888';
+  ctx.font='10px monospace';
+  ctx.fillText(`line=${lineLenM.toFixed(2)}m  tol=${END_TOL_M}m  ext=±${extFrac.toFixed(2)}u`,
+               margin.left+2,margin.top+10);
 }
 
 function renderDraft(d){
@@ -605,16 +876,50 @@ function renderDraft(d){
   document.getElementById('p2-ind').className=hasP2?'on':'';
   document.getElementById('draft-status').textContent=d.status||(active?'…':'idle — press Start Draft');
 
-  // draft markers + line (orange, distinct from saved red)
+  // draft markers + line (orange, distinct from saved red).
+  // Optional error circle (radius = firmware-reported sample spread in
+  // metres) visualizes the confidence tier straight on the map: if the
+  // circle at P1 overlaps the circle at P2, the line is too short for
+  // this GPS accuracy to mark reliably.
+  function tierColor(t){ return t==='High'?'#5f5':t==='Medium'?'#fd5':'#f55'; }
+
   if(hasP1){
     if(!draftP1Layer)draftP1Layer=L.circleMarker(d.p1,{radius:6,color:'#fa0',fillColor:'#fa0',fillOpacity:1}).bindTooltip('P1 draft',{permanent:false}).addTo(map);
     else draftP1Layer.setLatLng(d.p1);
-  }else if(draftP1Layer){map.removeLayer(draftP1Layer);draftP1Layer=null;}
+    if(typeof d.p1_spread_m==='number'&&d.p1_spread_m>0){
+      const tip=`P1 ±${d.p1_spread_m.toFixed(2)} m (${d.p1_tier||'?'})`;
+      if(!draftP1CircleLayer){
+        draftP1CircleLayer=L.circle(d.p1,{radius:d.p1_spread_m,color:tierColor(d.p1_tier),fillOpacity:0.08,weight:1,dashArray:'3,3'}).bindTooltip(tip).addTo(map);
+      }else{
+        draftP1CircleLayer.setLatLng(d.p1);
+        draftP1CircleLayer.setRadius(d.p1_spread_m);
+        draftP1CircleLayer.setStyle({color:tierColor(d.p1_tier)});
+        draftP1CircleLayer.setTooltipContent(tip);
+      }
+    }else if(draftP1CircleLayer){map.removeLayer(draftP1CircleLayer);draftP1CircleLayer=null;}
+  }else{
+    if(draftP1Layer){map.removeLayer(draftP1Layer);draftP1Layer=null;}
+    if(draftP1CircleLayer){map.removeLayer(draftP1CircleLayer);draftP1CircleLayer=null;}
+  }
 
   if(hasP2){
     if(!draftP2Layer)draftP2Layer=L.circleMarker(d.p2,{radius:6,color:'#fa0',fillColor:'#fa0',fillOpacity:1}).bindTooltip('P2 draft',{permanent:false}).addTo(map);
     else draftP2Layer.setLatLng(d.p2);
-  }else if(draftP2Layer){map.removeLayer(draftP2Layer);draftP2Layer=null;}
+    if(typeof d.p2_spread_m==='number'&&d.p2_spread_m>0){
+      const tip=`P2 ±${d.p2_spread_m.toFixed(2)} m (${d.p2_tier||'?'})`;
+      if(!draftP2CircleLayer){
+        draftP2CircleLayer=L.circle(d.p2,{radius:d.p2_spread_m,color:tierColor(d.p2_tier),fillOpacity:0.08,weight:1,dashArray:'3,3'}).bindTooltip(tip).addTo(map);
+      }else{
+        draftP2CircleLayer.setLatLng(d.p2);
+        draftP2CircleLayer.setRadius(d.p2_spread_m);
+        draftP2CircleLayer.setStyle({color:tierColor(d.p2_tier)});
+        draftP2CircleLayer.setTooltipContent(tip);
+      }
+    }else if(draftP2CircleLayer){map.removeLayer(draftP2CircleLayer);draftP2CircleLayer=null;}
+  }else{
+    if(draftP2Layer){map.removeLayer(draftP2Layer);draftP2Layer=null;}
+    if(draftP2CircleLayer){map.removeLayer(draftP2CircleLayer);draftP2CircleLayer=null;}
+  }
 
   if(hasP1&&hasP2){
     if(!draftLineLayer)draftLineLayer=L.polyline([d.p1,d.p2],{color:'#fa0',weight:4,opacity:0.9,dashArray:'4,4'}).addTo(map);

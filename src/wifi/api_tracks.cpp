@@ -209,9 +209,13 @@ void handle_api_tracks_post() {
         server.send(400, "application/json", buf);
         return;
     }
-    if (!track_creation_has_min_start_finish_separation(&track.start_finish, 1.0)) {
-        server.send(400, "application/json",
-                    "{\"error\":\"start/finish points must be at least 1 m apart\"}");
+    const double min_len_m = track_creation_min_save_line_length_m();
+    if (!track_creation_has_min_start_finish_separation(&track.start_finish, min_len_m)) {
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+                 "{\"error\":\"start/finish points must be at least %.0f m apart\"}",
+                 min_len_m);
+        server.send(400, "application/json", buf);
         return;
     }
 

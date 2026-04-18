@@ -150,6 +150,84 @@ static bool has_crossed_line(const GpsPoint* prev, const GpsPoint* curr,
     return true;
 }
 
+// Emit one [xing] `candidate` event per side-flip on a detection line.
+//
+// This is the structured, live-map-friendly version of the old
+// `side_flip hdiff=X REJECTED` message: it fires on EVERY crossing
+// candidate (pass or reject) and reports the geometry the live map and
+// post-run review tools need to reason about the call.
+//
+// Format (deliberately machine-parseable, key=val, space-separated):
+//
+//   [xing] L<idx> candidate u=<f> overshoot=<f> hdiff=<+/-f> \
+//          result=<PASS|REJECT> reason=<code>
+//
+// Reason codes match the roadmap in
+// docs/superpowers/plans/2026-04-18-finish-line-live-map-debugging.md:
+//   segment                    PASS — crossing projects onto [P1, P2]
+//   extension                  PASS — crossing within endpoint tolerance
+//   heading_mismatch           REJECT — |heading − valid_heading| > WINDOW
+//   outside_endpoint_tolerance REJECT — crossing past the extended segment
+//
+// The emit order is computed from the same geometric inputs
+// has_crossed_line uses, so the `result` field always agrees with the
+// downstream accept/reject decision for a given (prev, curr) segment.
+static void emit_candidate_event(int line_idx,
+                                 const DetectionLine* line,
+                                 const GpsPoint* prev,
+                                 const GpsPoint* curr,
+                                 double line_len_m,
+                                 double ext_fraction) {
+    // Crossing point by linear interpolation on the prev→curr segment.
+    double t = linear_crossing_t(prev, curr, line);
+    double xing_lat = prev->lat_deg + t * (curr->lat_deg - prev->lat_deg);
+    double xing_lon = prev->lon_deg + t * (curr->lon_deg - prev->lon_deg);
+
+    // Project the crossing onto the finish line (line-local coords).
+    // project_to_line works in lat/lon degrees directly: u is unitless,
+    // signed_d would be in degrees — we only ever report u + overshoot
+    // in metres so the degree-scale signed_d is discarded here.
+    double u = 0.0;
+    double signed_d_deg = 0.0;
+    line_geometry::project_to_line(xing_lat, xing_lon,
+                                   line->lat1_deg, line->lon1_deg,
+                                   line->lat2_deg, line->lon2_deg,
+                                   &u, &signed_d_deg);
+    (void)signed_d_deg;  // crossing sits on the line by construction
+
+    // Overshoot in metres: how far past an endpoint the crossing projects.
+    // u ∈ [0, 1] ⇒ on the finite segment ⇒ 0 m overshoot.
+    double overshoot_m = 0.0;
+    if (u < 0.0)       overshoot_m = -u * line_len_m;
+    else if (u > 1.0)  overshoot_m = (u - 1.0) * line_len_m;
+
+    float hdiff = heading_diff(curr->heading_deg, line->valid_heading_deg);
+    const bool heading_ok   = fabsf(hdiff) <= HEADING_WINDOW;
+    const bool segment_ok   = (u >= 0.0 && u <= 1.0);
+    const bool extension_ok = (u >= -ext_fraction && u <= 1.0 + ext_fraction);
+
+    const char* result;
+    const char* reason;
+    if (!heading_ok) {
+        result = "REJECT";
+        reason = "heading_mismatch";
+    } else if (segment_ok) {
+        result = "PASS";
+        reason = "segment";
+    } else if (extension_ok) {
+        result = "PASS";
+        reason = "extension";
+    } else {
+        result = "REJECT";
+        reason = "outside_endpoint_tolerance";
+    }
+
+    Serial.printf(
+        "[xing] L%d candidate u=%.3f overshoot=%.2f hdiff=%+.0f "
+        "result=%s reason=%s\n",
+        line_idx, u, overshoot_m, (double)hdiff, result, reason);
+}
+
 static void update_arm_distance(int line_idx,
                                 const GpsPoint* prev,
                                 const GpsPoint* curr) {
@@ -243,11 +321,19 @@ void process_line(int line_idx,
     bool side_changed = (s_prev_val > 0.0) != (s_curr_val > 0.0);
 
     if (side_changed) {
-        float hdiff = heading_diff(curr->heading_deg, line->valid_heading_deg);
-        if (fabsf(hdiff) > HEADING_WINDOW) {
-            Serial.printf("[xing] L%d side_flip hdiff=%.0f REJECTED\n",
-                          line_idx, hdiff);
+        // Structured candidate event for live_map / offline review.
+        // Replaces the old `side_flip hdiff=X REJECTED` log line with a
+        // full key=val record that also fires on PASS and on geometric
+        // rejects (past-endpoint), not only heading rejects.
+        double line_len_m = haversine_m(line->lat1_deg, line->lon1_deg,
+                                        line->lat2_deg, line->lon2_deg);
+        double ext_fraction = 0.0;
+        if (line_len_m > 0.1) {
+            ext_fraction = CROSSING_END_TOLERANCE_M / line_len_m;
+            if (ext_fraction > 1.0) ext_fraction = 1.0;
         }
+        emit_candidate_event(line_idx, line, prev, curr,
+                             line_len_m, ext_fraction);
     }
 
     if (!has_crossed_line(prev, curr, line)) {

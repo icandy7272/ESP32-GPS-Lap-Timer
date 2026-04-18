@@ -46,3 +46,18 @@ double track_creation_start_finish_separation_m(const DetectionLine* line) {
 bool track_creation_has_min_start_finish_separation(const DetectionLine* line, double min_distance_m) {
     return track_creation_start_finish_separation_m(line) >= min_distance_m;
 }
+
+double track_creation_min_save_line_length_m() {
+#ifdef WALKING_TEST_MODE
+    // Keep the walking-test profile tolerant so a small debug loop
+    // around a 2-3 m line can still be saved.  The axial tolerance
+    // (CROSSING_END_TOLERANCE_M = 2 m) already compensates for most
+    // point-marking noise at this scale.
+    return 2.0;
+#else
+    // Production: 5 m minimum.  Consumer GPS absolute error is 1-3 m
+    // at both P1/P2 capture time and crossing time — shorter lines
+    // make those errors comparable to the line itself.
+    return 5.0;
+#endif
+}

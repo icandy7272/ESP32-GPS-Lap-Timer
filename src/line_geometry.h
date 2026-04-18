@@ -54,4 +54,26 @@ bool segments_intersect_extended(double ax, double ay,
                                  double dx, double dy,
                                  double extension_fraction);
 
+// Project point P onto the infinite line through C-D.
+//
+// Returns via out pointers:
+//   - u        parameter along the line (0 at C, 1 at D). u in [0, 1]
+//              means P projects onto the finite segment. u < 0 is on the
+//              extension past C; u > 1 is on the extension past D.
+//   - signed_d perpendicular distance from P to the infinite line, in
+//              the SAME units as the inputs.  Sign follows
+//              cross(CD, CP): positive if P is to the "left" of C-D.
+//
+// Used by the lap timer to emit structured crossing-candidate debug
+// events and by off-board tools (live_map, VBO replay) to plot the GPS
+// trail in finish-line coordinates.
+//
+// Degenerate case: if C == D, u is set to 0.0 and signed_d to 0.0 —
+// callers are expected to guard on line length independently.
+void project_to_line(double px, double py,
+                     double cx, double cy,
+                     double dx, double dy,
+                     double* out_u,
+                     double* out_signed_d);
+
 }  // namespace line_geometry
