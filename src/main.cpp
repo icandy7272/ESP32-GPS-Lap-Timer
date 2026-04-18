@@ -30,6 +30,9 @@
 #include "boot_sequence.h"
 #include "boot_log.h"
 #include "serial_console.h"
+#include "track_creation_feedback.h"
+
+#include <math.h>
 
 // --- Shared FreeRTOS primitives (created once here) ----------
 
@@ -191,6 +194,12 @@ static void serial_console_print_help() {
     Serial.println("  ls sessions");
     Serial.println("  cat tracks/<filename>");
     Serial.println("  cat sessions/<filename>");
+    Serial.println("  track draft <name>   start a new track draft");
+    Serial.println("  mark p1              sample 2s and set P1 at current GPS");
+    Serial.println("  mark p2              sample 2s and set P2 (auto heading)");
+    Serial.println("  track save           persist draft to SD and activate");
+    Serial.println("  track cancel         discard draft");
+    Serial.println("  track status         print current draft state");
 }
 
 static void serial_console_print_invalid(const SerialConsoleCommand& command) {
@@ -294,6 +303,224 @@ static void serial_console_cat_file(const char* path) {
     }
 }
 
+// ============================================================
+// Track-draft state for `track draft` / `mark p1|p2` / `track save`
+// Used by tools/live_map.py so the walker can mark a new start/finish
+// segment over USB while the laptop is on a phone hotspot (rather
+// than having to switch the laptop Wi-Fi to the ESP32 AP to reach
+// the normal web track creation UI).
+//
+// Session-lifetime state; cleared on successful save, cancel, or
+// draft-restart.  No persistence.
+// ============================================================
+
+static bool   s_draft_active   = false;
+static bool   s_draft_has_p1   = false;
+static bool   s_draft_has_p2   = false;
+static char   s_draft_name[64] = {0};
+static double s_draft_p1_lat   = 0.0;
+static double s_draft_p1_lon   = 0.0;
+static double s_draft_p2_lat   = 0.0;
+static double s_draft_p2_lon   = 0.0;
+static float  s_draft_heading  = 0.0f;
+
+static void draft_clear() {
+    s_draft_active = false;
+    s_draft_has_p1 = false;
+    s_draft_has_p2 = false;
+    s_draft_name[0] = '\0';
+}
+
+static void draft_sort_ascending(double* arr, int n) {
+    for (int i = 1; i < n; i++) {
+        double key = arr[i];
+        int j = i - 1;
+        while (j >= 0 && arr[j] > key) {
+            arr[j + 1] = arr[j];
+            j--;
+        }
+        arr[j + 1] = key;
+    }
+}
+
+// Sample `session_state.gps_lat_deg` / `.gps_lon_deg` every 100 ms for
+// 2.0 s (up to 20 points), reject samples without a 3D fix, and return
+// the per-axis median.  Gives the operator the same 2 s "stand still
+// while it averages" experience as the phone web UI, but via serial.
+static bool draft_sample_gps_median(double* out_lat, double* out_lon) {
+    constexpr int kMaxSamples = 20;
+    double lats[kMaxSamples];
+    double lons[kMaxSamples];
+    int count = 0;
+
+    for (int i = 0; i < kMaxSamples; i++) {
+        double lat = 0.0;
+        double lon = 0.0;
+        bool fix_ok = false;
+        if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            lat = session_state.gps_lat_deg;
+            lon = session_state.gps_lon_deg;
+            fix_ok = session_state.gps_fix_ok;
+            xSemaphoreGive(session_mutex);
+        }
+        if (fix_ok && count < kMaxSamples) {
+            lats[count] = lat;
+            lons[count] = lon;
+            count++;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    if (count < 3) {
+        return false;
+    }
+
+    draft_sort_ascending(lats, count);
+    draft_sort_ascending(lons, count);
+    *out_lat = lats[count / 2];
+    *out_lon = lons[count / 2];
+    return true;
+}
+
+static void draft_compute_heading_locked() {
+    if (!s_draft_has_p1 || !s_draft_has_p2) {
+        return;
+    }
+    // Flat-earth projection with the midpoint latitude as the
+    // reference — fine at the scale of a detection line (metres).
+    double lat_ref = (s_draft_p1_lat + s_draft_p2_lat) * 0.5;
+    double cos_lat = cos(lat_ref * M_PI / 180.0);
+    double dy_m = (s_draft_p2_lat - s_draft_p1_lat) * 111000.0;
+    double dx_m = (s_draft_p2_lon - s_draft_p1_lon) * 111000.0 * cos_lat;
+    // Compass heading of the P1 -> P2 direction.
+    float line_dir = (float)(atan2(dx_m, dy_m) * 180.0 / M_PI);
+    // The valid crossing heading is perpendicular to the line.  This
+    // matches the default perpendicular the web UI picks before the
+    // operator presses "Flip heading".
+    float heading = line_dir - 90.0f;
+    while (heading < 0.0f)      heading += 360.0f;
+    while (heading >= 360.0f)   heading -= 360.0f;
+    s_draft_heading = heading;
+}
+
+static void serial_console_handle_track_draft(const char* name) {
+    draft_clear();
+    s_draft_active = true;
+    snprintf(s_draft_name, sizeof(s_draft_name), "%s", name);
+    Serial.printf("[draft] started: %s\n", name);
+}
+
+static void serial_console_handle_track_mark(int which) {
+    if (!s_draft_active) {
+        Serial.println("[draft] ERR: no active draft — run 'track draft <name>' first");
+        return;
+    }
+    Serial.printf("[draft] sampling P%d for 2.0 s...\n", which);
+    double lat = 0.0, lon = 0.0;
+    if (!draft_sample_gps_median(&lat, &lon)) {
+        Serial.println("[draft] ERR: not enough 3D GPS fixes during sample window");
+        return;
+    }
+    if (which == 1) {
+        s_draft_p1_lat = lat;
+        s_draft_p1_lon = lon;
+        s_draft_has_p1 = true;
+        Serial.printf("[draft] p1 = (%.7f, %.7f)\n", lat, lon);
+    } else {
+        s_draft_p2_lat = lat;
+        s_draft_p2_lon = lon;
+        s_draft_has_p2 = true;
+        draft_compute_heading_locked();
+        if (s_draft_has_p1) {
+            Serial.printf("[draft] p2 = (%.7f, %.7f) heading=%.1f\n",
+                          lat, lon, s_draft_heading);
+        } else {
+            Serial.printf("[draft] p2 = (%.7f, %.7f) — warning: p1 not marked\n",
+                          lat, lon);
+        }
+    }
+}
+
+static void serial_console_handle_track_save() {
+    if (!s_draft_active) {
+        Serial.println("[draft] ERR: no active draft");
+        return;
+    }
+    if (!s_draft_has_p1 || !s_draft_has_p2) {
+        Serial.println("[draft] ERR: need both P1 and P2 before save");
+        return;
+    }
+    // Match the web-UI server-side minimum so saved tracks are always
+    // usable at runtime.
+    double dy_m = (s_draft_p2_lat - s_draft_p1_lat) * 111000.0;
+    double cos_lat = cos(((s_draft_p1_lat + s_draft_p2_lat) * 0.5) * M_PI / 180.0);
+    double dx_m = (s_draft_p2_lon - s_draft_p1_lon) * 111000.0 * cos_lat;
+    double line_len_m = sqrt(dx_m * dx_m + dy_m * dy_m);
+    if (line_len_m < 1.0) {
+        Serial.printf("[draft] ERR: line too short (%.2f m, need >= 1.0 m)\n",
+                      line_len_m);
+        return;
+    }
+
+    TrackDefinition td = {};
+    snprintf(td.name, sizeof(td.name), "%s", s_draft_name);
+    td.start_finish.lat1_deg = s_draft_p1_lat;
+    td.start_finish.lon1_deg = s_draft_p1_lon;
+    td.start_finish.lat2_deg = s_draft_p2_lat;
+    td.start_finish.lon2_deg = s_draft_p2_lon;
+    td.start_finish.valid_heading_deg = s_draft_heading;
+    td.center_lat_deg = (s_draft_p1_lat + s_draft_p2_lat) * 0.5;
+    td.center_lon_deg = (s_draft_p1_lon + s_draft_p2_lon) * 0.5;
+    td.sector_count = 1;  // start/finish only; no sector splits
+
+    TrackSaveResult save_result = track_save_detailed(&td);
+    if (!track_creation_save_result_succeeded(save_result)) {
+        Serial.printf("[draft] ERR: save failed: %s\n",
+                      track_creation_save_result_message(save_result));
+        return;
+    }
+
+    // track_save_detailed assigns the id and appends to s_tracks.  Pick
+    // the last one and make it active via the normal lap_timer entry
+    // point so the shadow copy and version counter update correctly.
+    const TrackDefinition* saved = track_get(track_count() - 1);
+    if (saved) {
+        lap_timer_set_track(saved);
+        Serial.printf("[draft] saved: %s (%s) length=%.2fm heading=%.1f\n",
+                      saved->id, saved->name, line_len_m, s_draft_heading);
+    } else {
+        Serial.println("[draft] WARN: saved but could not re-read track");
+    }
+
+    draft_clear();
+}
+
+static void serial_console_handle_track_cancel() {
+    if (s_draft_active) {
+        Serial.println("[draft] cancelled");
+    } else {
+        Serial.println("[draft] (no active draft)");
+    }
+    draft_clear();
+}
+
+static void serial_console_handle_track_status() {
+    if (!s_draft_active) {
+        Serial.println("[draft] inactive");
+        return;
+    }
+    Serial.printf("[draft] active name=%s has_p1=%d has_p2=%d\n",
+                  s_draft_name, s_draft_has_p1 ? 1 : 0, s_draft_has_p2 ? 1 : 0);
+    if (s_draft_has_p1) {
+        Serial.printf("[draft] p1 = (%.7f, %.7f)\n",
+                      s_draft_p1_lat, s_draft_p1_lon);
+    }
+    if (s_draft_has_p2) {
+        Serial.printf("[draft] p2 = (%.7f, %.7f) heading=%.1f\n",
+                      s_draft_p2_lat, s_draft_p2_lon, s_draft_heading);
+    }
+}
+
 static void serial_console_handle_line(const char* line) {
     SerialConsoleCommand command = serial_console_parse(line);
     switch (command.type) {
@@ -305,6 +532,24 @@ static void serial_console_handle_line(const char* line) {
             return;
         case SerialConsoleCommandType::CatFile:
             serial_console_cat_file(command.arg);
+            return;
+        case SerialConsoleCommandType::TrackDraftStart:
+            serial_console_handle_track_draft(command.arg);
+            return;
+        case SerialConsoleCommandType::TrackMarkP1:
+            serial_console_handle_track_mark(1);
+            return;
+        case SerialConsoleCommandType::TrackMarkP2:
+            serial_console_handle_track_mark(2);
+            return;
+        case SerialConsoleCommandType::TrackSave:
+            serial_console_handle_track_save();
+            return;
+        case SerialConsoleCommandType::TrackCancel:
+            serial_console_handle_track_cancel();
+            return;
+        case SerialConsoleCommandType::TrackStatus:
+            serial_console_handle_track_status();
             return;
         case SerialConsoleCommandType::Invalid:
         default:
