@@ -136,6 +136,54 @@ static void test_low_speed_unreliable_heading_is_frozen() {
     assert(out_second.display_fix.heading_deg == 45.0f);
 }
 
+static void test_implausible_position_jump_is_rejected() {
+    gps_filter_reset();
+
+    GpsPoint first = make_point(31.100000, 121.200000, 22.0f, 88.0f, 1000000);
+    GpsPoint jump = make_point(31.110000, 121.210000, 24.0f, 90.0f, 1040000);
+
+    GpsFilterProcessResult out_first = gps_filter_process(first);
+    GpsFilterProcessResult out_jump = gps_filter_process(jump);
+    GpsFilterDiagnostics diagnostics = gps_filter_get_diagnostics();
+
+    assert(!out_first.display_rejected);
+    assert(out_jump.display_rejected);
+    assert(out_jump.match_rejected);
+    assert(out_jump.raw_fix.lat_deg == jump.lat_deg);
+    assert(out_jump.display_fix.lat_deg == out_first.display_fix.lat_deg);
+    assert(diagnostics.display_outlier_drops >= 1);
+    assert(diagnostics.match_outlier_drops >= 1);
+}
+
+static void test_implausible_acceleration_is_rejected() {
+    gps_filter_reset();
+
+    GpsPoint first = make_point(31.100000, 121.200000, 8.0f, 15.0f, 1000000);
+    GpsPoint spike = make_point(31.100001, 121.200001, 85.0f, 16.0f, 1040000);
+
+    GpsFilterProcessResult out_first = gps_filter_process(first);
+    GpsFilterProcessResult out_spike = gps_filter_process(spike);
+
+    assert(!out_first.display_rejected);
+    assert(out_spike.display_rejected);
+    assert(out_spike.match_rejected);
+    assert(out_spike.display_fix.speed_kmh == out_first.display_fix.speed_kmh);
+}
+
+static void test_low_speed_heading_flip_is_rejected() {
+    gps_filter_reset();
+
+    GpsPoint first = make_point(31.100000, 121.200000, 4.0f, 15.0f, 1000000);
+    GpsPoint flip = make_point(31.100001, 121.200001, 4.2f, 210.0f, 1040000);
+
+    GpsFilterProcessResult out_first = gps_filter_process(first);
+    GpsFilterProcessResult out_flip = gps_filter_process(flip);
+
+    assert(!out_first.display_rejected);
+    assert(out_flip.display_rejected);
+    assert(out_flip.match_rejected);
+}
+
 int main() {
     test_high_quality_3d_fix_scores_well();
     test_low_speed_2d_fix_keeps_heading_unreliable();
@@ -143,5 +191,8 @@ int main() {
     test_filter_tracks_separate_raw_and_display_paths();
     test_low_speed_jitter_is_smoothed_for_display_path();
     test_low_speed_unreliable_heading_is_frozen();
+    test_implausible_position_jump_is_rejected();
+    test_implausible_acceleration_is_rejected();
+    test_low_speed_heading_flip_is_rejected();
     return 0;
 }

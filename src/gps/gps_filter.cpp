@@ -24,6 +24,11 @@ static constexpr int   MEDIAN_WINDOW_MIN = 3;
 static constexpr float DISPLAY_MEDIAN_MAX_SPEED_KMH = 8.0f;
 static constexpr float STATIONARY_SPEED_MAX_KMH = 2.0f;
 static constexpr float STATIONARY_HOLD_RADIUS_M = 1.0f;
+static constexpr float MAX_FILTER_SPEED_KMH = 140.0f;
+static constexpr float MAX_FILTER_ACCEL_MPS2 = 45.0f;
+static constexpr float LOW_SPEED_HEADING_FLIP_KMH = 8.0f;
+static constexpr float LOW_SPEED_HEADING_FLIP_DEG = 120.0f;
+static constexpr float LOW_SPEED_HEADING_FLIP_RADIUS_M = 1.5f;
 
 struct GpsFilterState {
     bool display_valid;
@@ -213,6 +218,73 @@ static GpsPoint apply_display_median(const GpsPoint& raw_fix) {
     return filtered;
 }
 
+static double time_delta_s(const GpsPoint& previous_fix,
+                           const GpsPoint& next_fix) {
+    int64_t delta_us = next_fix.timestamp_us - previous_fix.timestamp_us;
+    if (delta_us <= 0) {
+        return 0.0;
+    }
+    return static_cast<double>(delta_us) / 1000000.0;
+}
+
+static float heading_delta_deg(float a_deg, float b_deg) {
+    float delta = fmodf(fabsf(a_deg - b_deg), 360.0f);
+    if (delta > 180.0f) {
+        delta = 360.0f - delta;
+    }
+    return delta;
+}
+
+static bool exceeds_implied_speed_limit(const GpsPoint& previous_fix,
+                                        const GpsPoint& next_fix) {
+    double dt_s = time_delta_s(previous_fix, next_fix);
+    if (dt_s <= 0.0) {
+        return false;
+    }
+
+    double step_m = approx_distance_m(previous_fix.lat_deg, previous_fix.lon_deg,
+                                      next_fix.lat_deg, next_fix.lon_deg);
+    double implied_speed_kmh = (step_m / dt_s) * 3.6;
+    return implied_speed_kmh > MAX_FILTER_SPEED_KMH;
+}
+
+static bool exceeds_acceleration_limit(const GpsPoint& previous_fix,
+                                       const GpsPoint& next_fix) {
+    double dt_s = time_delta_s(previous_fix, next_fix);
+    if (dt_s <= 0.0) {
+        return false;
+    }
+
+    double dv_mps = fabs(static_cast<double>(next_fix.speed_kmh)
+                       - static_cast<double>(previous_fix.speed_kmh)) / 3.6;
+    double accel_mps2 = dv_mps / dt_s;
+    return accel_mps2 > MAX_FILTER_ACCEL_MPS2;
+}
+
+static bool has_low_speed_heading_flip(const GpsPoint& previous_fix,
+                                       const GpsPoint& next_fix) {
+    if (previous_fix.speed_kmh > LOW_SPEED_HEADING_FLIP_KMH ||
+        next_fix.speed_kmh > LOW_SPEED_HEADING_FLIP_KMH) {
+        return false;
+    }
+
+    double step_m = approx_distance_m(previous_fix.lat_deg, previous_fix.lon_deg,
+                                      next_fix.lat_deg, next_fix.lon_deg);
+    if (step_m > LOW_SPEED_HEADING_FLIP_RADIUS_M) {
+        return false;
+    }
+
+    return heading_delta_deg(previous_fix.heading_deg, next_fix.heading_deg)
+        > LOW_SPEED_HEADING_FLIP_DEG;
+}
+
+static bool should_reject_fix(const GpsPoint& previous_fix,
+                              const GpsPoint& next_fix) {
+    return exceeds_implied_speed_limit(previous_fix, next_fix)
+        || exceeds_acceleration_limit(previous_fix, next_fix)
+        || has_low_speed_heading_flip(previous_fix, next_fix);
+}
+
 static void apply_heading_freeze(GpsPoint* fix,
                                  const GpsPoint& previous_fix) {
     if (fix->heading_reliable &&
@@ -310,23 +382,39 @@ GpsFilterProcessResult gps_filter_process(const GpsPoint& raw_fix) {
     GpsPoint display_fix = apply_display_median(raw_fix);
     GpsPoint match_fix = raw_fix;
 
-    if (s_state.display_valid) {
+    bool reject_display = s_state.display_valid
+                       && should_reject_fix(s_state.display_fix, raw_fix);
+    bool reject_match = s_state.match_valid
+                     && should_reject_fix(s_state.match_fix, raw_fix);
+
+    if (reject_display) {
+        result.display_fix = s_state.display_fix;
+        result.display_rejected = true;
+        s_state.diagnostics.display_outlier_drops++;
+    } else if (s_state.display_valid) {
         apply_stationary_hold(&display_fix, s_state.display_fix);
         display_fix = apply_ema(s_state.display_fix,
                                 display_fix,
                                 display_alpha_for_speed(raw_fix.speed_kmh));
         apply_heading_freeze(&display_fix, s_state.display_fix);
+        result.display_fix = display_fix;
+    } else {
+        result.display_fix = display_fix;
     }
 
-    if (s_state.match_valid) {
+    if (reject_match) {
+        result.match_fix = s_state.match_fix;
+        result.match_rejected = true;
+        s_state.diagnostics.match_outlier_drops++;
+    } else if (s_state.match_valid) {
         match_fix = apply_ema(s_state.match_fix,
                               match_fix,
                               match_alpha_for_speed(raw_fix.speed_kmh));
         apply_heading_freeze(&match_fix, s_state.match_fix);
+        result.match_fix = match_fix;
+    } else {
+        result.match_fix = match_fix;
     }
-
-    result.display_fix = display_fix;
-    result.match_fix = match_fix;
 
     store_filter_outputs(result);
     return result;

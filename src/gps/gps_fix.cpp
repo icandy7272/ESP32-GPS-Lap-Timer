@@ -103,8 +103,17 @@ void gps_send_fix_if_ready() {
     if (now_ms - last_diag_ms >= 1000) {
         int min_sats = (accepted_since_last > 0) ? min_sats_since_last : 0;
         int max_sats = (accepted_since_last > 0) ? max_sats_since_last : 0;
+        static GpsFilterDiagnostics last_filter_diag = {};
+        GpsFilterDiagnostics current_filter_diag = gps_filter_get_diagnostics();
+        uint32_t rejected_display = current_filter_diag.display_outlier_drops
+                                  - last_filter_diag.display_outlier_drops;
+        uint32_t rejected_match = current_filter_diag.match_outlier_drops
+                                - last_filter_diag.match_outlier_drops;
+        last_filter_diag = current_filter_diag;
+
         Serial.printf("[gps] accepted=%u/s drops=%u sats=%d-%d low=%u "
                       "fix_q=%d fix_3d=%d hdop=%.1f q=%u tier=%u head=%d "
+                      "rej_d=%lu rej_m=%lu "
                       "pps=%d lat=%.5f lon=%.5f\n",
                       accepted_since_last, drops_since_last,
                       min_sats, max_sats, low_speed_since_last,
@@ -112,6 +121,8 @@ void gps_send_fix_if_ready() {
                       point.fix_3d ? 1 : 0, point.hdop,
                       point.quality_score, point.quality_tier,
                       point.heading_reliable ? 1 : 0,
+                      static_cast<unsigned long>(rejected_display),
+                      static_cast<unsigned long>(rejected_match),
                       point.pps_synced ? 1 : 0,
                       point.lat_deg, point.lon_deg);
         last_diag_ms = now_ms;
