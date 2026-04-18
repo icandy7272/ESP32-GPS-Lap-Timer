@@ -26,13 +26,20 @@ namespace lap_timer_internal {
 // MIN_CROSSING_SPEED_KMH is kept on BOTH paths: it rejects stationary GPS
 // drift (speed=0) without affecting any real walking/driving case.
 #ifdef WALKING_TEST_MODE
-static constexpr float HEADING_WINDOW = 180.0f;   // effectively disables direction gate
-static constexpr double ARM_DISTANCE_M = 3.0;     // ~few walking steps arms the line
-// 2026-04-18 bumped 5s → 8s.  Under walking-test thresholds a loop
-// around the line's immediate neighbourhood can complete in <6 s; the
-// 8 s floor (≈ 10 m at a brisk walk) costs us almost no real laps and
-// keeps residual sub-lap noise out of the session even when segment
-// intersection already handles the obvious false triggers.
+// 2026-04-18 second pass: tighten HEADING_WINDOW to match production's
+// 60°.  The earlier 180° "disabled" value caused every walking loop
+// that enclosed the start/finish segment to count TWICE per lap (once
+// entering, once leaving).  u-blox M9N heading at walking pace is
+// actually accurate enough (~±15°) to gate on, so 60° cleanly rejects
+// the return-direction crossing without rejecting real laps.
+static constexpr float HEADING_WINDOW = 60.0f;
+// Bumped 3m → 6m on the same pass.  3m is ~3 walking steps and is
+// easily covered inside a tight turn near the line without actually
+// completing a lap; 6m forces the walker to have progressed a full
+// real step-away from the line before a new crossing can arm.
+static constexpr double ARM_DISTANCE_M = 6.0;
+// Keep the 8s floor; see 2026-04-18 walk analysis.  A ~10m loop at
+// brisk walk pace comes out to ≈ 9s, which is still accepted.
 static constexpr int32_t MIN_LAP_TIME_MS = 8000;
 #else
 static constexpr float HEADING_WINDOW = 60.0f;
