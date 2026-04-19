@@ -488,9 +488,16 @@ function startValidation(){
     // swapped it while POST was in flight, don't touch the new one.
     var vNow=_trackDraft.validation;
     if(vNow!==v0){
-      // Old state was discarded.  Tell the firmware to drop the line
-      // we just installed so nothing lingers.
-      fetch('/api/tracks/draft_validation',{method:'DELETE'}).catch(function(){});
+      // Old state was discarded.  DO NOT send DELETE here: by the
+      // time we see vNow!==v0 the user may have already installed a
+      // NEWER session (re-marked or re-validated) whose session_id
+      // is live on the firmware.  An unscoped DELETE would kill it.
+      // Codex P1 from 2026-04-19 round-3.
+      //
+      // The stale firmware line is self-superseded on the next POST
+      // (which bumps session_id and installs the new line), and
+      // initTrackCreationUi() cleans up any orphan on the next page
+      // load — so it will not accumulate beyond one stale session.
       return;
     }
     vNow.installing=false;
@@ -522,18 +529,20 @@ function startValidation(){
 function pollValidation(){
   var v0=_trackDraft.validation;
   if(!v0||!v0.active){return;}
-  var expectedId=v0.sessionId;
   fetch('/api/tracks/draft_validation').then(function(r){
     return r.json();
   }).then(function(body){
-    // Reject stale / mismatched sessions.  Flip Direction, re-mark,
-    // or any reset bumps sessionId client-side via the next POST
-    // response, and firmware bumps its own id on every set/clear —
-    // so one check covers all cross-state races.
+    // Reject stale / mismatched sessions.  Compare against the
+    // CURRENT sessionId at receive time — NOT a value captured at
+    // poll-start — because Flip Direction / re-mark can mutate it
+    // synchronously while this fetch is in flight.  Codex P1 from
+    // 2026-04-19 round-3 review: the old `var expectedId=v0.sessionId`
+    // at top made the check a no-op for the exact case it was meant
+    // to close.
     var vNow=_trackDraft.validation;
     if(!vNow||vNow!==v0) return;
     if(!vNow.active) return;
-    if(typeof body.session_id==='number' && body.session_id!==expectedId) return;
+    if(typeof body.session_id==='number' && body.session_id!==vNow.sessionId) return;
     // Defend against mixed-snapshot regressions on ancient firmware:
     // if firmware says !active, treat as drift and stop locally.
     if(body.active===false){
@@ -863,14 +872,18 @@ function addTrack(){
   };
 
   _trackSubmitPending=true;
-  // Save supersedes validation — stop polling and clear the draft
-  // line on the firmware so stale [xing-draft] events don't keep
-  // firing once the real track takes over.
-  if(_trackDraft.validation&&_trackDraft.validation.active){
-    stopValidation();
-  }else{
-    // Best-effort DELETE in case the UI got out of sync.
-    fetch('/api/tracks/draft_validation',{method:'DELETE'}).catch(function(){});
+  // DO NOT clear draft_validation before POST — the firmware gate at
+  // /api/tracks needs the installed line + accepted counts to approve
+  // the save.  Clearing here makes every save 409 (codex P1 from
+  // 2026-04-19 round-3 review).  Cleanup happens in the success path
+  // below; on failure we keep the validation state so the user can
+  // fix the issue and retry without re-walking.
+  // Stop local polling only so the UI doesn't flicker while the
+  // server processes the request — but leave the firmware line
+  // installed.
+  if(_trackDraft.validation&&_trackDraft.validation.pollTimer){
+    clearInterval(_trackDraft.validation.pollTimer);
+    _trackDraft.validation.pollTimer=null;
   }
   renderTrackDraft();
   setTrackMsg('Creating track...','');
@@ -887,6 +900,10 @@ function addTrack(){
   }).then(function(result){
     _trackSubmitPending=false;
     if(result.ok&&result.body.ok){
+      // Save succeeded — NOW it is safe to clear the firmware draft
+      // line so stale [xing-draft] events stop firing against what is
+      // about to become the real active track.
+      fetch('/api/tracks/draft_validation',{method:'DELETE'}).catch(function(){});
       var createdId=result.body&&result.body.id;
       if(nameField){nameField.value='';}
       resetTrackDraft();
@@ -904,11 +921,25 @@ function addTrack(){
         }
       });
     }else{
+      // Save failed.  Keep the validation state installed on the
+      // firmware so the user can fix whatever rejected the save
+      // (e.g. name collision) and retry without re-walking.  Resume
+      // polling so counts / events stay fresh in the UI.
+      if(_trackDraft.validation&&_trackDraft.validation.active
+         && !_trackDraft.validation.pollTimer){
+        _trackDraft.validation.pollTimer=setInterval(pollValidation,VALIDATION_POLL_MS);
+      }
       renderTrackDraft();
       setTrackMsg((result.body&&result.body.error)?result.body.error:'Failed to create track.','err');
     }
   }).catch(function(){
     _trackSubmitPending=false;
+    // Same recovery as the non-ok branch — retain the validation
+    // session on transient network errors.
+    if(_trackDraft.validation&&_trackDraft.validation.active
+       && !_trackDraft.validation.pollTimer){
+      _trackDraft.validation.pollTimer=setInterval(pollValidation,VALIDATION_POLL_MS);
+    }
     renderTrackDraft();
     setTrackMsg('Failed to create track.','err');
   });
@@ -960,14 +991,14 @@ function initTrackCreationUi(){
   }
   renderTrackDraft();
   // Reconcile any orphaned firmware-side draft_validation line from
-  // a previous page load (closed tab / reload while validation was
-  // active).  A fire-and-forget DELETE is enough — the client does
-  // not try to reattach since the counters / session id from that
-  // prior walk-test are no longer trustworthy.  Codex P2 from
-  // 2026-04-19 follow-up review.
+  // a previous WEB page load (closed tab / reload while validation
+  // was active).  CRITICAL: only DELETE if owner === 'web'.  A
+  // serial operator plugged into USB may have their OWN validation
+  // in progress; opening the phone web UI must not silently clear
+  // that state.  Codex P2 from 2026-04-19 round-3 review.
   fetch('/api/tracks/draft_validation').then(function(r){return r.json();})
     .then(function(body){
-      if(body && body.active){
+      if(body && body.active && body.owner === 'web'){
         fetch('/api/tracks/draft_validation',{method:'DELETE'}).catch(function(){});
       }
     })

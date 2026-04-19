@@ -125,20 +125,31 @@ bool lines_match(const DetectionLine& a, const DetectionLine& b,
     double d1 = ::haversine_m(a.lat1_deg, a.lon1_deg, b.lat1_deg, b.lon1_deg);
     double d2 = ::haversine_m(a.lat2_deg, a.lon2_deg, b.lat2_deg, b.lon2_deg);
     // Accept either endpoint-ordering — the operator may have marked
-    // P1/P2 in reverse.  We compare heading separately.
+    // P1/P2 in reverse.  The heading comparison below disambiguates
+    // direction: a swapped-endpoint line has the OPPOSITE heading in
+    // firmware convention, so we reject it the same way as a true
+    // 180° mismatch (see below).
     if ((d1 > tol_m || d2 > tol_m) &&
         (::haversine_m(a.lat1_deg, a.lon1_deg, b.lat2_deg, b.lon2_deg) > tol_m ||
          ::haversine_m(a.lat2_deg, a.lon2_deg, b.lat1_deg, b.lon1_deg) > tol_m)) {
         return false;
     }
-    // Heading: delta in [0, 180].  180 − |dh| catches flipped lines
-    // (heading differs by 180°), which lines_match should still accept
-    // because some callers may have sent the reverse direction.
+    // Heading MUST match within tol_deg.  The previous branch that
+    // also accepted a 180° delta was a save-gate bypass: a client
+    // could validate direction X, then POST the same line with heading
+    // X+180 and have passes_gate return true, reusing the accepted
+    // count from the opposite direction without ever walking the
+    // flipped direction.  Codex P1 from 2026-04-19 round-3 review.
+    //
+    // Flip Direction in the web UI already does the right thing by
+    // re-POSTing (which installs a NEW line + new session_id + zero
+    // counters), so this function does NOT need to be lenient about
+    // 180° matches.  Operator walks the flipped direction, new
+    // accepted count accrues, save gate passes with exact heading
+    // match.
     float dh = fabsf(::heading_diff(a.valid_heading_deg, b.valid_heading_deg));
     if (dh > 180.0f) dh = 360.0f - dh;
-    // Prefer an exact heading match, but a 180° flip is also OK —
-    // Flip Direction POSTs that out intentionally.
-    if (dh > tol_deg && fabsf(dh - 180.0f) > tol_deg) {
+    if (dh > tol_deg) {
         return false;
     }
     return true;
@@ -215,14 +226,21 @@ bool lap_timer_draft_validation_passes_gate(const DetectionLine* line,
                                             double  tol_deg,
                                             uint32_t min_accepted) {
     if (line == nullptr) return false;
+    // Evaluate the full gate inside ONE critical section — snapshot +
+    // comparison + decision — so a concurrent set/clear cannot flip
+    // the state between our read and the save's persistence.
+    // lines_match is pure (haversine + heading_diff arithmetic, no
+    // I/O, no allocations), so holding the spinlock across it is
+    // cheap.  Codex P1 from 2026-04-19 round-3 review (TOCTOU).
     portENTER_CRITICAL(&s_draft_mux);
-    bool active   = s_draft_active;
-    uint32_t acc  = s_accepted_count;
-    DetectionLine installed = s_draft_line;
+    bool passes = false;
+    if (s_draft_active &&
+        s_accepted_count >= min_accepted &&
+        lines_match(s_draft_line, *line, tol_m, tol_deg)) {
+        passes = true;
+    }
     portEXIT_CRITICAL(&s_draft_mux);
-    if (!active) return false;
-    if (acc < min_accepted) return false;
-    return lines_match(installed, *line, tol_m, tol_deg);
+    return passes;
 }
 
 uint32_t lap_timer_draft_validation_min_accepted() {

@@ -243,10 +243,20 @@ def _parse_xing_draft_candidate(line: str) -> None:
     is creating a new track and has marked both endpoints.  Landed in
     the same candidate list as active-track events but tagged
     line_type='draft' so the UI can colour them differently.
+
+    `session_stale` suffix: the firmware tags events it evaluated
+    against a session that was cleared/replaced before the counter
+    write landed.  Firmware deliberately does NOT commit those to its
+    own accepted/rejected totals — so we must NOT increment the local
+    laptop-side counters either, or live_map counts drift from
+    `/api/tracks/draft_validation`.  Still surface the event in the
+    list with a distinct tag so the operator can see what happened.
+    Codex P2 from 2026-04-19 round-3 review.
     """
     m = _XING_DRAFT_CANDIDATE_RE.search(line)
     if not m:
         return
+    stale = "session_stale" in line
     ev = {
         "t": time.time(),
         "line_idx": -1,
@@ -256,19 +266,23 @@ def _parse_xing_draft_candidate(line: str) -> None:
         "result": m.group(4),
         "reason": m.group(5),
         "line_type": "draft",
+        "stale": stale,
     }
     with state_lock:
         cands = state["candidates"]
         cands.append(ev)
         if len(cands) > CANDIDATE_MAX:
             del cands[: len(cands) - CANDIDATE_MAX]
-        counts = state.setdefault("draft_validation", {
-            "accepted": 0, "rejected": 0,
-        })
-        if ev["result"] == "PASS":
-            counts["accepted"] = counts.get("accepted", 0) + 1
-        else:
-            counts["rejected"] = counts.get("rejected", 0) + 1
+        # Only committed events count toward the accepted/rejected
+        # summary that the UI shows and that the phone web UI polls.
+        if not stale:
+            counts = state.setdefault("draft_validation", {
+                "accepted": 0, "rejected": 0,
+            })
+            if ev["result"] == "PASS":
+                counts["accepted"] = counts.get("accepted", 0) + 1
+            else:
+                counts["rejected"] = counts.get("rejected", 0) + 1
 
 
 def _parse_draft_event(line: str) -> None:
