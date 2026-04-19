@@ -32,6 +32,13 @@ struct GpsFilterDiagnostics {
     uint32_t match_outlier_drops;
     uint32_t stationary_holds;
     uint32_t heading_freezes;
+    // Increments each time the filter clears its own stale baseline
+    // after too many consecutive rejects.  A growing counter means the
+    // GPS receiver is producing legitimate large jumps the reject
+    // threshold keeps catching — not a bug, but worth surfacing so
+    // the operator knows "the filter had to reset under me".
+    // Added for the 2026-04-19 follow-up (P1 freeze fix).
+    uint32_t filter_resets;
 };
 
 struct GpsFilterProcessResult {

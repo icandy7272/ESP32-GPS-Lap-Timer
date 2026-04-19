@@ -489,6 +489,12 @@ static void serial_console_handle_track_mark(int which) {
         s_draft_p1_lat = lat;
         s_draft_p1_lon = lon;
         s_draft_has_p1 = true;
+        // Recompute heading on BOTH branches — not just which==2.  The
+        // live-map-driven workflow makes `mark p2` → `mark p1` → `save`
+        // a realistic field sequence.  Without this branch, heading
+        // stays at the default 0.0f and the saved track persists a
+        // bogus valid_heading.  Codex P2 from 2026-04-19 follow-up.
+        draft_compute_heading_locked();
         // Append spread and tier AFTER the `(lat, lon)` block so live_map's
         // existing `_DRAFT_P1_RE` regex still matches the coords, and the
         // new `_DRAFT_SPREAD_RE` regex picks up the confidence metadata.
@@ -521,6 +527,13 @@ static void serial_console_handle_track_save() {
         Serial.println("[draft] ERR: need both P1 and P2 before save");
         return;
     }
+    // Belt-and-braces: recompute the heading right before persistence.
+    // The mark handlers both call this now, but a "save" that fires
+    // without the heading ever having been computed (e.g. some future
+    // code path that populates s_draft_p{1,2} directly) would otherwise
+    // persist the default 0.0f.  Safe to re-call — it guards on
+    // has_p1 && has_p2 internally.
+    draft_compute_heading_locked();
     // Match the web-UI server-side minimum so saved tracks are always
     // usable at runtime.  The exact threshold is compile-time selected
     // (5 m production, 2 m walking-test) — see
@@ -560,6 +573,19 @@ static void serial_console_handle_track_save() {
     const TrackDefinition* saved = track_get(track_count() - 1);
     if (saved) {
         lap_timer_set_track(saved);
+        // Mirror everything the /api/tracks/select flow does, so the
+        // runtime does not end up in a split "lap_timer sees the new
+        // track but session_state / runtime ownership still point at
+        // the previous one" state.  Without these, /api/status can
+        // keep reporting blocked_no_track and the auto-detect task
+        // can stomp the just-created track on its next scan.
+        // Codex P1 from 2026-04-19 follow-up review.
+        if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            strlcpy(session_state.track_name, saved->name,
+                    sizeof(session_state.track_name));
+            xSemaphoreGive(session_mutex);
+        }
+        track_runtime_note_manual_selection(true /* newly_created */);
         Serial.printf("[draft] saved: %s (%s) length=%.2fm heading=%.1f\n",
                       saved->id, saved->name, line_len_m, s_draft_heading);
     } else {

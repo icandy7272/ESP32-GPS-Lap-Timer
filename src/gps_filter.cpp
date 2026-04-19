@@ -30,6 +30,16 @@ static constexpr float LOW_SPEED_HEADING_FLIP_KMH = 8.0f;
 static constexpr float LOW_SPEED_HEADING_FLIP_DEG = 120.0f;
 static constexpr float LOW_SPEED_HEADING_FLIP_RADIUS_M = 1.5f;
 
+// After this many consecutive rejects the filter drops its own
+// last-filtered baseline and treats the next sample as
+// first-after-reset.  Codex P1 from 2026-04-19: without an escape
+// hatch, a legitimate large GPS jump (or a recovered signal gap)
+// traps the filter into rejecting every subsequent sample because
+// they're all judged against the stale pre-jump baseline.  At 1 Hz,
+// 5 rejects ≈ 5 s of frozen display, which is the outer edge of
+// what is still useful as outlier rejection vs. "just stuck".
+static constexpr uint8_t MAX_CONSECUTIVE_REJECTS = 5;
+
 struct GpsFilterState {
     bool display_valid;
     bool match_valid;
@@ -39,6 +49,10 @@ struct GpsFilterState {
     GpsPoint raw_history[RAW_HISTORY_CAPACITY];
     int raw_history_count;
     int raw_history_next;
+    // Consecutive-reject counter.  Resets to 0 the moment a sample is
+    // accepted.  Exists purely so we can notice a stale baseline and
+    // rebuild it without fully reinitialising the filter.
+    uint8_t consecutive_rejects;
 };
 
 static GpsFilterState s_state = {};
@@ -373,19 +387,60 @@ void gps_filter_reset() {
 
 GpsFilterProcessResult gps_filter_process(const GpsPoint& raw_fix) {
     GpsFilterProcessResult result = {};
-    push_raw_history(raw_fix);
 
     result.raw_fix = raw_fix;
     result.display_valid = true;
     result.match_valid = true;
 
-    GpsPoint display_fix = apply_display_median(raw_fix);
-    GpsPoint match_fix = raw_fix;
-
+    // Decide reject BEFORE updating history.  Two reasons:
+    //   - Codex P2 from 2026-04-19: pushing the raw fix into
+    //     raw_history before the reject rules run let rejected spikes
+    //     leak into subsequent frames' display medians, undoing the
+    //     reject.
+    //   - Gating the history push on "not rejected by display" keeps
+    //     the reject thresholds themselves working against the same
+    //     stream of samples they always did — we only changed which
+    //     samples the downstream median gets to see.
     bool reject_display = s_state.display_valid
                        && should_reject_fix(s_state.display_fix, raw_fix);
     bool reject_match = s_state.match_valid
                      && should_reject_fix(s_state.match_fix, raw_fix);
+
+    // Escape hatch — Codex P1 from 2026-04-19.  Without this, a
+    // genuine GPS jump (tunnel exit, RTK fix acquisition, cold-start
+    // bias) gets rejected, then every subsequent sample also gets
+    // rejected because should_reject_fix still compares against the
+    // stale pre-jump baseline.  display_fix / match_fix look frozen
+    // from the UI's perspective even though raw data has long since
+    // recovered.  After MAX_CONSECUTIVE_REJECTS rejects in a row, we
+    // discard the stale baseline and treat the current sample as
+    // first-after-reset, rebuilding cleanly.
+    if ((reject_display || reject_match) &&
+        s_state.consecutive_rejects >= MAX_CONSECUTIVE_REJECTS) {
+        // display_valid / match_valid are read by the accessors under
+        // GPS_FILTER_LOCK; take the same lock so we don't tear their
+        // transition from true to false against a concurrent reader.
+        // consecutive_rejects and diagnostics are single-writer from
+        // inside gps_filter_process, so they don't strictly need the
+        // lock — but holding it briefly costs nothing and keeps the
+        // "filter state transitions happen atomically" invariant.
+        GPS_FILTER_LOCK();
+        s_state.display_valid = false;
+        s_state.match_valid = false;
+        s_state.consecutive_rejects = 0;
+        s_state.diagnostics.filter_resets++;
+        GPS_FILTER_UNLOCK();
+        // No baseline means nothing to reject against.
+        reject_display = false;
+        reject_match = false;
+    }
+
+    if (!reject_display) {
+        push_raw_history(raw_fix);
+    }
+
+    GpsPoint display_fix = apply_display_median(raw_fix);
+    GpsPoint match_fix = raw_fix;
 
     if (reject_display) {
         result.display_fix = s_state.display_fix;
@@ -417,6 +472,19 @@ GpsFilterProcessResult gps_filter_process(const GpsPoint& raw_fix) {
     }
 
     store_filter_outputs(result);
+
+    // Maintain the consecutive-reject counter that feeds the escape
+    // hatch at the top of this function.  A single accepted sample
+    // clears it.  A rejected sample increments it, clamped so it
+    // cannot wrap and silently defuse the hatch.
+    if (reject_display || reject_match) {
+        if (s_state.consecutive_rejects < UINT8_MAX) {
+            s_state.consecutive_rejects++;
+        }
+    } else {
+        s_state.consecutive_rejects = 0;
+    }
+
     return result;
 }
 

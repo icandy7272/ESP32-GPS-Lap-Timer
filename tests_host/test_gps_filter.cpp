@@ -1,6 +1,7 @@
 #include "gps_filter.h"
 
 #include <assert.h>
+#include <cmath>
 #include <math.h>
 
 static GpsPoint make_point(double lat_deg,
@@ -184,6 +185,100 @@ static void test_low_speed_heading_flip_is_rejected() {
     assert(out_flip.match_rejected);
 }
 
+// --- 2026-04-19 codex P1 follow-up: stale-baseline freeze ---------
+//
+// A legitimate GPS jump (RTK acquisition, tunnel exit, cold-start
+// bias) must not trap the filter into rejecting every subsequent
+// sample forever, because the reject test keeps comparing them to
+// the same pre-jump baseline.  After MAX_CONSECUTIVE_REJECTS
+// rejects in a row the filter should discard its stale baseline
+// and accept the next sample, rebuilding display/match state from
+// scratch.
+static void test_consecutive_rejects_trigger_filter_reset() {
+    gps_filter_reset();
+
+    // Anchor a normal baseline.
+    GpsPoint anchor = make_point(31.100000, 121.200000, 22.0f, 90.0f, 1000000);
+    GpsFilterProcessResult out_anchor = gps_filter_process(anchor);
+    assert(!out_anchor.display_rejected);
+
+    // Feed MAX_CONSECUTIVE_REJECTS (5) implausible jumps.  Each sample
+    // jumps ~1 km from anchor in 40 ms — every one must reject at
+    // speed + acceleration thresholds.  Expect display_fix to stay
+    // frozen on anchor for all 5.
+    GpsPoint jump = make_point(31.110000, 121.210000, 24.0f, 92.0f, 1040000);
+    for (int i = 0; i < 5; i++) {
+        jump.timestamp_us = 1040000 + static_cast<int64_t>(i) * 40000;
+        GpsFilterProcessResult r = gps_filter_process(jump);
+        assert(r.display_rejected);
+        assert(r.match_rejected);
+        // Display stays on the original anchor while the filter keeps
+        // rejecting.
+        assert(std::fabs(r.display_fix.lat_deg - out_anchor.display_fix.lat_deg) < 1e-9);
+    }
+
+    // The 6th sample must be accepted via the escape hatch — the
+    // stale baseline has been discarded, and this sample becomes the
+    // new first-after-reset anchor.  display_fix should now move to
+    // the jump coordinates (or close to them, via median) instead of
+    // staying frozen on the original anchor.
+    jump.timestamp_us = 1040000 + 5 * 40000;
+    GpsFilterProcessResult r = gps_filter_process(jump);
+    assert(!r.display_rejected);
+    assert(!r.match_rejected);
+    // Display has moved off the stale anchor.
+    assert(std::fabs(r.display_fix.lat_deg - out_anchor.display_fix.lat_deg) > 1e-6);
+
+    GpsFilterDiagnostics diag = gps_filter_get_diagnostics();
+    assert(diag.filter_resets >= 1);
+}
+
+// --- 2026-04-19 codex P2 follow-up: reject pollution ---------------
+//
+// The display-median history must NOT contain samples the filter
+// rejected.  Otherwise a cluster of bad fixes still shifts the
+// median toward the exact outliers the reject pass was meant to
+// hide.
+static void test_rejected_sample_not_in_display_median_history() {
+    gps_filter_reset();
+
+    // Seed a stable low-speed baseline (speed < DISPLAY_MEDIAN_MAX_SPEED_KMH
+    // so apply_display_median engages).  Low-speed jitter smoothing is
+    // the code path under test.
+    for (int i = 0; i < 6; i++) {
+        GpsPoint p = make_point(31.100000, 121.200000, 1.0f, 0.0f,
+                                1000000 + static_cast<int64_t>(i) * 100000);
+        GpsFilterProcessResult r = gps_filter_process(p);
+        assert(!r.display_rejected);
+    }
+
+    // Record the stable display lat/lon.
+    GpsFilterProcessResult stable;
+    stable = gps_filter_process(make_point(31.100000, 121.200000, 1.0f, 0.0f, 1700000));
+    const double stable_lat = stable.display_fix.lat_deg;
+
+    // Now inject one implausible spike that will be rejected by the
+    // acceleration / speed limits (85 km/h in 40 ms from a 1 km/h
+    // baseline).  Before the fix, this would still land in
+    // raw_history and shift the subsequent median.
+    GpsPoint spike = make_point(31.100000, 121.200000, 85.0f, 0.0f, 1740000);
+    GpsFilterProcessResult r_spike = gps_filter_process(spike);
+    assert(r_spike.display_rejected);
+
+    // Feed a normal low-speed sample.  If the rejected spike had
+    // leaked into raw_history, the median would shift toward the
+    // spike's influence.  The fix gates push_raw_history on
+    // !reject_display, so the median stays pinned to the 6 earlier
+    // stable samples.
+    GpsPoint next = make_point(31.100000, 121.200000, 1.0f, 0.0f, 1840000);
+    GpsFilterProcessResult r_next = gps_filter_process(next);
+
+    assert(!r_next.display_rejected);
+    // Display median must still be the stable lat (spike did not
+    // pollute the median input).
+    assert(std::fabs(r_next.display_fix.lat_deg - stable_lat) < 1e-9);
+}
+
 int main() {
     test_high_quality_3d_fix_scores_well();
     test_low_speed_2d_fix_keeps_heading_unreliable();
@@ -194,5 +289,7 @@ int main() {
     test_implausible_position_jump_is_rejected();
     test_implausible_acceleration_is_rejected();
     test_low_speed_heading_flip_is_rejected();
+    test_consecutive_rejects_trigger_filter_reset();
+    test_rejected_sample_not_in_display_median_history();
     return 0;
 }
