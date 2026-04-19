@@ -219,6 +219,27 @@ void handle_api_tracks_post() {
         return;
     }
 
+    // Firmware-side save gate.  The phone web UI already disables the
+    // Create Track button until MIN_ACCEPTED_CROSSINGS walks have
+    // landed, but a curl / devtools request can bypass the JS.  Enforce
+    // the same gate here so the only way to persist a new start/finish
+    // line is to have walked across it.  Codex P1 from 2026-04-19
+    // follow-up review.
+    const uint32_t min_acc = lap_timer_draft_validation_min_accepted();
+    if (!lap_timer_draft_validation_passes_gate(
+            &track.start_finish, /*tol_m=*/2.0, /*tol_deg=*/10.0,
+            min_acc)) {
+        char buf[192];
+        snprintf(buf, sizeof(buf),
+                 "{\"error\":\"not validated — walk across the line "
+                 "at least %u time(s) before save\","
+                 "\"code\":\"not_validated\","
+                 "\"min_accepted\":%u}",
+                 (unsigned)min_acc, (unsigned)min_acc);
+        server.send(409, "application/json", buf);
+        return;
+    }
+
     // Compute center from start/finish midpoint
     track.center_lat_deg = (track.start_finish.lat1_deg + track.start_finish.lat2_deg) / 2.0;
     track.center_lon_deg = (track.start_finish.lon1_deg + track.start_finish.lon2_deg) / 2.0;
@@ -498,8 +519,15 @@ void handle_api_tracks_draft_validation_post() {
         server.send(400, "application/json", buf);
         return;
     }
-    lap_timer_set_draft_validation_line(&line);
-    server.send(200, "application/json", "{\"ok\":true}");
+    uint32_t session_id = lap_timer_set_draft_validation_line(
+        &line, DRAFT_OWNER_WEB);
+    // Return the new session_id so the client can cache it and drop
+    // any GET response that doesn't match.  Closes the Flip Direction
+    // / re-mark race codex flagged in the 2026-04-19 follow-up.
+    char buf[64];
+    snprintf(buf, sizeof(buf),
+             "{\"ok\":true,\"session_id\":%u}", (unsigned)session_id);
+    server.send(200, "application/json", buf);
 }
 
 // GET /api/tracks/draft_validation
@@ -511,24 +539,38 @@ void handle_api_tracks_draft_validation_post() {
 // `events` is newest-first, capped at the firmware ring buffer depth
 // (currently 16).  Client should poll at ~500 ms.
 void handle_api_tracks_draft_validation_get() {
-    uint32_t accepted = 0, rejected = 0;
-    lap_timer_get_draft_validation_counts(&accepted, &rejected);
-    bool active = lap_timer_draft_validation_active();
-
+    // One-shot atomic snapshot: active / session_id / counts / owner /
+    // events all from the same critical section so the client cannot
+    // get a mixed response like "active=false with non-empty events"
+    // codex flagged in the 2026-04-19 follow-up review.
     constexpr int kMaxEvents = 16;
-    DraftCandidateEvent events[kMaxEvents];
-    int n = lap_timer_get_draft_validation_candidates(events, kMaxEvents);
+    DraftValidationSnapshot snap = {};
+    DraftCandidateEvent     events[kMaxEvents];
+    lap_timer_get_draft_validation_snapshot(&snap, events, kMaxEvents);
+
+    const char* owner_str = "none";
+    switch (snap.owner) {
+        case DRAFT_OWNER_SERIAL: owner_str = "serial"; break;
+        case DRAFT_OWNER_WEB:    owner_str = "web";    break;
+        default:                 owner_str = "none";   break;
+    }
 
     String json;
-    json.reserve(256 + n * 96);
+    json.reserve(256 + snap.event_count * 96);
     json += "{\"active\":";
-    json += active ? "true" : "false";
-    json += ",\"accepted\":";
-    json += accepted;
+    json += snap.active ? "true" : "false";
+    json += ",\"session_id\":";
+    json += (unsigned long)snap.session_id;
+    json += ",\"owner\":\"";
+    json += owner_str;
+    json += "\",\"accepted\":";
+    json += snap.accepted;
     json += ",\"rejected\":";
-    json += rejected;
+    json += snap.rejected;
+    json += ",\"min_accepted\":";
+    json += lap_timer_draft_validation_min_accepted();
     json += ",\"events\":[";
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < snap.event_count; i++) {
         if (i > 0) json += ",";
         const DraftCandidateEvent& e = events[i];
         char buf[192];
@@ -546,8 +588,14 @@ void handle_api_tracks_draft_validation_get() {
 }
 
 // DELETE /api/tracks/draft_validation
-// Clears the installed line, resets counters / ring buffer.
+// Clears the installed line, resets counters / ring buffer.  Returns
+// the new session_id (assigned by the clear operation) so the client
+// can cache it and recognise its own orphan-cleanup on the next GET.
 void handle_api_tracks_draft_validation_delete() {
-    lap_timer_set_draft_validation_line(nullptr);
-    server.send(200, "application/json", "{\"ok\":true}");
+    uint32_t new_id = lap_timer_set_draft_validation_line(
+        nullptr, DRAFT_OWNER_NONE);
+    char buf[64];
+    snprintf(buf, sizeof(buf),
+             "{\"ok\":true,\"session_id\":%u}", (unsigned)new_id);
+    server.send(200, "application/json", buf);
 }
