@@ -8,8 +8,17 @@
 // from 2026-04-19.
 #ifdef WALKING_TEST_MODE
 #define WEB_UI_SHORT_LINE_MIN_LENGTH_M_LIT "2"
+// Walking test can validate a line with a single accepted crossing — a
+// walking-pace loop takes long enough that requiring two just slows
+// field work without raising confidence much.
+#define WEB_UI_MIN_ACCEPTED_CROSSINGS_LIT "1"
 #else
 #define WEB_UI_SHORT_LINE_MIN_LENGTH_M_LIT "5"
+// Production: require two accepted crossings before enabling Save.
+// The roadmap (docs/superpowers/plans/2026-04-18-finish-line-live-map-debugging.md)
+// recommends 2 to catch the "one PASS was a lucky grazed extension"
+// failure mode.
+#define WEB_UI_MIN_ACCEPTED_CROSSINGS_LIT "2"
 #endif
 
 const char* build_web_ui_script_core_fragment() {
@@ -30,15 +39,19 @@ var POINT_SAMPLE_HIGH_SPREAD_M=1.2;
 var POINT_SAMPLE_MEDIUM_SPREAD_M=2.5;
 )JS"
     "var SHORT_LINE_MIN_LENGTH_M=" WEB_UI_SHORT_LINE_MIN_LENGTH_M_LIT ";\n"
+    "var MIN_ACCEPTED_CROSSINGS=" WEB_UI_MIN_ACCEPTED_CROSSINGS_LIT ";\n"
     R"JS(var SHORT_LINE_SPREAD_FACTOR=4;
 var REPEATABILITY_CHECK_ENABLED=true;
+var VALIDATION_POLL_MS=500;
+var VALIDATION_EVENTS_SHOWN=5;
 var _pointSampling=null;
 var _trackDraft={
   gps:{fix:false,satellites:0,lat:0,lon:0},
   startFinish:{p1:null,p2:null,heading:null,flipped:false},
   sectors:[],
   sectorsExpanded:false,
-  repeatability:makeRepeatabilityState(false)
+  repeatability:makeRepeatabilityState(false),
+  validation:makeValidationState()
 };
 var _statusSnapshot={
   track:'',
@@ -68,6 +81,27 @@ function makeRepeatabilityState(flipped){
 
 function resetRepeatabilityState(){
   _trackDraft.repeatability=makeRepeatabilityState(_trackDraft.startFinish.flipped);
+}
+
+// Phase B: validation state used by the "walk across the line and
+// watch live crossings" step between Mark P2 and Save.
+function makeValidationState(){
+  return {
+    active:false,            // backend has a line installed and we're polling
+    installing:false,        // in-flight POST to /api/tracks/draft_validation
+    accepted:0,
+    rejected:0,
+    events:[],               // newest-first, capped client-side
+    pollTimer:null,
+    lastError:null,
+  };
+}
+
+function resetValidationState(){
+  if(_trackDraft.validation&&_trackDraft.validation.pollTimer){
+    clearInterval(_trackDraft.validation.pollTimer);
+  }
+  _trackDraft.validation=makeValidationState();
 }
 
 function formatCoord(point){
@@ -119,13 +153,22 @@ function hasIncompleteSectors(){
 function isCreateReady(){
   var lineInfo=lineConfidenceInfo(_trackDraft.startFinish);
   var nameField=$('track-name');
+  var v=_trackDraft.validation||{accepted:0};
   return !!(nameField&&nameField.value.trim()&&
             _trackDraft.startFinish.p1&&
             _trackDraft.startFinish.p2&&
             typeof _trackDraft.startFinish.heading==='number'&&
             lineInfo.ready&&
             !_trackDraft.repeatability.active&&
-            !hasIncompleteSectors());
+            !hasIncompleteSectors()&&
+            // Gate Save on walking-across validation: at least
+            // MIN_ACCEPTED_CROSSINGS PASS events must have been seen
+            // against the draft line.  Walking=1, production=2; see
+            // WEB_UI_MIN_ACCEPTED_CROSSINGS_LIT.  Codex feedback
+            // could also tighten this further; for now it blocks the
+            // "saved a line that never triggers a crossing" footgun
+            // the 2026-04-18 roadmap called out.
+            (v.accepted||0) >= MIN_ACCEPTED_CROSSINGS);
 }
 
 function setTrackMsg(text,kind){
@@ -496,12 +539,18 @@ function currentCreationStage(){
 function resetTrackDraft(){
   var gps=_trackDraft.gps;
   _pointSampling=null;
+  // Stop any active validation polling before swapping state so a
+  // stale setInterval() doesn't fire into the new draft.
+  if(_trackDraft.validation&&_trackDraft.validation.pollTimer){
+    clearInterval(_trackDraft.validation.pollTimer);
+  }
   _trackDraft={
     gps:{fix:gps.fix,satellites:gps.satellites,lat:gps.lat,lon:gps.lon},
     startFinish:{p1:null,p2:null,heading:null,flipped:false},
     sectors:[],
     sectorsExpanded:false,
-    repeatability:makeRepeatabilityState(false)
+    repeatability:makeRepeatabilityState(false),
+    validation:makeValidationState()
   };
   _nextSectorId=1;
   _trackSubmitPending=false;

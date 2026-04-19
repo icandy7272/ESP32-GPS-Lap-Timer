@@ -42,6 +42,15 @@ void wifi_init() {
     server.on("/api/tracks",        HTTP_POST, handle_api_tracks_post);
     server.on("/api/tracks/select", HTTP_POST, handle_api_tracks_select);
     server.on("/api/tracks/delete", HTTP_POST, handle_api_tracks_delete);
+    // Draft validation — Phase B.  Clients POST a candidate line, GET
+    // the accepted/rejected counts + last-N candidates while the
+    // operator walks across it, and DELETE (or POST empty) to clear.
+    server.on("/api/tracks/draft_validation", HTTP_POST,
+              handle_api_tracks_draft_validation_post);
+    server.on("/api/tracks/draft_validation", HTTP_GET,
+              handle_api_tracks_draft_validation_get);
+    server.on("/api/tracks/draft_validation", HTTP_DELETE,
+              handle_api_tracks_draft_validation_delete);
     server.on("/api/recording",     HTTP_POST, handle_api_recording);
     server.on("/api/settings",      HTTP_GET,  handle_api_settings_get);
     server.on("/api/settings",      HTTP_POST, handle_api_settings_post);

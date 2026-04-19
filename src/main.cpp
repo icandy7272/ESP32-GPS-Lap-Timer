@@ -329,6 +329,28 @@ static void draft_clear() {
     s_draft_has_p1 = false;
     s_draft_has_p2 = false;
     s_draft_name[0] = '\0';
+    // Clear the lap-timer's draft validation line so stale candidates
+    // from a previous draft session stop firing.
+    lap_timer_set_draft_validation_line(nullptr);
+}
+
+// Push the current draft (P1/P2/heading) into the lap_timer as the
+// draft validation line.  Safe to call at any point — the lap_timer
+// side is idempotent and resets its counters/ring buffer on each
+// call.  Only installs the line when both endpoints + heading are
+// ready; no-ops otherwise so "mark p1" alone doesn't start firing
+// garbage candidates against a half-drawn line.
+static void draft_install_validation_line_if_ready() {
+    if (!s_draft_active || !s_draft_has_p1 || !s_draft_has_p2) {
+        return;
+    }
+    DetectionLine dl = {};
+    dl.lat1_deg = s_draft_p1_lat;
+    dl.lon1_deg = s_draft_p1_lon;
+    dl.lat2_deg = s_draft_p2_lat;
+    dl.lon2_deg = s_draft_p2_lon;
+    dl.valid_heading_deg = s_draft_heading;
+    lap_timer_set_draft_validation_line(&dl);
 }
 
 static void draft_sort_ascending(double* arr, int n) {
@@ -495,6 +517,10 @@ static void serial_console_handle_track_mark(int which) {
         // stays at the default 0.0f and the saved track persists a
         // bogus valid_heading.  Codex P2 from 2026-04-19 follow-up.
         draft_compute_heading_locked();
+        // If P2 was already set (out-of-order marking), install the
+        // validation line now — all three fields (P1/P2/heading) are
+        // ready.  Otherwise no-op until `mark p2`.
+        draft_install_validation_line_if_ready();
         // Append spread and tier AFTER the `(lat, lon)` block so live_map's
         // existing `_DRAFT_P1_RE` regex still matches the coords, and the
         // new `_DRAFT_SPREAD_RE` regex picks up the confidence metadata.
@@ -506,6 +532,11 @@ static void serial_console_handle_track_mark(int which) {
         s_draft_has_p2 = true;
         draft_compute_heading_locked();
         if (s_draft_has_p1) {
+            // Auto-install the draft as the lap_timer's validation
+            // line — the operator can now walk across it and see
+            // PASS/REJECT candidates in live_map (Phase A) or the
+            // phone web UI (Phase B) before committing to save.
+            draft_install_validation_line_if_ready();
             Serial.printf(
                 "[draft] p2 = (%.7f, %.7f) heading=%.1f spread=%.2fm tier=%s samples=%d\n",
                 lat, lon, s_draft_heading, spread_m, tier, sample_count);
