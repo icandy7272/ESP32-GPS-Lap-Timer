@@ -71,6 +71,12 @@ void handle_api_tracks();
 void handle_api_tracks_post();
 void handle_api_tracks_select();
 void handle_api_tracks_delete();
+// Phase B of the 2026-04-18 finish-line debugging roadmap.  Operator
+// installs a candidate line, walks across it, sees PASS/REJECT before
+// saving.  See docs/superpowers/plans/2026-04-18-finish-line-live-map-debugging.md.
+void handle_api_tracks_draft_validation_post();   // install line
+void handle_api_tracks_draft_validation_get();    // state + counts + events
+void handle_api_tracks_draft_validation_delete(); // clear
 void handle_api_recording();
 void handle_api_settings_get();
 void handle_api_settings_post();

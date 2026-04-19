@@ -446,3 +446,108 @@ void handle_api_tracks_delete() {
         server.send(500, "application/json", "{\"error\":\"delete failed\"}");
     }
 }
+
+// ============================================================
+// /api/tracks/draft_validation — Phase B of the 2026-04-18 roadmap.
+//
+// Install a candidate detection line and let the phone UI poll
+// PASS/REJECT counts + reasons as the operator walks across it.
+// No persistence, no lap state, no session side-effects — this is
+// purely a dry-run of the crossing geometry for save-time validation.
+// ============================================================
+
+static const char* draft_reason_to_string(uint8_t reason) {
+    switch (reason) {
+        case DRAFT_REASON_SEGMENT:                    return "segment";
+        case DRAFT_REASON_EXTENSION:                  return "extension";
+        case DRAFT_REASON_HEADING_MISMATCH:           return "heading_mismatch";
+        case DRAFT_REASON_OUTSIDE_ENDPOINT_TOLERANCE: return "outside_endpoint_tolerance";
+        case DRAFT_REASON_NONE:
+        default:                                      return "";
+    }
+}
+
+// POST /api/tracks/draft_validation
+// Body: {"sf_lat1":..,"sf_lon1":..,"sf_lat2":..,"sf_lon2":..,"sf_heading":..}
+//
+// Accepts the same field names used by POST /api/tracks create so the
+// JS can reuse its existing serializer.  Resets the counters + ring
+// buffer every time a line is installed — a Flip Direction press
+// re-POSTs the same P1/P2 with heading ± 180° and starts fresh.
+void handle_api_tracks_draft_validation_post() {
+    if (is_throttled()) {
+        server.send(503, "application/json", "{\"error\":\"busy\"}");
+        return;
+    }
+    if (!server.hasArg("plain")) {
+        server.send(400, "application/json", "{\"error\":\"no body\"}");
+        return;
+    }
+    String body = server.arg("plain");
+    const char* json = body.c_str();
+    DetectionLine line = {};
+    const char* err = nullptr;
+    if (!extract_detection_line(json,
+                                "sf_lat1", "sf_lon1",
+                                "sf_lat2", "sf_lon2",
+                                "sf_heading",
+                                &line, &err)) {
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+                 "{\"error\":\"draft_validation: %s\"}", err ? err : "invalid");
+        server.send(400, "application/json", buf);
+        return;
+    }
+    lap_timer_set_draft_validation_line(&line);
+    server.send(200, "application/json", "{\"ok\":true}");
+}
+
+// GET /api/tracks/draft_validation
+// Returns:
+//   {"active":bool,"accepted":N,"rejected":N,
+//    "events":[{"ts_us":..,"u":..,"overshoot_m":..,"hdiff_deg":..,
+//               "accepted":bool,"reason":"..."}...]}
+//
+// `events` is newest-first, capped at the firmware ring buffer depth
+// (currently 16).  Client should poll at ~500 ms.
+void handle_api_tracks_draft_validation_get() {
+    uint32_t accepted = 0, rejected = 0;
+    lap_timer_get_draft_validation_counts(&accepted, &rejected);
+    bool active = lap_timer_draft_validation_active();
+
+    constexpr int kMaxEvents = 16;
+    DraftCandidateEvent events[kMaxEvents];
+    int n = lap_timer_get_draft_validation_candidates(events, kMaxEvents);
+
+    String json;
+    json.reserve(256 + n * 96);
+    json += "{\"active\":";
+    json += active ? "true" : "false";
+    json += ",\"accepted\":";
+    json += accepted;
+    json += ",\"rejected\":";
+    json += rejected;
+    json += ",\"events\":[";
+    for (int i = 0; i < n; i++) {
+        if (i > 0) json += ",";
+        const DraftCandidateEvent& e = events[i];
+        char buf[192];
+        snprintf(buf, sizeof(buf),
+                 "{\"ts_us\":%lld,\"u\":%.4f,\"overshoot_m\":%.3f,"
+                 "\"hdiff_deg\":%.2f,\"accepted\":%s,\"reason\":\"%s\"}",
+                 (long long)e.timestamp_us,
+                 e.u, e.overshoot_m, (double)e.hdiff_deg,
+                 e.accepted ? "true" : "false",
+                 draft_reason_to_string(e.reason));
+        json += buf;
+    }
+    json += "]}";
+    server.send(200, "application/json", json);
+}
+
+// DELETE /api/tracks/draft_validation
+// Clears the installed line, resets counters / ring buffer.
+void handle_api_tracks_draft_validation_delete() {
+    lap_timer_set_draft_validation_line(nullptr);
+    server.send(200, "application/json", "{\"ok\":true}");
+}

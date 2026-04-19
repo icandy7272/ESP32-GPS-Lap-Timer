@@ -362,8 +362,193 @@ function renderTrackDraft(){
   renderSectorRows();
   renderGeometryReview();
   renderRepeatabilitySection();
+  renderValidationSection();
   renderCreateButton();
   scheduleStatusRefresh();
+}
+
+// --- Phase B: draft validation section --------------------------
+//
+// Shown after Mark P2 completes and before Save.  Installs the draft
+// line on the firmware, polls /api/tracks/draft_validation, and renders
+// live PASS/REJECT counts and the last few candidates so the operator
+// can walk across the line and confirm it triggers.
+
+function renderValidationSection(){
+  var section=$('validate-section');
+  var btn=$('validate-btn');
+  var summary=$('validate-summary');
+  var events=$('validate-events');
+  var flipBtn=$('validate-flip-btn');
+  var cancelBtn=$('validate-cancel-btn');
+  if(!section){return;}
+
+  var v=_trackDraft.validation||makeValidationState();
+  var ready=isReviewReady();
+  section.style.display=ready?'block':'none';
+  if(!ready){return;}
+
+  if(btn){
+    if(v.active){
+      btn.textContent=v.accepted>=MIN_ACCEPTED_CROSSINGS
+        ? 'Validating... ('+v.accepted+'/'+MIN_ACCEPTED_CROSSINGS+' ✓)'
+        : 'Validating... walk across the line';
+      btn.disabled=true;
+    }else if(v.installing){
+      btn.textContent='Starting...';
+      btn.disabled=true;
+    }else if(v.accepted>=MIN_ACCEPTED_CROSSINGS){
+      btn.textContent='Re-validate';
+      btn.disabled=false;
+    }else{
+      btn.textContent='Validate By Walking Across';
+      btn.disabled=false;
+    }
+  }
+  if(flipBtn){flipBtn.style.display=v.active?'inline-block':'none';}
+  if(cancelBtn){cancelBtn.style.display=v.active?'inline-block':'none';}
+
+  if(summary){
+    if(v.lastError){
+      summary.innerHTML='<span class="track-msg-err">'+v.lastError+'</span>';
+    }else if(v.active){
+      var need=Math.max(0,MIN_ACCEPTED_CROSSINGS-v.accepted);
+      var needTxt=need>0
+        ? (' — '+need+' more accepted crossing'+(need===1?'':'s')+' needed')
+        : ' — ready to Save';
+      summary.innerHTML='<div class="validate-summary-box">'+
+        '<span class="validate-summary-pass">✓ '+v.accepted+' accepted</span>'+
+        '<span class="validate-summary-reject">✗ '+v.rejected+' rejected</span>'+
+        '</div>'+
+        '<div>Walk across the line'+needTxt+'.</div>';
+    }else if(v.accepted>=MIN_ACCEPTED_CROSSINGS){
+      summary.innerHTML='<span class="track-msg-ok">Validated: '+
+        v.accepted+' accepted, '+v.rejected+' rejected. You can Save.</span>';
+    }else{
+      summary.textContent='Optional but recommended: walk across the line a few times and confirm it fires.';
+    }
+  }
+
+  if(events){
+    var rows=(v.events||[]).slice(0,VALIDATION_EVENTS_SHOWN).map(function(e){
+      var cls=e.accepted?'pass':'reject';
+      var verdict=e.accepted?'PASS':'REJECT';
+      var uStr=(typeof e.u==='number')?e.u.toFixed(2):'?';
+      var over=(typeof e.overshoot_m==='number')?e.overshoot_m.toFixed(2):'0';
+      var hd=(typeof e.hdiff_deg==='number')
+        ? (e.hdiff_deg>=0?'+':'')+e.hdiff_deg.toFixed(1)
+        : '?';
+      return '<div class="vrow '+cls+'">'+verdict+' '+
+             '<span class="vreason">u='+uStr+' over='+over+'m hd='+hd+'° '+
+             (e.reason||'')+'</span></div>';
+    });
+    events.innerHTML=rows.join('');
+  }
+}
+
+// Build the body the firmware expects on POST /api/tracks/draft_validation.
+// Uses the current draft line heading (so Flip Direction re-POSTs with
+// heading ± 180°).
+function validationPayload(){
+  var sf=_trackDraft.startFinish;
+  if(!sf.p1||!sf.p2||typeof sf.heading!=='number'){return null;}
+  return {
+    sf_lat1:sf.p1.lat, sf_lon1:sf.p1.lon,
+    sf_lat2:sf.p2.lat, sf_lon2:sf.p2.lon,
+    sf_heading:sf.heading
+  };
+}
+
+function startValidation(){
+  var v=_trackDraft.validation;
+  if(!v){v=_trackDraft.validation=makeValidationState();}
+  if(v.installing||v.active){return;}
+  var payload=validationPayload();
+  if(!payload){
+    setTrackMsg('Mark both Start/Finish points first.','err');
+    return;
+  }
+  v.installing=true;
+  v.lastError=null;
+  renderTrackDraft();
+  fetch('/api/tracks/draft_validation',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload)
+  }).then(function(response){
+    return response.json().then(function(b){return {ok:response.ok,body:b};});
+  }).then(function(result){
+    v.installing=false;
+    if(!result.ok){
+      v.lastError='Failed to start validation: '+
+        (result.body&&result.body.error||'unknown');
+      renderTrackDraft();
+      return;
+    }
+    v.active=true;
+    v.accepted=0;
+    v.rejected=0;
+    v.events=[];
+    if(v.pollTimer){clearInterval(v.pollTimer);}
+    v.pollTimer=setInterval(pollValidation,VALIDATION_POLL_MS);
+    renderTrackDraft();
+  }).catch(function(err){
+    v.installing=false;
+    v.lastError='Failed to start validation: '+err;
+    renderTrackDraft();
+  });
+}
+
+function pollValidation(){
+  var v=_trackDraft.validation;
+  if(!v||!v.active){return;}
+  fetch('/api/tracks/draft_validation').then(function(r){
+    return r.json();
+  }).then(function(body){
+    if(!_trackDraft.validation||!_trackDraft.validation.active){return;}
+    _trackDraft.validation.accepted=body.accepted|0;
+    _trackDraft.validation.rejected=body.rejected|0;
+    _trackDraft.validation.events=(body.events||[]);
+    renderTrackDraft();
+  }).catch(function(){/* transient network — keep trying */});
+}
+
+function stopValidation(){
+  var v=_trackDraft.validation;
+  if(!v){return;}
+  if(v.pollTimer){clearInterval(v.pollTimer); v.pollTimer=null;}
+  v.active=false;
+  // Fire and forget — the firmware also clears on the next setter.
+  fetch('/api/tracks/draft_validation',{method:'DELETE'}).catch(function(){});
+  renderTrackDraft();
+}
+
+function flipValidationDirection(){
+  var sf=_trackDraft.startFinish;
+  if(!sf.p1||!sf.p2||typeof sf.heading!=='number'){return;}
+  // Toggle the flipped flag the existing flipStartFinishHeading()
+  // uses, so both the Repeatability and Validation paths see the
+  // same direction.
+  sf.flipped=!sf.flipped;
+  updateStartFinishHeading();
+  // Re-POST with the new heading — backend resets counters + ring
+  // buffer every time the line is installed, so the operator gets a
+  // fresh walk test after the flip.
+  var v=_trackDraft.validation;
+  if(v&&v.active){
+    v.accepted=0;
+    v.rejected=0;
+    v.events=[];
+    var payload=validationPayload();
+    if(payload){
+      fetch('/api/tracks/draft_validation',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(payload)
+      }).catch(function(){});
+    }
+  }
+  renderTrackDraft();
 }
 
 
@@ -397,6 +582,17 @@ function markStartFinishPoint(which){
     if(!_trackDraft.repeatability.active){
       resetRepeatabilityState();
     }
+    // Re-marking a point invalidates any prior validation walk — the
+    // firmware's draft line was against the OLD P1/P2.  Clear client
+    // counters; backend will be re-installed when the operator hits
+    // Validate again.
+    if(!_trackDraft.repeatability.active){
+      if(_trackDraft.validation&&_trackDraft.validation.active){
+        stopValidation();
+      }else{
+        resetValidationState();
+      }
+    }
     setTrackMsg(point.captureSummary,point.confidence==='high'?'ok':(point.confidence==='low'?'err':''));
     renderTrackDraft();
   }).catch(function(err){
@@ -424,6 +620,25 @@ function flipStartFinishHeading(){
   _trackDraft.startFinish.flipped=!_trackDraft.startFinish.flipped;
   updateStartFinishHeading();
   resetRepeatabilityState();
+  // Flipping direction invalidates any prior validation run — the
+  // line the firmware is tracking now has the old heading, so the
+  // accept/reject counts don't apply.  Reset counters and re-install
+  // if a validation was already active.
+  if(_trackDraft.validation&&_trackDraft.validation.active){
+    _trackDraft.validation.accepted=0;
+    _trackDraft.validation.rejected=0;
+    _trackDraft.validation.events=[];
+    var payload=validationPayload();
+    if(payload){
+      fetch('/api/tracks/draft_validation',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(payload)
+      }).catch(function(){});
+    }
+  }else{
+    resetValidationState();
+  }
   renderTrackDraft();
 }
 
@@ -579,6 +794,15 @@ function addTrack(){
   };
 
   _trackSubmitPending=true;
+  // Save supersedes validation — stop polling and clear the draft
+  // line on the firmware so stale [xing-draft] events don't keep
+  // firing once the real track takes over.
+  if(_trackDraft.validation&&_trackDraft.validation.active){
+    stopValidation();
+  }else{
+    // Best-effort DELETE in case the UI got out of sync.
+    fetch('/api/tracks/draft_validation',{method:'DELETE'}).catch(function(){});
+  }
   renderTrackDraft();
   setTrackMsg('Creating track...','');
   fetch('/api/tracks',{
@@ -626,6 +850,9 @@ function initTrackCreationUi(){
   if($('sf-p2-btn')){$('sf-p2-btn').onclick=function(){markStartFinishPoint('p2');};}
   if($('sample-cancel-btn')){$('sample-cancel-btn').onclick=cancelPointSampling;}
   if($('repeatability-btn')){$('repeatability-btn').onclick=startRepeatabilityCheck;}
+  if($('validate-btn')){$('validate-btn').onclick=startValidation;}
+  if($('validate-cancel-btn')){$('validate-cancel-btn').onclick=stopValidation;}
+  if($('validate-flip-btn')){$('validate-flip-btn').onclick=flipValidationDirection;}
   if($('sf-flip')){$('sf-flip').onclick=flipStartFinishHeading;}
   if($('sector-toggle')){$('sector-toggle').onclick=toggleSectorSection;}
   if($('add-sector-btn')){$('add-sector-btn').onclick=addSectorRow;}
