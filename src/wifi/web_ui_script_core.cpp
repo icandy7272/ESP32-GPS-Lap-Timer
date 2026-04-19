@@ -85,6 +85,11 @@ function resetRepeatabilityState(){
 
 // Phase B: validation state used by the "walk across the line and
 // watch live crossings" step between Mark P2 and Save.
+//
+// sessionId is the firmware-assigned id cached on POST.  pollValidation()
+// drops any GET response whose session_id does not match — that fixes
+// the Flip Direction / re-mark race codex flagged (in-flight pre-flip
+// GET could otherwise resurrect the save gate on the new line).
 function makeValidationState(){
   return {
     active:false,            // backend has a line installed and we're polling
@@ -94,6 +99,7 @@ function makeValidationState(){
     events:[],               // newest-first, capped client-side
     pollTimer:null,
     lastError:null,
+    sessionId:0,             // 0 = no session yet; firmware id otherwise
   };
 }
 

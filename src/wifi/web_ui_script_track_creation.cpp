@@ -459,17 +459,23 @@ function validationPayload(){
   };
 }
 
+// All validation state mutations re-resolve _trackDraft.validation by
+// current identity and check it hasn't been swapped under them (via
+// resetTrackDraft / resetValidationState).  Codex P2 from 2026-04-19
+// follow-up: closing over the old `v` object let a late POST /
+// pollValidation callback install a timer on a detached state that
+// nothing could later clear, leaving the firmware line orphaned.
 function startValidation(){
-  var v=_trackDraft.validation;
-  if(!v){v=_trackDraft.validation=makeValidationState();}
-  if(v.installing||v.active){return;}
+  var v0=_trackDraft.validation;
+  if(!v0){v0=_trackDraft.validation=makeValidationState();}
+  if(v0.installing||v0.active){return;}
   var payload=validationPayload();
   if(!payload){
     setTrackMsg('Mark both Start/Finish points first.','err');
     return;
   }
-  v.installing=true;
-  v.lastError=null;
+  v0.installing=true;
+  v0.lastError=null;
   renderTrackDraft();
   fetch('/api/tracks/draft_validation',{
     method:'POST',
@@ -478,76 +484,129 @@ function startValidation(){
   }).then(function(response){
     return response.json().then(function(b){return {ok:response.ok,body:b};});
   }).then(function(result){
-    v.installing=false;
+    // Re-resolve the CURRENT validation state.  If re-mark / reset
+    // swapped it while POST was in flight, don't touch the new one.
+    var vNow=_trackDraft.validation;
+    if(vNow!==v0){
+      // Old state was discarded.  Tell the firmware to drop the line
+      // we just installed so nothing lingers.
+      fetch('/api/tracks/draft_validation',{method:'DELETE'}).catch(function(){});
+      return;
+    }
+    vNow.installing=false;
     if(!result.ok){
-      v.lastError='Failed to start validation: '+
+      vNow.lastError='Failed to start validation: '+
         (result.body&&result.body.error||'unknown');
       renderTrackDraft();
       return;
     }
-    v.active=true;
-    v.accepted=0;
-    v.rejected=0;
-    v.events=[];
-    if(v.pollTimer){clearInterval(v.pollTimer);}
-    v.pollTimer=setInterval(pollValidation,VALIDATION_POLL_MS);
+    vNow.active=true;
+    vNow.accepted=0;
+    vNow.rejected=0;
+    vNow.events=[];
+    // Session id tags every subsequent poll response; the firmware
+    // bumps it on any set/clear so mismatched data is dropped.
+    vNow.sessionId=(result.body&&result.body.session_id)|0;
+    if(vNow.pollTimer){clearInterval(vNow.pollTimer);}
+    vNow.pollTimer=setInterval(pollValidation,VALIDATION_POLL_MS);
     renderTrackDraft();
   }).catch(function(err){
-    v.installing=false;
-    v.lastError='Failed to start validation: '+err;
+    var vNow=_trackDraft.validation;
+    if(vNow!==v0){return;}
+    vNow.installing=false;
+    vNow.lastError='Failed to start validation: '+err;
     renderTrackDraft();
   });
 }
 
 function pollValidation(){
-  var v=_trackDraft.validation;
-  if(!v||!v.active){return;}
+  var v0=_trackDraft.validation;
+  if(!v0||!v0.active){return;}
+  var expectedId=v0.sessionId;
   fetch('/api/tracks/draft_validation').then(function(r){
     return r.json();
   }).then(function(body){
-    if(!_trackDraft.validation||!_trackDraft.validation.active){return;}
-    _trackDraft.validation.accepted=body.accepted|0;
-    _trackDraft.validation.rejected=body.rejected|0;
-    _trackDraft.validation.events=(body.events||[]);
+    // Reject stale / mismatched sessions.  Flip Direction, re-mark,
+    // or any reset bumps sessionId client-side via the next POST
+    // response, and firmware bumps its own id on every set/clear —
+    // so one check covers all cross-state races.
+    var vNow=_trackDraft.validation;
+    if(!vNow||vNow!==v0) return;
+    if(!vNow.active) return;
+    if(typeof body.session_id==='number' && body.session_id!==expectedId) return;
+    // Defend against mixed-snapshot regressions on ancient firmware:
+    // if firmware says !active, treat as drift and stop locally.
+    if(body.active===false){
+      stopValidationLocal(vNow);
+      return;
+    }
+    vNow.accepted=body.accepted|0;
+    vNow.rejected=body.rejected|0;
+    vNow.events=(body.events||[]);
     renderTrackDraft();
   }).catch(function(){/* transient network — keep trying */});
+}
+
+// Strip polling + active flag + counters from a validation state
+// without hitting the network.  Used when the firmware reports the
+// session is gone (after a concurrent clear) so the UI doesn't loop.
+function stopValidationLocal(v){
+  if(!v) return;
+  if(v.pollTimer){clearInterval(v.pollTimer); v.pollTimer=null;}
+  v.active=false;
+  v.accepted=0;
+  v.rejected=0;
+  v.events=[];
+  v.sessionId=0;
+  renderTrackDraft();
 }
 
 function stopValidation(){
   var v=_trackDraft.validation;
   if(!v){return;}
-  if(v.pollTimer){clearInterval(v.pollTimer); v.pollTimer=null;}
-  v.active=false;
-  // Fire and forget — the firmware also clears on the next setter.
+  // ZERO the counters so a subsequent re-mark / navigate-back cannot
+  // leave isCreateReady() satisfied against a line that is no longer
+  // the current draft.  Codex P1 from 2026-04-19 follow-up review.
+  stopValidationLocal(v);
+  // Fire and forget — firmware also clears on the next setter.
   fetch('/api/tracks/draft_validation',{method:'DELETE'}).catch(function(){});
-  renderTrackDraft();
 }
 
 function flipValidationDirection(){
   var sf=_trackDraft.startFinish;
   if(!sf.p1||!sf.p2||typeof sf.heading!=='number'){return;}
   // Toggle the flipped flag the existing flipStartFinishHeading()
-  // uses, so both the Repeatability and Validation paths see the
+  // uses so both the Repeatability and Validation paths see the
   // same direction.
   sf.flipped=!sf.flipped;
   updateStartFinishHeading();
-  // Re-POST with the new heading — backend resets counters + ring
-  // buffer every time the line is installed, so the operator gets a
-  // fresh walk test after the flip.
-  var v=_trackDraft.validation;
-  if(v&&v.active){
-    v.accepted=0;
-    v.rejected=0;
-    v.events=[];
-    var payload=validationPayload();
-    if(payload){
-      fetch('/api/tracks/draft_validation',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(payload)
-      }).catch(function(){});
-    }
+  var v0=_trackDraft.validation;
+  if(!v0||!v0.active){
+    renderTrackDraft();
+    return;
   }
+  // Zero local counters immediately so isCreateReady() cannot satisfy
+  // Save based on pre-flip PASS counts while we wait for the new
+  // session id.  Save stays disabled until fresh accepted crossings
+  // land against the flipped line.  Codex P1 from 2026-04-19.
+  v0.accepted=0;
+  v0.rejected=0;
+  v0.events=[];
+  v0.sessionId=0;  // old session invalidated; drop any in-flight poll
+  var payload=validationPayload();
+  if(!payload){renderTrackDraft();return;}
+  fetch('/api/tracks/draft_validation',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload)
+  }).then(function(r){return r.json().then(function(b){return {ok:r.ok,body:b};});})
+    .then(function(result){
+      var vNow=_trackDraft.validation;
+      if(!vNow||vNow!==v0) return;
+      if(!result.ok) return;
+      vNow.sessionId=(result.body&&result.body.session_id)|0;
+    })
+    .catch(function(){});
   renderTrackDraft();
 }
 
@@ -620,21 +679,31 @@ function flipStartFinishHeading(){
   _trackDraft.startFinish.flipped=!_trackDraft.startFinish.flipped;
   updateStartFinishHeading();
   resetRepeatabilityState();
-  // Flipping direction invalidates any prior validation run — the
-  // line the firmware is tracking now has the old heading, so the
-  // accept/reject counts don't apply.  Reset counters and re-install
-  // if a validation was already active.
-  if(_trackDraft.validation&&_trackDraft.validation.active){
-    _trackDraft.validation.accepted=0;
-    _trackDraft.validation.rejected=0;
-    _trackDraft.validation.events=[];
+  // Flipping direction invalidates any prior validation run.  Zero
+  // counters + sessionId immediately so no in-flight poll response
+  // or stale closure can re-satisfy the Save gate on the flipped
+  // line (codex P1).  If a validation was active, re-install with
+  // the new heading and cache the new session id on POST return.
+  var v0=_trackDraft.validation;
+  if(v0&&v0.active){
+    v0.accepted=0;
+    v0.rejected=0;
+    v0.events=[];
+    v0.sessionId=0;
     var payload=validationPayload();
     if(payload){
       fetch('/api/tracks/draft_validation',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify(payload)
-      }).catch(function(){});
+      }).then(function(r){return r.json().then(function(b){return {ok:r.ok,body:b};});})
+        .then(function(result){
+          var vNow=_trackDraft.validation;
+          if(!vNow||vNow!==v0) return;
+          if(!result.ok) return;
+          vNow.sessionId=(result.body&&result.body.session_id)|0;
+        })
+        .catch(function(){});
     }
   }else{
     resetValidationState();
@@ -890,6 +959,19 @@ function initTrackCreationUi(){
     });
   }
   renderTrackDraft();
+  // Reconcile any orphaned firmware-side draft_validation line from
+  // a previous page load (closed tab / reload while validation was
+  // active).  A fire-and-forget DELETE is enough — the client does
+  // not try to reattach since the counters / session id from that
+  // prior walk-test are no longer trustworthy.  Codex P2 from
+  // 2026-04-19 follow-up review.
+  fetch('/api/tracks/draft_validation').then(function(r){return r.json();})
+    .then(function(body){
+      if(body && body.active){
+        fetch('/api/tracks/draft_validation',{method:'DELETE'}).catch(function(){});
+      }
+    })
+    .catch(function(){/* no firmware / boot race — ignore */});
 }
 
 

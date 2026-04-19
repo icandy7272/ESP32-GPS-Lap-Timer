@@ -331,7 +331,7 @@ static void draft_clear() {
     s_draft_name[0] = '\0';
     // Clear the lap-timer's draft validation line so stale candidates
     // from a previous draft session stop firing.
-    lap_timer_set_draft_validation_line(nullptr);
+    (void)lap_timer_set_draft_validation_line(nullptr, DRAFT_OWNER_NONE);
 }
 
 // Push the current draft (P1/P2/heading) into the lap_timer as the
@@ -350,7 +350,10 @@ static void draft_install_validation_line_if_ready() {
     dl.lat2_deg = s_draft_p2_lat;
     dl.lon2_deg = s_draft_p2_lon;
     dl.valid_heading_deg = s_draft_heading;
-    lap_timer_set_draft_validation_line(&dl);
+    // Tag the install with SERIAL ownership so cross-surface takeovers
+    // (web UI posting a different line) are logged instead of silently
+    // replacing state the serial workflow is validating.
+    (void)lap_timer_set_draft_validation_line(&dl, DRAFT_OWNER_SERIAL);
 }
 
 static void draft_sort_ascending(double* arr, int n) {
@@ -577,6 +580,36 @@ static void serial_console_handle_track_save() {
     if (line_len_m < min_len_m) {
         Serial.printf("[draft] ERR: line too short (%.2f m, need >= %.1f m)\n",
                       line_len_m, min_len_m);
+        return;
+    }
+
+    // Firmware-side save gate: the draft must have been walked across
+    // MIN_ACCEPTED_CROSSINGS times (walking=1, production=2) and the
+    // installed validation line must still match what we're about to
+    // persist.  Prevents the JS UI bypass and any future client (curl,
+    // serial script) from saving an unvalidated line.  Codex P1 from
+    // 2026-04-19 follow-up review.
+    DetectionLine candidate_line = {};
+    candidate_line.lat1_deg          = s_draft_p1_lat;
+    candidate_line.lon1_deg          = s_draft_p1_lon;
+    candidate_line.lat2_deg          = s_draft_p2_lat;
+    candidate_line.lon2_deg          = s_draft_p2_lon;
+    candidate_line.valid_heading_deg = s_draft_heading;
+    const uint32_t min_acc = lap_timer_draft_validation_min_accepted();
+    // Endpoint match tolerance: 2 m (generous — lines drift slightly
+    // during the walk test due to GPS noise).  Heading: 10° — a flip
+    // (±180°) is also accepted inside lines_match() to support Flip
+    // Direction workflows.
+    if (!lap_timer_draft_validation_passes_gate(
+            &candidate_line, /*tol_m=*/2.0, /*tol_deg=*/10.0, min_acc)) {
+        DraftValidationSnapshot snap = {};
+        lap_timer_get_draft_validation_snapshot(&snap, nullptr, 0);
+        Serial.printf(
+            "[draft] ERR: not validated — need %u accepted crossings "
+            "(have accepted=%u rejected=%u, session %u)\n",
+            (unsigned)min_acc,
+            (unsigned)snap.accepted, (unsigned)snap.rejected,
+            (unsigned)snap.session_id);
         return;
     }
 
