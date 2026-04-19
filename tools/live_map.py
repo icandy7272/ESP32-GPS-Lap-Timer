@@ -126,38 +126,48 @@ def _locked_append_event(text):
             del events[: len(events) - EVENT_MAX]
 
 
-_P1_RE = re.compile(r"p1\s*=\s*\(([0-9.\-]+),\s*([0-9.\-]+)\)")
-_P2_RE = re.compile(r"p2\s*=\s*\(([0-9.\-]+),\s*([0-9.\-]+)\)")
-_HEAD_RE = re.compile(r"valid_heading\s*=\s*([0-9.\-]+)\s*deg")
-_LATLON_RE = re.compile(r"lat=([0-9.\-]+)\s+lon=([0-9.\-]+)")
+# Numeric regex building blocks.  The previous `[0-9.\-]+` / `[\d.]+`
+# patterns accepted malformed tokens like `..`, `1..2`, or a lone `-`.
+# `float()` then raised `ValueError` inside parse_line, killing the
+# serial_reader thread and silently freezing the live map on the last
+# frame — exactly the kind of sandbox-hostile-input failure the
+# 2026-04-18 debugging roadmap warned about for "untrusted serial
+# devices".  These patterns accept ONLY well-formed signed decimals.
+_FLOAT = r"-?\d+(?:\.\d+)?"          # "-3.14", "42", "0", "-0.5"
+_SIGNED_FLOAT = r"[+-]?\d+(?:\.\d+)?"  # also allows leading '+'
+
+_P1_RE = re.compile(rf"p1\s*=\s*\(({_FLOAT}),\s*({_FLOAT})\)")
+_P2_RE = re.compile(rf"p2\s*=\s*\(({_FLOAT}),\s*({_FLOAT})\)")
+_HEAD_RE = re.compile(rf"valid_heading\s*=\s*({_FLOAT})\s*deg")
+_LATLON_RE = re.compile(rf"lat=({_FLOAT})\s+lon=({_FLOAT})")
 _SATS_RE = re.compile(r"sats=(\d+)(?:-(\d+))?")
 _FIX3D_RE = re.compile(r"fix_3d=(\d)")
 _Q_RE = re.compile(r"q=(\d+)\s+tier=(\d+)")
-_HDOP_RE = re.compile(r"hdop=([0-9.\-]+)")
+_HDOP_RE = re.compile(rf"hdop=({_FLOAT})")
 _TRACK_FILE_RE = re.compile(r"^(track_\d+\.json)\s*$")
 _SERIAL_HEADER_RE = re.compile(r"^\[serial\] --- tracks/([^ ]+) ---")
 _DRAFT_STARTED_RE = re.compile(r"\[draft\] started: (\S+)")
 _DRAFT_P1_RE = re.compile(
-    r"\[draft\] p1\s*=\s*\(([0-9.\-]+),\s*([0-9.\-]+)\)"
+    rf"\[draft\] p1\s*=\s*\(({_FLOAT}),\s*({_FLOAT})\)"
 )
 _DRAFT_P2_RE = re.compile(
-    r"\[draft\] p2\s*=\s*\(([0-9.\-]+),\s*([0-9.\-]+)\)(?:\s+heading=([0-9.\-]+))?"
+    rf"\[draft\] p2\s*=\s*\(({_FLOAT}),\s*({_FLOAT})\)(?:\s+heading=({_FLOAT}))?"
 )
 _DRAFT_SAVED_RE = re.compile(
-    r"\[draft\] saved: (\S+) \(([^)]+)\) length=([0-9.\-]+)m heading=([0-9.\-]+)"
+    rf"\[draft\] saved: (\S+) \(([^)]+)\) length=({_FLOAT})m heading=({_FLOAT})"
 )
 # Spread + confidence tier appended to `[draft] p1/p2` lines by the
 # 5-second sampling path.  Optional so old firmwares that do not emit
 # these fields still yield a valid P1/P2 parse.
 _DRAFT_SPREAD_RE = re.compile(
-    r"spread=([0-9.\-]+)m\s+tier=(\w+)(?:\s+samples=(\d+))?"
+    rf"spread=({_FLOAT})m\s+tier=(\w+)(?:\s+samples=(\d+))?"
 )
 # Structured crossing candidate — emitted by lap_timer_crossing.cpp on
 # every side-flip of a detection line (both PASS and REJECT cases).  See
 # emit_candidate_event() in that file for the field contract.
 _XING_CANDIDATE_RE = re.compile(
-    r"\[xing\] L(\d+) candidate u=(-?[\d.]+) overshoot=(-?[\d.]+) "
-    r"hdiff=([+-]?[\d.]+) result=(\w+) reason=(\w+)"
+    rf"\[xing\] L(\d+) candidate u=({_FLOAT}) overshoot=({_FLOAT}) "
+    rf"hdiff=({_SIGNED_FLOAT}) result=(\w+) reason=(\w+)"
 )
 
 
@@ -420,8 +430,16 @@ def serial_reader() -> None:
             nl = buf.index(b"\n")
             line = buf[:nl].decode("utf-8", errors="replace").rstrip("\r")
             buf = buf[nl + 1:]
-            if line:
-                parse_line(line)
+            # Belt-and-braces: tightened regexes already reject malformed
+            # numbers, but a corrupted UART frame or a new firmware log
+            # format we have not seen should never kill the reader
+            # thread.  Print the failure and keep going.
+            try:
+                if line:
+                    parse_line(line)
+            except Exception as exc:  # noqa: BLE001 — diagnostic catch-all
+                print(f"[live_map] parse_line raised on {line!r}: {exc}")
+                continue
 
 
 def track_query_bootstrap() -> None:
@@ -706,10 +724,18 @@ function update(state){
 //   signed_d_m = perpendicular metres from the infinite line through P1-P2.
 // Uses a flat-earth projection with the line midpoint as the latitude
 // reference, fine for detection-line-scale distances.
+//
+// Axis order: [lat_metres, lon_metres] — matches the firmware's
+// line_geometry::project_to_line() convention, which is fed
+// (lat, lon) directly in lap_timer_crossing.cpp emit_candidate_event().
+// Previously this function swapped to [lon_metres, lat_metres] which
+// flipped the sign of the cross-product and made "above the line" in
+// View B opposite to the firmware's signed_d sign.  Codex P2 from
+// 2026-04-19.
 function projectToLineM(pll, p1, p2){
   const latRef=(p1[0]+p2[0])/2;
   const cosLat=Math.cos(latRef*Math.PI/180);
-  const toM=(ll)=>[(ll[1]-p1[1])*111000*cosLat, (ll[0]-p1[0])*111000];
+  const toM=(ll)=>[(ll[0]-p1[0])*111000, (ll[1]-p1[1])*111000*cosLat];
   const P=toM(pll), D=toM(p2);
   const cdx=D[0], cdy=D[1];
   const len2=cdx*cdx+cdy*cdy;
@@ -734,7 +760,9 @@ function renderCandidates(cands){
     const cls=c.result==='PASS'?'pass':'reject';
     const uStr=c.u.toFixed(3);
     const ovStr=c.overshoot.toFixed(2);
-    const hdStr=(c.hdiff>=0?'+':'')+c.hdiff.toFixed(0);
+    // One decimal so the HEADING_WINDOW boundary (60° by default) is
+    // readable — 60.3 vs 59.8 must not both render as '+60'.
+    const hdStr=(c.hdiff>=0?'+':'')+c.hdiff.toFixed(1);
     return `<div class="row ${cls}">`+
       `[${ago}s] L${c.line_idx} ${c.result} `+
       `<span class="reason">u=${uStr} over=${ovStr}m hd=${hdStr}° `+

@@ -1,5 +1,17 @@
 #include "web_ui_internal.h"
 
+// Keep the frontend "short line" threshold in lockstep with the
+// firmware-side save gate (track_creation_min_save_line_length_m()).
+// On WALKING_TEST_MODE the backend accepts 2 m lines, so the JS UI
+// must not flag a 3 m walking-test line as "short" and demand a
+// repeatability check that does not match backend policy.  Codex P2
+// from 2026-04-19.
+#ifdef WALKING_TEST_MODE
+#define WEB_UI_SHORT_LINE_MIN_LENGTH_M_LIT "2"
+#else
+#define WEB_UI_SHORT_LINE_MIN_LENGTH_M_LIT "5"
+#endif
+
 const char* build_web_ui_script_core_fragment() {
     return R"JS(
 function $(id){return document.getElementById(id)}
@@ -16,8 +28,9 @@ var POINT_SAMPLE_INTERVAL_MS=400;
 var POINT_SAMPLE_MIN_VALID_COUNT=3;
 var POINT_SAMPLE_HIGH_SPREAD_M=1.2;
 var POINT_SAMPLE_MEDIUM_SPREAD_M=2.5;
-var SHORT_LINE_MIN_LENGTH_M=5;
-var SHORT_LINE_SPREAD_FACTOR=4;
+)JS"
+    "var SHORT_LINE_MIN_LENGTH_M=" WEB_UI_SHORT_LINE_MIN_LENGTH_M_LIT ";\n"
+    R"JS(var SHORT_LINE_SPREAD_FACTOR=4;
 var REPEATABILITY_CHECK_ENABLED=true;
 var _pointSampling=null;
 var _trackDraft={
