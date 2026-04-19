@@ -114,6 +114,14 @@ void process_line(int line_idx,
                   const GpsPoint* prev,
                   const GpsPoint* curr);
 
+// Evaluate one side-flip of the draft validation line and append a
+// candidate event to the ring buffer (if a draft line is installed).
+// No arm / debounce / lap state is touched — this is a dry-run of the
+// crossing geometry used purely for track-creation feedback.  See
+// lap_timer_set_draft_validation_line() in lap_timer.h.
+void process_draft_validation_line(const GpsPoint* prev,
+                                   const GpsPoint* curr);
+
 void handle_finish_crossing(int64_t crossing_us);
 void handle_sector_crossing(int line_idx, int64_t crossing_us);
 

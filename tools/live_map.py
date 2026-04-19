@@ -71,8 +71,18 @@ state = {
     # Structured [xing] `candidate` events parsed from the firmware.  Used
     # by the Crossing Candidates panel and the Finish-Line Relative View
     # (View B) so the UI can show PASS/REJECT + reason without re-running
-    # the geometry.
+    # the geometry.  Each row carries line_type='active' (scored against
+    # the loaded track) or line_type='draft' (dry-run against the
+    # currently-marked P1/P2 during track creation).
     "candidates": [],
+    # Accepted / rejected counters only for the draft validation path.
+    # Live-updated by _parse_xing_draft_candidate().  Presented on the
+    # candidate panel and, once Phase B ships, mirrors the state the
+    # phone UI polls.
+    "draft_validation": {
+        "accepted": 0,
+        "rejected": 0,
+    },
     "started_at": time.time(),
     # Live state of the firmware's [draft] track-marking machine,
     # populated by parse_line() as serial events arrive.  Consumed by
@@ -169,6 +179,16 @@ _XING_CANDIDATE_RE = re.compile(
     rf"\[xing\] L(\d+) candidate u=({_FLOAT}) overshoot=({_FLOAT}) "
     rf"hdiff=({_SIGNED_FLOAT}) result=(\w+) reason=(\w+)"
 )
+# Dry-run candidate against the draft validation line — emitted by
+# lap_timer_draft_validation.cpp while the operator is creating a
+# new track.  Same fields, different prefix; no L<i> because draft is
+# a single untyped line.  Stored in a separate list so the UI can
+# distinguish active-track candidates (red/green) from draft
+# candidates (orange).
+_XING_DRAFT_CANDIDATE_RE = re.compile(
+    rf"\[xing-draft\] candidate u=({_FLOAT}) overshoot=({_FLOAT}) "
+    rf"hdiff=({_SIGNED_FLOAT}) result=(\w+) reason=(\w+)"
+)
 
 
 def _extract_draft_spread(line: str):
@@ -207,12 +227,48 @@ def _parse_xing_candidate(line: str) -> None:
         "hdiff": float(m.group(4)),
         "result": m.group(5),
         "reason": m.group(6),
+        "line_type": "active",
     }
     with state_lock:
         cands = state["candidates"]
         cands.append(ev)
         if len(cands) > CANDIDATE_MAX:
             del cands[: len(cands) - CANDIDATE_MAX]
+
+
+def _parse_xing_draft_candidate(line: str) -> None:
+    """Extract one `[xing-draft] candidate ...` line.
+
+    Emitted by the lap_timer's draft validation path while an operator
+    is creating a new track and has marked both endpoints.  Landed in
+    the same candidate list as active-track events but tagged
+    line_type='draft' so the UI can colour them differently.
+    """
+    m = _XING_DRAFT_CANDIDATE_RE.search(line)
+    if not m:
+        return
+    ev = {
+        "t": time.time(),
+        "line_idx": -1,
+        "u": float(m.group(1)),
+        "overshoot": float(m.group(2)),
+        "hdiff": float(m.group(3)),
+        "result": m.group(4),
+        "reason": m.group(5),
+        "line_type": "draft",
+    }
+    with state_lock:
+        cands = state["candidates"]
+        cands.append(ev)
+        if len(cands) > CANDIDATE_MAX:
+            del cands[: len(cands) - CANDIDATE_MAX]
+        counts = state.setdefault("draft_validation", {
+            "accepted": 0, "rejected": 0,
+        })
+        if ev["result"] == "PASS":
+            counts["accepted"] = counts.get("accepted", 0) + 1
+        else:
+            counts["rejected"] = counts.get("rejected", 0) + 1
 
 
 def _parse_draft_event(line: str) -> None:
@@ -386,13 +442,18 @@ def parse_line(line: str) -> None:
         if m:
             _locked_update(hdop=float(m.group(1)))
 
-    if ("[lap]" in line) or ("[session]" in line) or ("[xing]" in line):
+    if ("[lap]" in line) or ("[session]" in line) or ("[xing]" in line) \
+            or ("[xing-draft]" in line):
         _locked_append_event(line)
 
     # Structured candidate events — extracted into a typed list so the
-    # UI does not need to re-parse the free-text event log.
-    if "[xing]" in line and "candidate" in line:
+    # UI does not need to re-parse the free-text event log.  The two
+    # prefixes are disjoint: `[xing]` is the active-track path,
+    # `[xing-draft]` is the dry-run validation path.
+    if line.startswith("[xing]") and "candidate" in line:
         _parse_xing_candidate(line)
+    elif line.startswith("[xing-draft]"):
+        _parse_xing_draft_candidate(line)
 
     # Firmware [draft] events — keep the browser panel in sync with
     # the on-device state machine instead of polling `track status`.
@@ -509,7 +570,15 @@ HTML = r"""<!doctype html>
  #cands .row{margin:2px 0;padding:2px 4px;border-left:3px solid #444}
  #cands .pass{border-left-color:#5f5;color:#cfc}
  #cands .reject{border-left-color:#f55;color:#fcc}
+ /* Orange tint for draft (dry-run) candidate rows, so the operator can
+    tell at a glance whether a PASS is against the active track or
+    against the draft line they are creating. */
+ #cands .row.draft{background:rgba(255,170,0,0.08)}
+ #cands .row.draft.pass{border-left-color:#fa3}
+ #cands .row.draft.reject{border-left-color:#f73}
  #cands .reason{color:#aaa;font-size:10px}
+ #cands .pass{color:#cfc}
+ #cands .dv-summary{margin:2px 0 6px 0;padding:4px 6px;background:rgba(255,170,0,0.12);border:1px solid rgba(255,170,0,0.3);border-radius:3px;font-size:11px}
  #draft{position:absolute;top:8px;right:8px;z-index:1000;padding:10px 12px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px;min-width:260px}
  #draft h3{margin:0 0 8px 0;font-size:13px;color:#fc5;font-weight:normal}
  #draft label{display:block;font-size:11px;color:#aaa;margin-top:6px}
@@ -713,7 +782,7 @@ function update(state){
   renderDraft(state.draft||{});
 
   // crossing candidates list + View B
-  renderCandidates(state.candidates||[]);
+  renderCandidates(state.candidates||[], state.draft_validation||{});
   renderViewB(line, trail, cur, state.candidates||[]);
 }
 
@@ -747,28 +816,43 @@ function projectToLineM(pll, p1, p2){
   return [u, signedDm];
 }
 
-function renderCandidates(cands){
+function renderCandidates(cands, dv){
   const el=document.getElementById('cand-list');
+  // Draft-validation summary line, shown above the list when either
+  // counter is non-zero.  dv comes from state.draft_validation which
+  // is maintained by the live_map parser (Phase A) and, once Phase B
+  // ships, mirrors the firmware's own counters via /api/tracks/draft_validation.
+  let summary='';
+  if(dv && (dv.accepted || dv.rejected)){
+    summary=`<div class="dv-summary">Draft: <span class="pass">✓ ${dv.accepted} accepted</span> · <span class="reject">✗ ${dv.rejected} rejected</span></div>`;
+  }
   if(!cands||cands.length===0){
-    el.textContent='(none yet — walk toward the line)';
+    el.innerHTML=summary+'<div style="color:#888">(none yet — walk toward the line)</div>';
     return;
   }
   const now=Date.now()/1000;
   // Newest first, capped at 12 rows.
   const rows=cands.slice(-12).reverse().map(c=>{
     const ago=Math.max(0,Math.round(now-c.t));
-    const cls=c.result==='PASS'?'pass':'reject';
+    // Draft rows get an extra class so CSS can tint them orange, to
+    // separate dry-run candidates (draft line) from real lap candidates
+    // (active track).  Without this tint the operator can't tell at a
+    // glance which line a PASS belongs to when both are firing.
+    const passReject=c.result==='PASS'?'pass':'reject';
+    const typeCls=c.line_type==='draft'?' draft':'';
+    const cls=passReject+typeCls;
     const uStr=c.u.toFixed(3);
     const ovStr=c.overshoot.toFixed(2);
     // One decimal so the HEADING_WINDOW boundary (60° by default) is
     // readable — 60.3 vs 59.8 must not both render as '+60'.
     const hdStr=(c.hdiff>=0?'+':'')+c.hdiff.toFixed(1);
+    const label=c.line_type==='draft'?'DRAFT':`L${c.line_idx}`;
     return `<div class="row ${cls}">`+
-      `[${ago}s] L${c.line_idx} ${c.result} `+
+      `[${ago}s] ${label} ${c.result} `+
       `<span class="reason">u=${uStr} over=${ovStr}m hd=${hdStr}° `+
       `${c.reason}</span></div>`;
   });
-  el.innerHTML=rows.join('');
+  el.innerHTML=summary+rows.join('');
 }
 
 function renderViewB(line, trail, cur, cands){

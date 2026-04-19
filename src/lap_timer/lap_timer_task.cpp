@@ -129,6 +129,14 @@ void lap_timer_task(void* param) {
                 process_line(i + 1, &s_track->sectors[i], &prev, &curr);
             }
 
+            // Dry-run the draft validation line (if any) against the
+            // same (prev, curr) pair.  No lap / session side effects —
+            // emits [xing-draft] candidate events and feeds the ring
+            // buffer polled by /api/tracks/draft_validation.  Runs
+            // whether or not a real track is loaded so track creation
+            // from cold-start works.
+            process_draft_validation_line(&prev, &curr);
+
             update_session_delta(&curr);
         }
 
