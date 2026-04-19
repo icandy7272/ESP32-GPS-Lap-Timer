@@ -345,6 +345,39 @@ int main() {
               std::fabs((u - 1.0) * 10.0 - 0.22) < 1e-9, true);
     }
 
+    // --- 2026-04-19 codex regression: strict-boundary convention. ---
+    //
+    // segments_intersect() returns false when the crossing point
+    // coincides with an endpoint of either segment (c1*c2 >= 0 path).
+    // emit_candidate_event() in lap_timer_crossing.cpp therefore MUST
+    // classify its geometric gate with STRICT inequalities
+    // (`u > 0.0 && u < 1.0`) or the `result=PASS/REJECT` field of the
+    // `[xing] candidate` log line will disagree with what
+    // has_crossed_line() actually decides.  These regression cases
+    // pin down the boundary semantics so the convention cannot drift.
+    {
+        // Line from (0,0) to (0,10). Path endpoint exactly on the line.
+        check("boundary: path B on line segment (u=0.5) — strict reject",
+              segments_intersect(-1.0, 5.0, 0.0, 5.0,
+                                 0.0, 0.0, 0.0, 10.0),
+              false);
+        // Path through line's P1 exactly.
+        check("boundary: path B at detection segment P1 (u=0)",
+              segments_intersect(-1.0, 0.0, 0.0, 0.0,
+                                 0.0, 0.0, 0.0, 10.0),
+              false);
+        // Path through line's P2 exactly.
+        check("boundary: path B at detection segment P2 (u=1)",
+              segments_intersect(-1.0, 10.0, 0.0, 10.0,
+                                 0.0, 0.0, 0.0, 10.0),
+              false);
+        // Path fully straddling with u=0.5+epsilon should intersect.
+        check("just-inside: u=0.5 crossing — accept",
+              segments_intersect(-1.0, 5.0, 1.0, 5.0,
+                                 0.0, 0.0, 0.0, 10.0),
+              true);
+    }
+
     if (fail_count == 0) {
         printf("test_line_geometry: OK\n");
         return 0;

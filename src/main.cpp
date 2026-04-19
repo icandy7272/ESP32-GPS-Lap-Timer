@@ -408,8 +408,20 @@ static bool draft_sample_gps_median(double* out_lat,
     }
     draft_sort_ascending(lats_sorted, count);
     draft_sort_ascending(lons_sorted, count);
-    const double median_lat = lats_sorted[count / 2];
-    const double median_lon = lons_sorted[count / 2];
+    // True median: for even counts, average the two middle elements.
+    // The previous `sorted[count/2]` returned the UPPER middle (e.g.
+    // the 26th order statistic for a 50-sample capture), which biases
+    // the saved P1/P2 point by roughly half a sample and inflates the
+    // spread measured against it.  Codex P2 from 2026-04-19.
+    double median_lat;
+    double median_lon;
+    if (count % 2 == 1) {
+        median_lat = lats_sorted[count / 2];
+        median_lon = lons_sorted[count / 2];
+    } else {
+        median_lat = 0.5 * (lats_sorted[count / 2 - 1] + lats_sorted[count / 2]);
+        median_lon = 0.5 * (lons_sorted[count / 2 - 1] + lons_sorted[count / 2]);
+    }
     *out_lat = median_lat;
     *out_lon = median_lon;
 

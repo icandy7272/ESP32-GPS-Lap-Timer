@@ -203,8 +203,17 @@ static void emit_candidate_event(int line_idx,
 
     float hdiff = heading_diff(curr->heading_deg, line->valid_heading_deg);
     const bool heading_ok   = fabsf(hdiff) <= HEADING_WINDOW;
-    const bool segment_ok   = (u >= 0.0 && u <= 1.0);
-    const bool extension_ok = (u >= -ext_fraction && u <= 1.0 + ext_fraction);
+    // STRICT inequalities match segments_intersect()'s
+    // `c1 * c2 >= 0.0 -> no intersection` convention: a crossing point
+    // exactly on an endpoint (u == 0.0, 1.0, -ext, or 1+ext) makes one
+    // of the two cross products zero, and the segment test rejects.
+    // Using closed intervals here would make emit_candidate_event()
+    // report PASS for inputs that has_crossed_line() subsequently
+    // rejects — the boundary divergence codex flagged in the
+    // 2026-04-19 review.  GPS doubles almost never land on the
+    // boundary, but `result=` must not lie when they do.
+    const bool segment_ok   = (u > 0.0 && u < 1.0);
+    const bool extension_ok = (u > -ext_fraction && u < 1.0 + ext_fraction);
 
     const char* result;
     const char* reason;
@@ -222,8 +231,12 @@ static void emit_candidate_event(int line_idx,
         reason = "outside_endpoint_tolerance";
     }
 
+    // %+.1f on hdiff: %+.0f rounds 60.4° and 59.6° to the same +60,
+    // hiding which side of HEADING_WINDOW (currently 60°) the reject
+    // fired on.  One extra decimal disambiguates boundary cases in
+    // the live-map candidate panel.  Codex P2 from 2026-04-19.
     Serial.printf(
-        "[xing] L%d candidate u=%.3f overshoot=%.2f hdiff=%+.0f "
+        "[xing] L%d candidate u=%.3f overshoot=%.2f hdiff=%+.1f "
         "result=%s reason=%s\n",
         line_idx, u, overshoot_m, (double)hdiff, result, reason);
 }

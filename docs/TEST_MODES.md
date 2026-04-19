@@ -93,7 +93,7 @@ pio run -t upload
    - `[xing] L0 ARMED at ...m`
    - `[xing] L0 CROSSED arm=...`
    - `[lap] first crossing — timer started`
-3. 反向过线应被 `[xing] side_flip hdiff=... REJECTED` 丢弃
+3. 反向过线应在串口打印 `[xing] L0 candidate u=... hdiff=... result=REJECT reason=heading_mismatch`（2026-04-19 起改为结构化 candidate 事件，原 `side_flip ... REJECTED` 日志已移除）
 4. 长时间原地静止，应无任何 `[xing]` 日志（速度门槛生效）
 5. SD 卡生成有效的 `.vbo` 文件（通过 WiFi 下载验证）
 
