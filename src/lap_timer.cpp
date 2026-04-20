@@ -214,6 +214,23 @@ void lap_timer_set_track(const TrackDefinition* track) {
 
     lap_timer_reset();
     Serial.printf("[lap_timer] Track changed to: %s\n", track->name);
+
+    // Re-emit the [track] summary on every runtime track change so
+    // tooling that parses the serial boot log (tools/live_map.py) can
+    // update its drawn P1/P2 geometry.  Without this, live_map keeps
+    // showing the track that was active at firmware boot even after
+    // the user creates/selects a new one.  Matches the format used
+    // by the boot-time emit in main.cpp so live_map's existing
+    // _P1_RE / _P2_RE / _HEAD_RE regexes pick it up unmodified.
+    double lat1 = track->start_finish.lat1_deg;
+    double lon1 = track->start_finish.lon1_deg;
+    double lat2 = track->start_finish.lat2_deg;
+    double lon2 = track->start_finish.lon2_deg;
+    Serial.printf("[track] START/FINISH line (runtime change):\n");
+    Serial.printf("[track]   p1 = (%.7f, %.7f)\n", lat1, lon1);
+    Serial.printf("[track]   p2 = (%.7f, %.7f)\n", lat2, lon2);
+    Serial.printf("[track]   valid_heading = %.1f deg\n",
+                  track->start_finish.valid_heading_deg);
 }
 
 void lap_timer_active_track_changed_locked() {

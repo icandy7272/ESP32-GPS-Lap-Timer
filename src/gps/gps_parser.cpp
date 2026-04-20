@@ -94,6 +94,12 @@ static GgaData parse_gga(char* body) {
     result.lat_deg    = apply_hemisphere(nmea_coord_to_deg(fields[1], 2), fields[2][0]);
     result.lon_deg    = apply_hemisphere(nmea_coord_to_deg(fields[3], 3), fields[4][0]);
     result.satellites = atoi(fields[6]);
+    // GGA field 7 = HDOP; field 8 = altitude (height_m).  Empty HDOP
+    // field (e.g. no fix) → -1.0 sentinel so downstream code can
+    // distinguish "no data" from a real 0.0.
+    result.hdop       = (fields[7][0] != '\0')
+                        ? static_cast<float>(atof(fields[7]))
+                        : -1.0f;
     result.height_m   = static_cast<float>(atof(fields[8]));
     result.valid      = true;
     return result;

@@ -16,6 +16,14 @@ struct GgaData {
     double lat_deg;
     double lon_deg;
     float  height_m;
+    // HDOP from GGA field 7 — the dilution-of-precision value the
+    // u-blox computes from visible-satellite geometry for the current
+    // 2D fix.  GSA (if enabled) reports the same HDOP as a dedicated
+    // sentence, but firmware's default config is "GGA+RMC only" to
+    // save radio time, so we now read HDOP straight from GGA and use
+    // it as the fallback when s_gsa is not valid.  -1.0f sentinel
+    // means the field was empty (e.g. no fix yet).
+    float  hdop;
     int    satellites;
     int    fix_quality;
     bool   valid;

@@ -28,7 +28,13 @@ static GpsPoint assemble_point(const GgaData* gga, const RmcData* rmc) {
     quality_input.fix_type = s_gsa.valid ? s_gsa.fix_type : 0;
     quality_input.satellites = gga->satellites;
     quality_input.speed_kmh = rmc->speed_kmh;
-    quality_input.hdop = s_gsa.valid ? s_gsa.hdop : -1.0f;
+    // HDOP: prefer GSA (dedicated DOP sentence, aligned with the
+    // same fix) but fall back to GGA field 7 when GSA is not
+    // enabled.  The default u-blox config emits "GGA + RMC only"
+    // to save radio time, so without this fallback HDOP is stuck
+    // at the -1.0 sentinel and live_map shows it as "-".
+    quality_input.hdop = s_gsa.valid ? s_gsa.hdop :
+                         (gga->hdop >= 0.0f ? gga->hdop : -1.0f);
     quality_input.pdop = s_gsa.valid ? s_gsa.pdop : -1.0f;
     GpsQualityResult quality = gps_filter_assess_quality(quality_input);
 
