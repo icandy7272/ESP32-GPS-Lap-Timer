@@ -902,6 +902,15 @@ function addTrack(){
     clearInterval(_trackDraft.validation.pollTimer);
     _trackDraft.validation.pollTimer=null;
   }
+  // Snapshot the count of pre-existing tracks with this same name so
+  // the ghost-success readback can distinguish "my POST landed" from
+  // "a same-name track was already there".  Firmware allows duplicate
+  // names (track_store doesn't enforce uniqueness), so a plain
+  // "any match" readback picks up old tracks too and falsely claims
+  // success.  Codex P2 from 2026-04-20 round-5 review.
+  var sameNameCountBefore = ((typeof _trackList === 'undefined' || !_trackList)
+    ? 0
+    : _trackList.filter(function(t){return t && t.name === name;}).length);
   renderTrackDraft();
   setTrackMsg('Creating track...','');
   fetch('/api/tracks',{
@@ -952,61 +961,107 @@ function addTrack(){
   }).catch(function(){
     _trackSubmitPending=false;
     // "Ghost success" recovery — the POST response may have been
-    // dropped after the ESP32 actually committed the track.  Do a
-    // readback via loadTracks() and see if our name landed; if so,
-    // treat it as a success rather than encourage the user to save
-    // a duplicate.  Codex P2 from 2026-04-20 round-4 review.
+    // dropped after the ESP32 actually committed the track.  Readback
+    // via GET /api/tracks and compare the same-name count to the
+    // snapshot taken before POST.  Only an increase of exactly one
+    // proves "my POST landed": firmware allows duplicate names, so
+    // plain "any match" could pick up an old track of the same name.
+    // Codex P2 (#1) from 2026-04-20 round-5.
     var attemptedName = name;
-    // Capture the validation object BEFORE readback so the async
-    // callbacks below see the same identity — resetTrackDraft() may
-    // swap it.
+    // Capture validation identity + session id so the async callback
+    // can (a) tell whether the user is still on this same draft, and
+    // (b) send a SCOPED DELETE that won't kill a newer session the
+    // user may have started.  Codex P2 (#2) from 2026-04-20 round-5.
     var v0 = _trackDraft.validation;
+    var v0SessionId = v0 ? (v0.sessionId || 0) : 0;
     fetch('/api/tracks').then(function(r){return r.json();}).then(function(body){
       var tracks = (body && body.tracks) || [];
-      var match = null;
-      for (var i = 0; i < tracks.length; i++) {
-        if (tracks[i] && tracks[i].name === attemptedName) {
-          match = tracks[i];
-          break;
+      var matchesAfter = tracks.filter(function(t){return t && t.name === attemptedName;});
+      var countAfter = matchesAfter.length;
+      var stillOnSameDraft = (v0 !== null && v0 === _trackDraft.validation);
+
+      if (countAfter === sameNameCountBefore + 1) {
+        // Ghost success — exactly one new same-name track appeared.
+        // Firmware appends at the end of s_tracks, so the new one is
+        // the last match in the list.
+        var newMatch = matchesAfter[matchesAfter.length - 1];
+
+        // Clean up the firmware draft line we installed for this
+        // POST.  Prefer a scoped DELETE so a concurrent fresh session
+        // (started by the user after the network error) is not
+        // clobbered.  If we never had a session id (weird), fall back
+        // to unscoped DELETE.
+        var deleteUrl = '/api/tracks/draft_validation';
+        if (v0SessionId > 0) {
+          deleteUrl += '?session=' + encodeURIComponent(v0SessionId);
         }
-      }
-      if (match) {
-        // Firmware has it — ghost success.  Clear the draft line
-        // (post-save cleanup that normally runs in the ok branch) and
-        // finish the UI flow.
-        fetch('/api/tracks/draft_validation',{method:'DELETE'}).catch(function(){});
-        if (nameField) { nameField.value = ''; }
-        resetTrackDraft();
-        renderTrackDraft();
-        loadTracks();
-        if (match.id) {
-          selectTrack(match.id, 'newly_created').then(function(selected){
-            if (selected) {
-              setTrackMsg('Track created (response was dropped, verified via readback).','ok');
-            } else {
-              setTrackMsg('Track created but auto-select failed; pick it manually.','err');
-            }
-          });
+        fetch(deleteUrl,{method:'DELETE'}).catch(function(){});
+
+        if (stillOnSameDraft) {
+          // User is still looking at this draft.  Complete the UI
+          // flow as if the POST had returned normally.
+          if (nameField) { nameField.value = ''; }
+          resetTrackDraft();
+          renderTrackDraft();
+          loadTracks();
+          if (newMatch && newMatch.id) {
+            selectTrack(newMatch.id, 'newly_created').then(function(selected){
+              if (selected) {
+                setTrackMsg('Track created (response was dropped, verified via readback).','ok');
+              } else {
+                setTrackMsg('Track created but auto-select failed; pick it manually.','err');
+              }
+            });
+          } else {
+            setTrackMsg('Track created (response was dropped, verified via readback).','ok');
+          }
         } else {
-          setTrackMsg('Track created (response was dropped, verified via readback).','ok');
+          // User has moved on (new draft in progress).  Do NOT wipe
+          // their current draft, name field, or validation state —
+          // just refresh the track list and leave a non-blocking
+          // notice so they know an older save completed after all.
+          loadTracks();
+          setTrackMsg('Earlier save "' + attemptedName +
+                      '" actually landed (network response was dropped).'
+                      + ' Check the Tracks list.','ok');
         }
-      } else {
-        // Genuine network failure before the ESP32 saw the request.
-        // Restart polling so counts stay live and the user can retry.
-        if (v0 && v0 === _trackDraft.validation && v0.active && !v0.pollTimer) {
+      } else if (countAfter === sameNameCountBefore) {
+        // POST never reached the ESP32 (or was rejected before
+        // committing).  Only restart polling if the user is still on
+        // this draft.
+        if (stillOnSameDraft && v0.active && !v0.pollTimer) {
           v0.pollTimer = setInterval(pollValidation, VALIDATION_POLL_MS);
         }
         renderTrackDraft();
-        setTrackMsg('Failed to create track — network error.','err');
+        if (stillOnSameDraft) {
+          setTrackMsg('Failed to create track — network error.','err');
+        }
+      } else {
+        // Ambiguous: a same-name track count shifted by something
+        // other than +1 (e.g. concurrent client also saved, or the
+        // track list was reset).  Refuse to auto-select; let the
+        // operator eyeball the list.
+        loadTracks();
+        if (stillOnSameDraft) {
+          if (v0.active && !v0.pollTimer) {
+            v0.pollTimer = setInterval(pollValidation, VALIDATION_POLL_MS);
+          }
+          renderTrackDraft();
+          setTrackMsg('Network error. Concurrent changes detected — check the Tracks list before retrying.','err');
+        } else {
+          setTrackMsg('Network error during an earlier save; concurrent changes detected. Check the Tracks list.','err');
+        }
       }
     }).catch(function(){
       // Readback itself failed — can't tell which case we're in.
-      // Be conservative: keep validation alive, ask user to retry.
-      if (v0 && v0 === _trackDraft.validation && v0.active && !v0.pollTimer) {
+      var stillOnSameDraft = (v0 !== null && v0 === _trackDraft.validation);
+      if (stillOnSameDraft && v0.active && !v0.pollTimer) {
         v0.pollTimer = setInterval(pollValidation, VALIDATION_POLL_MS);
       }
       renderTrackDraft();
-      setTrackMsg('Failed to create track — network error. Check the track list before retrying.','err');
+      if (stillOnSameDraft) {
+        setTrackMsg('Failed to create track — network error. Check the track list before retrying.','err');
+      }
     });
   });
 }
