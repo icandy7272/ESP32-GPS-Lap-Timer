@@ -24,7 +24,24 @@ static constexpr const char* SESSIONS_DIR = "sessions";
 static constexpr const char* TRACKS_DIR = "tracks";
 static constexpr const char* TMP_FILENAME = "_recording.vbo.tmp";
 
+// Sidecar file written incrementally — one JSONL line per completed
+// lap.  Opened at session start alongside the VBO .tmp, appended by
+// storage_write_lap_timing() on every lap, flushed+synced per line
+// so power-loss cannot lose lap times even if storage_end_session()
+// never runs.  At session stop it is renamed to match the final VBO
+// name (`YYYYMMDD_..._NNN.lap.jsonl`) for offline recovery tooling.
+//
+// Format per line:
+//   {"lap":N,"lap_time_ms":T,"status":"VALID"|"SHORT"|...,
+//    "sectors":[s1,s2,...],"finish_ts_us":X}
+//
+// Codex-approved "Boil the lake" fix for the 2026-04-20 walking-test
+// power-loss gap where a mid-session unplug wiped 5 real laps.
+static constexpr const char* LAP_SIDECAR_TMP_FILENAME = "_recording.lap.jsonl";
+
 extern FsFile s_vbo_file;
+extern FsFile s_lap_sidecar_file;
+extern bool s_lap_sidecar_open;
 extern bool s_session_active;
 extern uint32_t s_bytes_written;
 extern uint32_t s_last_fsync_ms;

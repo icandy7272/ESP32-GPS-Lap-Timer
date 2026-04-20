@@ -202,6 +202,24 @@ SerialConsoleCommand serial_console_parse(const char* line) {
         return cmd;
     }
 
+    // "recording start" / "recording stop" — mirrors /api/recording.
+    // Lets live_map drive session start/stop over USB without needing
+    // the laptop on the board's AP (the laptop is normally on the
+    // phone hotspot for satellite map tiles).
+    if (starts_with(trimmed, "recording")) {
+        const char* tail = skip_spaces(trimmed + strlen("recording"));
+        if (strcmp(tail, "start") == 0) {
+            cmd.type = SerialConsoleCommandType::RecordingStart;
+            return cmd;
+        }
+        if (strcmp(tail, "stop") == 0) {
+            cmd.type = SerialConsoleCommandType::RecordingStop;
+            return cmd;
+        }
+        set_error(&cmd, "recording expects start or stop");
+        return cmd;
+    }
+
     set_error(&cmd, "unknown command");
     return cmd;
 }

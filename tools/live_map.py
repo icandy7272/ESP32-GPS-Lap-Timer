@@ -97,6 +97,10 @@ state = {
         "heading": None,     # deg after mark p2
         "status": "",        # last firmware message for the UI
     },
+    # Mirror of the on-device TFT.  Updated at ~5 Hz by parse_line
+    # from the firmware's [lcd] ... emissions.  None until the first
+    # [lcd] line arrives — panel renders a "waiting" placeholder.
+    "lcd": None,
 }
 
 # Shared reference to the open serial port so the bootstrap thread
@@ -189,6 +193,65 @@ _XING_DRAFT_CANDIDATE_RE = re.compile(
     rf"\[xing-draft\] candidate u=({_FLOAT}) overshoot=({_FLOAT}) "
     rf"hdiff=({_SIGNED_FLOAT}) result=(\w+) reason=(\w+)"
 )
+# LCD mirror — firmware display_task emits this at ~5 Hz carrying the
+# exact state the on-device TFT is showing.  Field list is stable;
+# extra fields are accepted and ignored by callers.
+# Example:
+#   [lcd] screen=DRIVING state=NORMAL rec=1 lap=3 cur_ms=42300 \
+#       delta_ms=-123 delta_valid=1 best_ms=43500 speed=4.52 \
+#       track="test2" sats=10 fix3d=1 off=0 bg=green
+_LCD_RE = re.compile(r"\[lcd\]\s+(.+)$")
+_LCD_KV_RE = re.compile(r'(\w+)=(?:"([^"]*)"|(\S+))')
+
+
+def _parse_lcd_mirror(line: str) -> None:
+    """Parse one `[lcd] k=v k=v ...` state line from the firmware.
+
+    Populates state['lcd'] with typed fields the browser mock LCD
+    needs.  Bad / missing fields leave their slot as None without
+    raising — the panel renders what it can.
+    """
+    m = _LCD_RE.search(line)
+    if not m:
+        return
+    body = m.group(1)
+    kv: dict[str, str] = {}
+    for km in _LCD_KV_RE.finditer(body):
+        k = km.group(1)
+        v = km.group(2) if km.group(2) is not None else km.group(3)
+        kv[k] = v
+
+    def _int(k: str, default: int = 0) -> int:
+        try:
+            return int(kv.get(k, default))
+        except (TypeError, ValueError):
+            return default
+
+    def _float(k: str, default: float = 0.0) -> float:
+        try:
+            return float(kv.get(k, default))
+        except (TypeError, ValueError):
+            return default
+
+    snap = {
+        "screen": kv.get("screen", ""),
+        "state": kv.get("state", ""),
+        "rec": _int("rec"),
+        "lap": _int("lap"),
+        "cur_ms": _int("cur_ms"),
+        "delta_ms": _int("delta_ms"),
+        "delta_valid": _int("delta_valid"),
+        "best_ms": _int("best_ms"),
+        "speed": _float("speed"),
+        "track": kv.get("track", ""),
+        "sats": _int("sats"),
+        "fix3d": _int("fix3d"),
+        "off": _int("off"),
+        "bg": kv.get("bg", "black"),
+        "t": time.time(),
+    }
+    with state_lock:
+        state["lcd"] = snap
 
 
 def _extract_draft_spread(line: str):
@@ -469,6 +532,10 @@ def parse_line(line: str) -> None:
     elif line.startswith("[xing-draft]"):
         _parse_xing_draft_candidate(line)
 
+    # LCD mirror — compact key=val line from display_task at ~5 Hz.
+    if line.startswith("[lcd] "):
+        _parse_lcd_mirror(line)
+
     # Firmware [draft] events — keep the browser panel in sync with
     # the on-device state machine instead of polling `track status`.
     if line.startswith("[draft]"):
@@ -579,7 +646,13 @@ HTML = r"""<!doctype html>
  #viewb canvas{display:block;background:#0a0f14;border:1px solid #333;border-radius:3px}
  #viewb .legend{font-size:10px;color:#999;margin-top:4px;display:flex;gap:12px}
  #viewb .legend span.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:3px;vertical-align:middle}
- #cands{position:absolute;top:200px;right:8px;z-index:1000;padding:8px 10px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px;width:260px;max-height:260px;overflow-y:auto;font-size:11px}
+ /* Right column — draft + recording + LCD mirror + candidates.  Flex
+    column so panels stack without magic-pixel overlap no matter how
+    tall any individual panel gets.  Scrolls if the combined height
+    exceeds the available viewport (minus space reserved for View B
+    along the bottom). */
+ #right-col{position:absolute;top:8px;right:8px;z-index:1000;width:280px;display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 240px);overflow-y:auto}
+ #cands{padding:8px 10px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px;max-height:260px;overflow-y:auto;font-size:11px}
  #cands h3{margin:0 0 6px 0;font-size:12px;color:#9cf;font-weight:normal}
  #cands .row{margin:2px 0;padding:2px 4px;border-left:3px solid #444}
  #cands .pass{border-left-color:#5f5;color:#cfc}
@@ -598,7 +671,27 @@ HTML = r"""<!doctype html>
  #cands .reason{color:#aaa;font-size:10px}
  #cands .pass{color:#cfc}
  #cands .dv-summary{margin:2px 0 6px 0;padding:4px 6px;background:rgba(255,170,0,0.12);border:1px solid rgba(255,170,0,0.3);border-radius:3px;font-size:11px}
- #draft{position:absolute;top:8px;right:8px;z-index:1000;padding:10px 12px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px;min-width:260px}
+ #draft{padding:10px 12px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px}
+ /* Recording panel — compact, drives `recording start/stop` serial
+    commands via POST /command. */
+ #rec-panel{padding:8px 10px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px}
+ #rec-panel h3{margin:0 0 6px 0;font-size:12px;color:#9cf;font-weight:normal}
+ #rec-status{padding:4px 6px;margin-bottom:6px;background:#111;border-left:3px solid #666;font-size:12px}
+ #rec-status.recording{border-left-color:#f33;color:#fcc}
+ #rec-status.idle{border-left-color:#666;color:#999}
+ #rec-panel button{margin:2px 4px 0 0;padding:5px 10px;border:1px solid #666;background:#222;color:#eee;font:inherit;font-size:12px;border-radius:3px;cursor:pointer}
+ #rec-panel button:hover:not([disabled]){background:#2a2a2a}
+ #rec-panel button[disabled]{opacity:0.4;cursor:not-allowed}
+ #rec-panel button.primary{background:#253;border-color:#385;color:#cfc}
+ #rec-panel button.danger{background:#422;border-color:#855;color:#fcc}
+ #rec-msg{margin-top:4px;font-size:11px;min-height:14px}
+ #rec-msg.ok{color:#7f7}
+ #rec-msg.err{color:#f77}
+ /* LCD mirror panel — canvas approximates the on-device TFT layout. */
+ #lcd-panel{padding:8px 10px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px}
+ #lcd-panel h3{margin:0 0 6px 0;font-size:12px;color:#9cf;font-weight:normal}
+ #lcd-panel canvas{display:block;background:#000;border:1px solid #333;border-radius:3px;width:260px;height:260px}
+ #lcd-meta{margin-top:4px;font-size:10px;color:#888}
  #draft h3{margin:0 0 8px 0;font-size:13px;color:#fc5;font-weight:normal}
  #draft label{display:block;font-size:11px;color:#aaa;margin-top:6px}
  #draft input[type=text]{width:100%;box-sizing:border-box;padding:5px 7px;background:#111;color:#eee;border:1px solid #555;border-radius:3px;font-family:inherit;font-size:12px}
@@ -621,6 +714,7 @@ HTML = r"""<!doctype html>
 </style></head><body>
 <div id="map"></div>
 <div id="info">Waiting for serial data…</div>
+<div id="right-col">
 <div id="draft">
   <h3>Mark Start/Finish</h3>
   <label>Track name</label>
@@ -640,17 +734,32 @@ HTML = r"""<!doctype html>
   </div>
   <div id="draft-status">idle — press Start Draft</div>
 </div>
+<div id="rec-panel">
+  <h3>Recording</h3>
+  <div id="rec-status">—</div>
+  <div>
+    <button id="btn-rec-start" class="primary">Start Recording</button>
+    <button id="btn-rec-stop" class="danger">Save Recording</button>
+  </div>
+  <div id="rec-msg" class="helper"></div>
+</div>
+<div id="lcd-panel">
+  <h3>On-Device LCD (mirror)</h3>
+  <canvas id="lcd-canvas" width="260" height="260"></canvas>
+  <div id="lcd-meta">waiting for firmware...</div>
+</div>
 <div id="cands">
   <h3>Crossing Candidates</h3>
   <div id="cand-list">(none yet — walk toward the line)</div>
 </div>
+</div><!-- /right-col -->
 <div id="viewb">
   <h3>Finish-Line Relative View (View B)</h3>
   <canvas id="viewb-canvas" width="356" height="180"></canvas>
   <div class="legend">
-    <span><span class="sw" style="background:#1f4">segment u∈[0,1]</span></span>
-    <span><span class="sw" style="background:#552">extension</span></span>
-    <span><span class="sw" style="background:#222;border:1px solid #555">outside</span></span>
+    <span><span class="sw" style="background:#1f4"></span>segment u∈[0,1]</span>
+    <span><span class="sw" style="background:#552"></span>extension</span>
+    <span><span class="sw" style="background:#222;border:1px solid #555"></span>outside</span>
   </div>
 </div>
 <div id="events"></div>
@@ -803,6 +912,159 @@ function update(state){
   // crossing candidates list + View B
   renderCandidates(state.candidates||[], state.draft_validation||{});
   renderViewB(line, trail, cur, state.candidates||[]);
+
+  // LCD mock + recording panel
+  renderRecPanel(state.lcd);
+  renderLcdMirror(state.lcd);
+}
+
+// Formats "m:ss.xx" from ms, matching firmware display_format.cpp.
+function fmtLapMs(ms){
+  if(ms<=0)return "0:00.00";
+  var total=Math.floor(ms);
+  var min=Math.floor(total/60000);
+  var sec=(total%60000)/1000;
+  return min+":"+(sec<10?"0":"")+sec.toFixed(2);
+}
+
+function fmtDeltaMs(ms, valid){
+  if(!valid)return "--.--";
+  var s=(ms/1000);
+  var sign=ms>=0?"+":"-";
+  return sign+Math.abs(s).toFixed(2);
+}
+
+// Renders the firmware's current driving screen onto a 260x260 canvas
+// at roughly the same layout as the real TFT.  The data is the
+// [lcd] k=v stream decoded by _parse_lcd_mirror in the Python server.
+function renderLcdMirror(lcd){
+  var canvas=document.getElementById('lcd-canvas');
+  var meta=document.getElementById('lcd-meta');
+  if(!canvas)return;
+  var ctx=canvas.getContext('2d');
+  var W=canvas.width, H=canvas.height;
+
+  // Background matches firmware delta_background_colour().
+  var bgMap={black:'#000', green:'#063618', red:'#3a0a0a', yellow:'#3a3208'};
+  var bg = (lcd && bgMap[lcd.bg]) || '#000';
+  ctx.fillStyle=bg;
+  ctx.fillRect(0,0,W,H);
+
+  if(!lcd){
+    ctx.fillStyle='#888';
+    ctx.font='12px ui-monospace, monospace';
+    ctx.textAlign='center';
+    ctx.fillText('waiting for firmware...', W/2, H/2);
+    meta && (meta.textContent='no [lcd] frames yet');
+    return;
+  }
+
+  // Top bar — lap label / track name / sats badge
+  ctx.fillStyle='rgba(255,255,255,0.08)';
+  ctx.fillRect(0,0,W,30);
+  ctx.fillStyle='#fff';
+  ctx.font='bold 14px ui-monospace, monospace';
+  ctx.textAlign='left';
+  ctx.fillText(lcd.rec?('L'+lcd.lap):'---', 8, 22);
+  // Center top: track name
+  ctx.textAlign='center';
+  ctx.fillStyle='#ccc';
+  ctx.font='13px ui-monospace, monospace';
+  var trackTxt=lcd.track||'No Track';
+  if(trackTxt.length>14)trackTxt=trackTxt.slice(0,14);
+  ctx.fillText(trackTxt, W/2, 21);
+  // Right top: sats
+  ctx.textAlign='right';
+  ctx.fillStyle=lcd.fix3d?'#7f7':'#f77';
+  ctx.font='bold 14px ui-monospace, monospace';
+  ctx.fillText(lcd.sats+'sat'+(lcd.fix3d?'✓':'·'), W-8, 22);
+
+  // Delta area content varies by driving state.
+  ctx.textAlign='center';
+  if(lcd.state==='IDLE' || !lcd.rec){
+    // Big sats number + track hint
+    ctx.font='bold 54px ui-monospace, monospace';
+    ctx.fillStyle='#fff';
+    ctx.fillText(String(lcd.sats), W/2, 100);
+    ctx.font='14px ui-monospace, monospace';
+    ctx.fillStyle='#9cf';
+    ctx.fillText('SATS', W/2, 124);
+    ctx.font='13px ui-monospace, monospace';
+    ctx.fillStyle='#ccc';
+    ctx.fillText(trackTxt, W/2, 148);
+  } else if(lcd.state==='OUT_LAP'){
+    // Show speed until first crossing.
+    ctx.font='bold 54px ui-monospace, monospace';
+    ctx.fillStyle='#fff';
+    ctx.fillText(lcd.speed.toFixed(1), W/2, 110);
+    ctx.font='14px ui-monospace, monospace';
+    ctx.fillStyle='#9cf';
+    ctx.fillText('km/h — out lap', W/2, 134);
+  } else {
+    // NORMAL: big delta in the middle.
+    ctx.font='bold 72px ui-monospace, monospace';
+    ctx.fillStyle='#fff';
+    var dtxt = lcd.delta_valid ? fmtDeltaMs(lcd.delta_ms, true) : '--.--';
+    ctx.fillText(dtxt, W/2, 130);
+    ctx.font='13px ui-monospace, monospace';
+    ctx.fillStyle='#ccc';
+    ctx.fillText('vs best', W/2, 152);
+  }
+
+  // Bottom area — current lap time, speed, best lap
+  var bottomY = H - 70;
+  ctx.fillStyle='rgba(0,0,0,0.35)';
+  ctx.fillRect(0, bottomY, W, 70);
+  ctx.textAlign='left';
+  ctx.font='11px ui-monospace, monospace';
+  ctx.fillStyle='#9cf';
+  ctx.fillText('CUR', 12, bottomY+16);
+  ctx.fillStyle='#fff';
+  ctx.font='bold 18px ui-monospace, monospace';
+  ctx.fillText(fmtLapMs(lcd.cur_ms), 12, bottomY+38);
+
+  ctx.font='11px ui-monospace, monospace';
+  ctx.fillStyle='#9cf';
+  ctx.textAlign='right';
+  ctx.fillText('BEST', W-12, bottomY+16);
+  ctx.fillStyle='#fff';
+  ctx.font='bold 18px ui-monospace, monospace';
+  ctx.fillText(lcd.best_ms>0?fmtLapMs(lcd.best_ms):'--:--', W-12, bottomY+38);
+
+  ctx.textAlign='center';
+  ctx.font='11px ui-monospace, monospace';
+  ctx.fillStyle='#aaa';
+  ctx.fillText(lcd.speed.toFixed(1)+' km/h', W/2, bottomY+60);
+
+  if(lcd.off){
+    ctx.fillStyle='#fc0';
+    ctx.font='bold 12px ui-monospace, monospace';
+    ctx.textAlign='center';
+    ctx.fillText('OFF-TRACK', W/2, 170);
+  }
+
+  // Meta line
+  if(meta){
+    var age = Math.max(0, Math.round(Date.now()/1000 - (lcd.t||0)));
+    meta.textContent = lcd.screen+' / '+lcd.state+' · '+age+'s ago';
+  }
+}
+
+function renderRecPanel(lcd){
+  var stat=document.getElementById('rec-status');
+  var btnStart=document.getElementById('btn-rec-start');
+  var btnStop=document.getElementById('btn-rec-stop');
+  if(!stat || !btnStart || !btnStop)return;
+  var recording = !!(lcd && lcd.rec);
+  if(recording){
+    stat.className='recording';
+    stat.textContent='● RECORDING — lap '+lcd.lap+' · '+fmtLapMs(lcd.cur_ms);
+  }else{
+    stat.className='idle';
+    stat.textContent='idle — press Start to record';
+  }
+  btnStart.disabled=recording;
+  btnStop.disabled=!recording;
 }
 
 // ---- Finish-line-local projection (client-side, pure math). ----
@@ -1093,6 +1355,46 @@ document.getElementById('btn-save').addEventListener('click',()=>{
 });
 document.getElementById('btn-cancel').addEventListener('click',()=>sendCommand('track cancel'));
 
+function setRecMsg(text, cls){
+  var m=document.getElementById('rec-msg');
+  if(!m)return;
+  m.className = cls || '';
+  m.textContent = text || '';
+}
+
+document.getElementById('btn-rec-start').addEventListener('click',async ()=>{
+  setRecMsg('Starting...', '');
+  try{
+    const r = await fetch('/command', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({cmd:'recording start'}),
+    });
+    if(!r.ok){
+      const body=await r.json().catch(()=>({}));
+      setRecMsg('start failed: '+(body.error||r.status),'err');
+    } else {
+      setRecMsg('start command sent — waiting for firmware ACK','ok');
+    }
+  } catch(e){setRecMsg('start failed: '+e, 'err');}
+});
+
+document.getElementById('btn-rec-stop').addEventListener('click',async ()=>{
+  if(!confirm('Save recording and stop session?'))return;
+  setRecMsg('Stopping...', '');
+  try{
+    const r = await fetch('/command', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({cmd:'recording stop'}),
+    });
+    if(!r.ok){
+      const body=await r.json().catch(()=>({}));
+      setRecMsg('stop failed: '+(body.error||r.status),'err');
+    } else {
+      setRecMsg('stop command sent — firmware finalizes .vbo','ok');
+    }
+  } catch(e){setRecMsg('stop failed: '+e, 'err');}
+});
+
 poll();
 </script></body></html>
 """
@@ -1104,6 +1406,8 @@ _ALLOWED_COMMANDS = {
     "track status",
     "mark p1",
     "mark p2",
+    "recording start",
+    "recording stop",
 }
 
 

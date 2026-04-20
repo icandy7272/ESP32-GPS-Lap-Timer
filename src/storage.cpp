@@ -13,6 +13,8 @@ SdFat sd;
 namespace storage_internal {
 
 FsFile s_vbo_file;
+FsFile s_lap_sidecar_file;
+bool s_lap_sidecar_open = false;
 bool s_session_active = false;
 uint32_t s_bytes_written = 0;
 uint32_t s_last_fsync_ms = 0;
