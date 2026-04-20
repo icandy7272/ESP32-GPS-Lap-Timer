@@ -17,6 +17,11 @@ enum class SerialConsoleCommandType {
     TrackSave,         // "track save"
     TrackCancel,       // "track cancel"
     TrackStatus,       // "track status"
+    // Recording control — lets live_map (and any other serial client)
+    // toggle session recording without needing WiFi access.  Matches
+    // the /api/recording HTTP endpoint behaviour.
+    RecordingStart,    // "recording start"
+    RecordingStop,     // "recording stop"
 };
 
 struct SerialConsoleCommand {

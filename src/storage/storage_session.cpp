@@ -36,6 +36,20 @@ bool storage_start_session(const char* track_name) {
         return false;
     }
 
+    // Open the lap-timing sidecar alongside the VBO .tmp.  Each lap
+    // appends one JSONL line + fsync so power-loss mid-session
+    // doesn't lose lap times (the 2026-04-20 walking-test failure
+    // mode).  If the sidecar fails to open we still record the VBO
+    // — lap times will still be in session_state.laps[] and written
+    // to [laptiming] on clean stop.
+    xSemaphoreTake(spi_mutex, portMAX_DELAY);
+    s_lap_sidecar_open = s_lap_sidecar_file.open(
+        LAP_SIDECAR_TMP_FILENAME, O_RDWR | O_CREAT | O_TRUNC);
+    xSemaphoreGive(spi_mutex);
+    if (!s_lap_sidecar_open) {
+        Serial.println("[storage] WARN: lap sidecar open failed; proceeding without it");
+    }
+
     s_session_track = active_track;
 
     write_vbo_header(track_name);
@@ -103,24 +117,107 @@ void storage_end_session() {
     bool renamed = sd.rename(TMP_FILENAME, final_path);
     xSemaphoreGive(spi_mutex);
 
+    // Close the sidecar before renaming.  Any truncation/corruption
+    // from a concurrent fs access is avoided by draining writes above
+    // and closing explicitly here.
+    if (s_lap_sidecar_open) {
+        xSemaphoreTake(spi_mutex, portMAX_DELAY);
+        s_lap_sidecar_file.flush();
+        s_lap_sidecar_file.sync();
+        s_lap_sidecar_file.close();
+        xSemaphoreGive(spi_mutex);
+        s_lap_sidecar_open = false;
+    }
+
     if (renamed) {
+        // Rename the sidecar to match: replace trailing ".vbo" with
+        // ".lap.jsonl".  On failure we still leave the .tmp sidecar
+        // in place; offline tooling can pair by name + mtime.
+        char sidecar_final[PATH_BUF_LEN];
+        int flen = (int)strlen(final_path);
+        if (flen > 4 && strcmp(final_path + flen - 4, ".vbo") == 0
+            && flen - 4 + (int)strlen(".lap.jsonl") < (int)sizeof(sidecar_final)) {
+            memcpy(sidecar_final, final_path, flen - 4);
+            strcpy(sidecar_final + flen - 4, ".lap.jsonl");
+            xSemaphoreTake(spi_mutex, portMAX_DELAY);
+            bool side_ok = sd.rename(LAP_SIDECAR_TMP_FILENAME, sidecar_final);
+            xSemaphoreGive(spi_mutex);
+            if (!side_ok) {
+                Serial.printf("[storage] WARN: lap sidecar rename failed "
+                              "(%s -> %s), tmp preserved\n",
+                              LAP_SIDECAR_TMP_FILENAME, sidecar_final);
+            }
+        }
         sync_directory(SESSIONS_DIR);
         Serial.printf("[storage] session saved: %s (%u bytes)\n",
                       final_path, s_bytes_written);
         write_session_metadata_json(final_path);
     } else {
         Serial.printf("[storage] WARN: rename failed, data in %s\n", TMP_FILENAME);
+        // Leave the sidecar at LAP_SIDECAR_TMP_FILENAME too — both
+        // tmps pair up for offline recovery.
+    }
+}
+
+static const char* lap_status_name(uint8_t status) {
+    switch (status) {
+        case LAP_STATUS_TIMED:  return "TIMED";
+        case LAP_STATUS_SLOW:   return "SLOW";
+        case LAP_STATUS_SHORT:  return "SHORT";
+        case LAP_STATUS_NO_REF: return "NO_REF";
+        case LAP_STATUS_OUT:    return "OUT";
+        default:                return "UNKNOWN";
     }
 }
 
 void storage_write_lap_timing(const LapRecord* lap) {
-    // Intentional no-op.  Per-lap records are written at session end by
-    // write_laptiming_lines() reading session_state.laps[] once the
-    // [laptiming] section header is emitted.  Live per-lap writes would
-    // require either appending to the [laptiming] section mid-session
-    // (which conflicts with the header/data/footer VBO structure) or a
-    // parallel sidecar file for crash durability.  Neither is required
-    // yet; the hook stays wired so that path can be added without
-    // touching session.cpp again.
-    (void)lap;
+    // Append one JSONL line per completed lap to the sidecar.  Synced
+    // per line so a power-cut at any point keeps all previously
+    // completed laps on disk.  If the sidecar isn't open (fs error at
+    // session-start, or session not active yet), silently skip —
+    // session_state.laps[] still has the record for the clean-stop
+    // path to pick up later.
+    if (lap == nullptr) return;
+    if (!s_session_active || !s_lap_sidecar_open) return;
+
+    char line[256];
+    int pos = snprintf(line, sizeof(line),
+                       "{\"lap\":%d,\"lap_time_ms\":%ld,\"status\":\"%s\","
+                       "\"finish_ts_us\":%lld,\"sectors\":[",
+                       lap->lap_number,
+                       (long)lap->lap_time_ms,
+                       lap_status_name(lap->status),
+                       (long long)lap->finish_timestamp_us);
+    int sectors_to_write = lap->sector_count;
+    if (sectors_to_write > MAX_SECTORS) sectors_to_write = MAX_SECTORS;
+    for (int si = 0; si < sectors_to_write; si++) {
+        int n = snprintf(line + pos, sizeof(line) - pos, "%s%ld",
+                         (si == 0) ? "" : ",",
+                         (long)lap->sector_times_ms[si]);
+        if (n <= 0 || n >= (int)(sizeof(line) - pos)) break;
+        pos += n;
+    }
+    // Close JSON + newline.  Reserve 4 bytes: `]}\r\n` + NUL.
+    if (pos >= (int)sizeof(line) - 4) {
+        pos = (int)sizeof(line) - 4;
+    }
+    line[pos++] = ']';
+    line[pos++] = '}';
+    line[pos++] = '\r';
+    line[pos++] = '\n';
+
+    xSemaphoreTake(spi_mutex, portMAX_DELAY);
+    size_t written = s_lap_sidecar_file.write(line, pos);
+    // fsync EVERY lap write: durability > throughput.  Lap events
+    // happen on the order of minutes; the extra SD latency (~10-50 ms
+    // on a decent card) is harmless outside the GPS hot path, and
+    // tasks that care about timing are not blocked on this mutex.
+    s_lap_sidecar_file.flush();
+    s_lap_sidecar_file.sync();
+    xSemaphoreGive(spi_mutex);
+
+    if (written != (size_t)pos) {
+        Serial.printf("[storage] WARN: lap sidecar short write %zu/%d\n",
+                      written, pos);
+    }
 }

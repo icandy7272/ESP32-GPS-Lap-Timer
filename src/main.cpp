@@ -688,6 +688,48 @@ static void serial_console_handle_track_status() {
     }
 }
 
+// Start a recording session over serial.  Mirrors handle_api_recording's
+// start branch: snapshot track_name under mutex, call
+// session_start_recording, verify is_recording flipped.
+static void serial_console_handle_recording_start() {
+    char track_name[sizeof(session_state.track_name)] = {0};
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        memcpy(track_name, session_state.track_name, sizeof(track_name));
+        xSemaphoreGive(session_mutex);
+    }
+    if (track_name[0] == '\0' ||
+        strcmp(track_name, "No Track") == 0) {
+        Serial.println("[recording] ERR: no track selected — pick or create a track first");
+        return;
+    }
+    session_start_recording(track_name);
+    bool started = false;
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        started = session_state.is_recording;
+        xSemaphoreGive(session_mutex);
+    }
+    if (started) {
+        Serial.printf("[recording] started: %s\n", track_name);
+    } else {
+        Serial.println("[recording] ERR: session_start_recording refused "
+                       "(wrong phase or SD failure)");
+    }
+}
+
+static void serial_console_handle_recording_stop() {
+    bool was_recording = false;
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        was_recording = session_state.is_recording;
+        xSemaphoreGive(session_mutex);
+    }
+    if (!was_recording) {
+        Serial.println("[recording] (not recording — nothing to stop)");
+        return;
+    }
+    session_stop_recording();
+    Serial.println("[recording] stopped and saved");
+}
+
 static void serial_console_handle_line(const char* line) {
     SerialConsoleCommand command = serial_console_parse(line);
     switch (command.type) {
@@ -714,6 +756,12 @@ static void serial_console_handle_line(const char* line) {
             return;
         case SerialConsoleCommandType::TrackCancel:
             serial_console_handle_track_cancel();
+            return;
+        case SerialConsoleCommandType::RecordingStart:
+            serial_console_handle_recording_start();
+            return;
+        case SerialConsoleCommandType::RecordingStop:
+            serial_console_handle_recording_stop();
             return;
         case SerialConsoleCommandType::TrackStatus:
             serial_console_handle_track_status();

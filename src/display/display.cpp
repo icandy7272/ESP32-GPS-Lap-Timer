@@ -466,5 +466,63 @@ void display_task(void* param) {
         render_frame(screen_changed);
         first_frame = false;  // only clear after render succeeds
         crash_bc_core1 = 62;  // display: frame done
+
+        // 6. Mirror the LCD state to serial for tools/live_map.py's
+        //    on-laptop mock LCD panel.  Emitted at ~5 Hz (every 2
+        //    frames at 10 FPS) — enough to feel live, bounded bandwidth
+        //    (200 B × 5 Hz = 1 KB/s over 115200 bps UART).
+        static int mirror_skip = 0;
+        if ((mirror_skip++ & 1) == 0) {
+            const SessionState& st = s_cached_state;
+            DrivingState dstate = get_driving_state(st);
+            const char* state_str =
+                (dstate == DRIVING_NORMAL)  ? "NORMAL" :
+                (dstate == DRIVING_OUT_LAP) ? "OUT_LAP" : "IDLE";
+            const char* screen_str =
+                (s_current_screen == SCREEN_STATUS)   ? "STATUS"   :
+                (s_current_screen == SCREEN_LAP_LIST) ? "LAP_LIST" : "DRIVING";
+            // Background colour classification — what the real driving
+            // sprite fills with.  Lets the laptop mock paint the same
+            // colour without duplicating the firmware logic.
+            const char* bg_str;
+            if (!st.gps_fix_ok)      bg_str = "black";
+            else if (st.off_track)   bg_str = "yellow";
+            else if (!st.delta_valid) bg_str = "black";
+            else if (st.delta_ms < 0) bg_str = "green";
+            else if (st.delta_ms > 0) bg_str = "red";
+            else                      bg_str = "black";
+
+            int32_t cur_ms = 0;
+            if (st.current_lap_start_us > 0 && st.is_recording) {
+                cur_ms = (int32_t)((esp_timer_get_time()
+                                   - st.current_lap_start_us) / 1000);
+            }
+
+            // Sanitise track_name for the log format: drop quotes and
+            // backslashes (firmware validates names are ASCII-safe but
+            // belt-and-braces).
+            char safe_name[sizeof(st.track_name)];
+            size_t ni = 0;
+            for (size_t i = 0; i < sizeof(st.track_name) - 1
+                             && st.track_name[i] != '\0'; i++) {
+                char c = st.track_name[i];
+                if (c == '"' || c == '\\' || (unsigned char)c < 0x20) c = '_';
+                safe_name[ni++] = c;
+            }
+            safe_name[ni] = '\0';
+
+            Serial.printf(
+                "[lcd] screen=%s state=%s rec=%d lap=%d cur_ms=%ld "
+                "delta_ms=%+ld delta_valid=%d best_ms=%ld speed=%.2f "
+                "track=\"%s\" sats=%d fix3d=%d off=%d bg=%s\n",
+                screen_str, state_str, st.is_recording ? 1 : 0,
+                st.current_lap, (long)cur_ms,
+                (long)st.delta_ms, st.delta_valid ? 1 : 0,
+                (long)st.best_lap_time_ms,
+                (double)st.speed_kmh,
+                safe_name,
+                st.gps_satellites, st.gps_fix_ok ? 1 : 0,
+                st.off_track ? 1 : 0, bg_str);
+        }
     }
 }
