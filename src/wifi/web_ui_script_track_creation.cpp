@@ -542,7 +542,24 @@ function pollValidation(){
     var vNow=_trackDraft.validation;
     if(!vNow||vNow!==v0) return;
     if(!vNow.active) return;
-    if(typeof body.session_id==='number' && body.session_id!==vNow.sessionId) return;
+    // Session mismatch = firmware replaced our session with a different
+    // one (another tab / serial takeover / flip that hasn't returned
+    // yet).  Previously we just returned, which left the UI showing
+    // stale accepted counts and an enabled Save button against state
+    // the server no longer has.  Now we tear down locally so the
+    // operator sees "session lost — re-validate" state.  Codex P2
+    // from 2026-04-20 round-4.
+    if(typeof body.session_id==='number' && body.session_id!==vNow.sessionId){
+      if(vNow.sessionId !== 0){
+        // Only clear when we had a real session id.  A sessionId of 0
+        // means Flip Direction is in-flight and the new POST response
+        // has not landed yet — NOT a takeover.  Just drop this poll.
+        stopValidationLocal(vNow);
+        vNow.lastError = 'Validation session lost (takeover or clear). Re-validate.';
+        renderTrackDraft();
+      }
+      return;
+    }
     // Defend against mixed-snapshot regressions on ancient firmware:
     // if firmware says !active, treat as drift and stop locally.
     if(body.active===false){
@@ -934,14 +951,63 @@ function addTrack(){
     }
   }).catch(function(){
     _trackSubmitPending=false;
-    // Same recovery as the non-ok branch — retain the validation
-    // session on transient network errors.
-    if(_trackDraft.validation&&_trackDraft.validation.active
-       && !_trackDraft.validation.pollTimer){
-      _trackDraft.validation.pollTimer=setInterval(pollValidation,VALIDATION_POLL_MS);
-    }
-    renderTrackDraft();
-    setTrackMsg('Failed to create track.','err');
+    // "Ghost success" recovery — the POST response may have been
+    // dropped after the ESP32 actually committed the track.  Do a
+    // readback via loadTracks() and see if our name landed; if so,
+    // treat it as a success rather than encourage the user to save
+    // a duplicate.  Codex P2 from 2026-04-20 round-4 review.
+    var attemptedName = name;
+    // Capture the validation object BEFORE readback so the async
+    // callbacks below see the same identity — resetTrackDraft() may
+    // swap it.
+    var v0 = _trackDraft.validation;
+    fetch('/api/tracks').then(function(r){return r.json();}).then(function(body){
+      var tracks = (body && body.tracks) || [];
+      var match = null;
+      for (var i = 0; i < tracks.length; i++) {
+        if (tracks[i] && tracks[i].name === attemptedName) {
+          match = tracks[i];
+          break;
+        }
+      }
+      if (match) {
+        // Firmware has it — ghost success.  Clear the draft line
+        // (post-save cleanup that normally runs in the ok branch) and
+        // finish the UI flow.
+        fetch('/api/tracks/draft_validation',{method:'DELETE'}).catch(function(){});
+        if (nameField) { nameField.value = ''; }
+        resetTrackDraft();
+        renderTrackDraft();
+        loadTracks();
+        if (match.id) {
+          selectTrack(match.id, 'newly_created').then(function(selected){
+            if (selected) {
+              setTrackMsg('Track created (response was dropped, verified via readback).','ok');
+            } else {
+              setTrackMsg('Track created but auto-select failed; pick it manually.','err');
+            }
+          });
+        } else {
+          setTrackMsg('Track created (response was dropped, verified via readback).','ok');
+        }
+      } else {
+        // Genuine network failure before the ESP32 saw the request.
+        // Restart polling so counts stay live and the user can retry.
+        if (v0 && v0 === _trackDraft.validation && v0.active && !v0.pollTimer) {
+          v0.pollTimer = setInterval(pollValidation, VALIDATION_POLL_MS);
+        }
+        renderTrackDraft();
+        setTrackMsg('Failed to create track — network error.','err');
+      }
+    }).catch(function(){
+      // Readback itself failed — can't tell which case we're in.
+      // Be conservative: keep validation alive, ask user to retry.
+      if (v0 && v0 === _trackDraft.validation && v0.active && !v0.pollTimer) {
+        v0.pollTimer = setInterval(pollValidation, VALIDATION_POLL_MS);
+      }
+      renderTrackDraft();
+      setTrackMsg('Failed to create track — network error. Check the track list before retrying.','err');
+    });
   });
 }
 
@@ -992,14 +1058,19 @@ function initTrackCreationUi(){
   renderTrackDraft();
   // Reconcile any orphaned firmware-side draft_validation line from
   // a previous WEB page load (closed tab / reload while validation
-  // was active).  CRITICAL: only DELETE if owner === 'web'.  A
-  // serial operator plugged into USB may have their OWN validation
-  // in progress; opening the phone web UI must not silently clear
-  // that state.  Codex P2 from 2026-04-19 round-3 review.
+  // was active).  Only DELETE if owner === 'web' AND scope the
+  // DELETE to the session_id we just saw — firmware rejects the
+  // clear if a newer session has taken over between GET and DELETE,
+  // so we can't accidentally kill another tab's fresh session.
+  // Codex P2 from 2026-04-20 round-4 review (race on unscoped
+  // init-time DELETE).
   fetch('/api/tracks/draft_validation').then(function(r){return r.json();})
     .then(function(body){
-      if(body && body.active && body.owner === 'web'){
-        fetch('/api/tracks/draft_validation',{method:'DELETE'}).catch(function(){});
+      if(body && body.active && body.owner === 'web'
+         && typeof body.session_id === 'number' && body.session_id > 0){
+        fetch('/api/tracks/draft_validation?session='
+              + encodeURIComponent(body.session_id),
+              {method:'DELETE'}).catch(function(){});
       }
     })
     .catch(function(){/* no firmware / boot race — ignore */});

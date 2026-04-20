@@ -150,6 +150,24 @@ bool lap_timer_draft_validation_passes_gate(const DetectionLine* line,
 /// WEB_UI_MIN_ACCEPTED_CROSSINGS_LIT literal used by the JS UI.
 uint32_t lap_timer_draft_validation_min_accepted();
 
+/// Atomic "clear only if the current session_id is still `expected`".
+/// Exists so the HTTP DELETE handler can scope client-driven cleanup
+/// to a specific session the client had cached — closing the
+/// GET-then-unscoped-DELETE TOCTOU where a newer session installed
+/// between the client's GET and its DELETE would be silently killed.
+/// Codex P2 from 2026-04-20 round-4.
+///
+/// Single critical section:
+///   - If s_session_id == expected_session_id: clears state (exactly
+///     like set(nullptr)) and returns the new session_id assigned to
+///     the clear.
+///   - Otherwise: leaves state untouched and returns 0.
+///
+/// A return of 0 means "nothing was cleared" — the caller's desired
+/// end-state (no-owned-session) is already the case for a different
+/// reason, so it should be treated as success.
+uint32_t lap_timer_clear_draft_validation_if(uint32_t expected_session_id);
+
 // --- Deprecated aliases (kept until all callers migrate) ----------
 // These were the initial Phase A/B API; the atomic snapshot replaces
 // them but the old signatures compile so existing code paths keep
