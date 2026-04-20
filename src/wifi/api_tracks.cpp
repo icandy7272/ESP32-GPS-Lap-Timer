@@ -587,11 +587,52 @@ void handle_api_tracks_draft_validation_get() {
     server.send(200, "application/json", json);
 }
 
-// DELETE /api/tracks/draft_validation
+// DELETE /api/tracks/draft_validation[?session=N]
 // Clears the installed line, resets counters / ring buffer.  Returns
 // the new session_id (assigned by the clear operation) so the client
 // can cache it and recognise its own orphan-cleanup on the next GET.
+//
+// Optional `session` query parameter — if provided, the DELETE only
+// clears when the CURRENT firmware session_id matches.  This scopes
+// the cleanup to a specific session the client had cached, closing
+// the GET-then-DELETE TOCTOU where a newer session installed between
+// the GET response and the DELETE request could be silently killed.
+// Codex P2 from 2026-04-20 round-4 review.
+//
+// Response shape when a session guard is supplied and does NOT match:
+//   {"ok":false,"skipped":true,"session_id":<current>,"expected":<arg>}
+// The client should treat this as success (state is what it wants
+// anyway — we didn't touch it).
 void handle_api_tracks_draft_validation_delete() {
+    bool has_guard = server.hasArg("session");
+    uint32_t guard_id = 0;
+    if (has_guard) {
+        guard_id = (uint32_t)strtoul(server.arg("session").c_str(), nullptr, 10);
+    }
+
+    if (has_guard) {
+        // Atomic conditional clear — the firmware helper checks the
+        // current session_id and only clears if it matches, all
+        // inside one critical section.  If the guard didn't match,
+        // returns 0 (and we return skipped=true to the client).
+        uint32_t new_id = lap_timer_clear_draft_validation_if(guard_id);
+        if (new_id == 0) {
+            DraftValidationSnapshot snap = {};
+            lap_timer_get_draft_validation_snapshot(&snap, nullptr, 0);
+            char buf[96];
+            snprintf(buf, sizeof(buf),
+                     "{\"ok\":false,\"skipped\":true,"
+                     "\"session_id\":%u,\"expected\":%u}",
+                     (unsigned)snap.session_id, (unsigned)guard_id);
+            server.send(200, "application/json", buf);
+            return;
+        }
+        char buf[64];
+        snprintf(buf, sizeof(buf),
+                 "{\"ok\":true,\"session_id\":%u}", (unsigned)new_id);
+        server.send(200, "application/json", buf);
+        return;
+    }
     uint32_t new_id = lap_timer_set_draft_validation_line(
         nullptr, DRAFT_OWNER_NONE);
     char buf[64];

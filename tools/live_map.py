@@ -590,6 +590,11 @@ HTML = r"""<!doctype html>
  #cands .row.draft{background:rgba(255,170,0,0.08)}
  #cands .row.draft.pass{border-left-color:#fa3}
  #cands .row.draft.reject{border-left-color:#f73}
+ /* Stale — firmware rejected the write because the session was
+    replaced/cleared mid-evaluation.  Dim the row so an operator can
+    tell at a glance this PASS did NOT count toward the save gate. */
+ #cands .row.stale{opacity:0.45;font-style:italic}
+ #cands .stale-tag{color:#f80;font-weight:bold}
  #cands .reason{color:#aaa;font-size:10px}
  #cands .pass{color:#cfc}
  #cands .dv-summary{margin:2px 0 6px 0;padding:4px 6px;background:rgba(255,170,0,0.12);border:1px solid rgba(255,170,0,0.3);border-radius:3px;font-size:11px}
@@ -854,17 +859,25 @@ function renderCandidates(cands, dv){
     // glance which line a PASS belongs to when both are firing.
     const passReject=c.result==='PASS'?'pass':'reject';
     const typeCls=c.line_type==='draft'?' draft':'';
-    const cls=passReject+typeCls;
+    // Stale rows are firmware-side session-race losers — the event
+    // was evaluated against a session that had already been cleared /
+    // replaced by the time the counter write landed, so the firmware
+    // dropped it.  Dim the row and append "(stale)" so the operator
+    // doesn't treat it as evidence of a passing validation.  Codex
+    // P2 from 2026-04-20 round-4.
+    const staleCls=c.stale?' stale':'';
+    const cls=passReject+typeCls+staleCls;
     const uStr=c.u.toFixed(3);
     const ovStr=c.overshoot.toFixed(2);
     // One decimal so the HEADING_WINDOW boundary (60° by default) is
     // readable — 60.3 vs 59.8 must not both render as '+60'.
     const hdStr=(c.hdiff>=0?'+':'')+c.hdiff.toFixed(1);
     const label=c.line_type==='draft'?'DRAFT':`L${c.line_idx}`;
+    const staleTag=c.stale?' <span class="stale-tag">(stale)</span>':'';
     return `<div class="row ${cls}">`+
       `[${ago}s] ${label} ${c.result} `+
       `<span class="reason">u=${uStr} over=${ovStr}m hd=${hdStr}° `+
-      `${c.reason}</span></div>`;
+      `${c.reason}</span>${staleTag}</div>`;
   });
   el.innerHTML=summary+rows.join('');
 }

@@ -159,19 +159,15 @@ bool lines_match(const DetectionLine& a, const DetectionLine& b,
 
 // --- Public API (declared in lap_timer.h) -----------------------
 
-uint32_t lap_timer_set_draft_validation_line(const DetectionLine* line,
-                                             DraftValidationOwner owner) {
-    uint32_t new_id = 0;
-    uint8_t  prev_owner;
-    bool     was_active;
-    portENTER_CRITICAL(&s_draft_mux);
-    prev_owner = s_owner;
-    was_active = s_draft_active;
+// Shared clear/install core, assumes caller holds s_draft_mux.
+// Returns the new session_id after the state transition.
+namespace {
+uint32_t set_draft_line_locked(const DetectionLine* line,
+                               DraftValidationOwner owner) {
     // Overflow-free increment.  Skip 0 on wrap since we reserve it as
     // "no session" sentinel.
     s_session_id++;
     if (s_session_id == 0) s_session_id = 1;
-    new_id = s_session_id;
     if (line == nullptr) {
         s_draft_active = false;
         s_owner        = DRAFT_OWNER_NONE;
@@ -182,6 +178,19 @@ uint32_t lap_timer_set_draft_validation_line(const DetectionLine* line,
         s_owner        = static_cast<uint8_t>(owner);
     }
     reset_counters_and_buffer_locked();
+    return s_session_id;
+}
+}  // namespace
+
+uint32_t lap_timer_set_draft_validation_line(const DetectionLine* line,
+                                             DraftValidationOwner owner) {
+    uint32_t new_id = 0;
+    uint8_t  prev_owner;
+    bool     was_active;
+    portENTER_CRITICAL(&s_draft_mux);
+    prev_owner = s_owner;
+    was_active = s_draft_active;
+    new_id = set_draft_line_locked(line, owner);
     portEXIT_CRITICAL(&s_draft_mux);
 
     // Log cross-surface takeovers so the operator sees the serial
@@ -194,6 +203,16 @@ uint32_t lap_timer_set_draft_validation_line(const DetectionLine* line,
                       owner_name(static_cast<uint8_t>(owner)),
                       (unsigned)new_id);
     }
+    return new_id;
+}
+
+uint32_t lap_timer_clear_draft_validation_if(uint32_t expected_session_id) {
+    uint32_t new_id = 0;
+    portENTER_CRITICAL(&s_draft_mux);
+    if (s_session_id == expected_session_id) {
+        new_id = set_draft_line_locked(nullptr, DRAFT_OWNER_NONE);
+    }
+    portEXIT_CRITICAL(&s_draft_mux);
     return new_id;
 }
 

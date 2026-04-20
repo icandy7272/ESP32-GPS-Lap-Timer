@@ -597,9 +597,12 @@ static void serial_console_handle_track_save() {
     candidate_line.valid_heading_deg = s_draft_heading;
     const uint32_t min_acc = lap_timer_draft_validation_min_accepted();
     // Endpoint match tolerance: 2 m (generous — lines drift slightly
-    // during the walk test due to GPS noise).  Heading: 10° — a flip
-    // (±180°) is also accepted inside lines_match() to support Flip
-    // Direction workflows.
+    // during the walk test due to GPS noise).  Heading: 10° — exact
+    // direction only.  The 180° symmetry once allowed here was a
+    // save-gate back door (codex P1 round-3) and has been removed
+    // from lines_match(); Flip Direction re-POSTs with the new
+    // heading, which bumps session_id and resets counts, so lenient
+    // matching here is not needed.
     if (!lap_timer_draft_validation_passes_gate(
             &candidate_line, /*tol_m=*/2.0, /*tol_deg=*/10.0, min_acc)) {
         DraftValidationSnapshot snap = {};
