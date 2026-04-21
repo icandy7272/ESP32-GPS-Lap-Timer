@@ -29,7 +29,10 @@ void storage_task(void* param);
 bool storage_start_session(const char* track_name);
 
 // Flush, sync, close .tmp file and rename to final .vbo name.
-void storage_end_session();
+// Returns true only when the final session file was committed to
+// /sessions/. A false result means data may still be left in the tmp
+// file for recovery.
+bool storage_end_session();
 
 // --- Lap timing ---
 // Append a lap timing line to the [laptiming] section.

@@ -172,7 +172,28 @@ TrackSaveResult track_save_detailed(const TrackDefinition* track) {
     }
     file.close();
 
+    // Persist the new directory entry before claiming success.  Session
+    // finalization already syncs its parent directory; track creation
+    // needs the same durability so a just-saved draft is actually
+    // visible on the SD card after the UI reports success.
+    bool dir_synced = false;
+    FsFile dir;
+    if (dir.open(TRACKS_DIR, O_RDONLY)) {
+        dir_synced = dir.sync();
+        dir.close();
+    }
+    bool exists_after_write = sd.exists(path);
+
     xSemaphoreGive(spi_mutex);
+
+    if (!dir_synced) {
+        Serial.printf("[track] directory sync failed: %s\n", TRACKS_DIR);
+        return TRACK_SAVE_RESULT_FILE_SYNC_FAILED;
+    }
+    if (!exists_after_write) {
+        Serial.printf("[track] file missing after save: %s\n", path);
+        return TRACK_SAVE_RESULT_FILE_SYNC_FAILED;
+    }
 
     s_tracks[s_track_count] = new_track;
     s_track_count++;

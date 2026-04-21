@@ -63,9 +63,9 @@ bool storage_start_session(const char* track_name) {
     return true;
 }
 
-void storage_end_session() {
+bool storage_end_session() {
     if (!s_session_active) {
-        return;
+        return false;
     }
 
     // Drain any VBO entries queued before the user pressed stop but not
@@ -109,6 +109,14 @@ void storage_end_session() {
     xSemaphoreGive(spi_mutex);
 
     sync_directory("/");
+
+    // Be defensive against a missing sessions/ directory at stop time.
+    // storage_init() creates it, but if the FAT metadata was damaged or
+    // the directory was removed out-of-band, prefer a best-effort
+    // recreate over a guaranteed rename failure.
+    if (!ensure_directories()) {
+        Serial.println("[storage] WARN: sessions/ unavailable at stop");
+    }
 
     char final_path[PATH_BUF_LEN];
     build_final_path(final_path, sizeof(final_path));
@@ -157,6 +165,7 @@ void storage_end_session() {
         // Leave the sidecar at LAP_SIDECAR_TMP_FILENAME too — both
         // tmps pair up for offline recovery.
     }
+    return renamed;
 }
 
 static const char* lap_status_name(uint8_t status) {

@@ -41,4 +41,5 @@ void session_start_recording(const char* track_name);
 
 // Transition Recording -> Finished.
 // Clears is_recording, calls storage_end_session().
-void session_stop_recording();
+// Returns true only when the final session file was committed.
+bool session_stop_recording();

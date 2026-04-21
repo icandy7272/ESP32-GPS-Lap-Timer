@@ -50,9 +50,22 @@ void handle_api_recording() {
                         "{\"ok\":true,\"recording\":true}");
         }
     } else if (strcmp(action, "stop") == 0) {
-        session_stop_recording();
-        server.send(200, "application/json",
-                    "{\"ok\":true,\"recording\":false}");
+        bool saved = session_stop_recording();
+        bool recording = false;
+        if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            recording = session_state.is_recording;
+            xSemaphoreGive(session_mutex);
+        }
+        if (recording) {
+            server.send(409, "application/json",
+                        "{\"ok\":false,\"error\":\"recording stop refused\"}");
+        } else if (!saved) {
+            server.send(500, "application/json",
+                        "{\"ok\":false,\"error\":\"recording stopped but final save failed\"}");
+        } else {
+            server.send(200, "application/json",
+                        "{\"ok\":true,\"recording\":false}");
+        }
     } else {
         server.send(400, "application/json",
                     "{\"error\":\"action must be start or stop\"}");

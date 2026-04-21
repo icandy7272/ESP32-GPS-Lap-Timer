@@ -68,6 +68,7 @@ state = {
     "hdop": -1.0,
     "trail": [],
     "events": [],
+    "event_seq": 0,
     # Structured [xing] `candidate` events parsed from the firmware.  Used
     # by the Crossing Candidates panel and the Finish-Line Relative View
     # (View B) so the UI can show PASS/REJECT + reason without re-running
@@ -107,6 +108,7 @@ state = {
 # below can write query commands.  Set inside serial_reader once the
 # port is open.
 _ser_ref: list = [None]
+_serial_write_lock = threading.Lock()
 
 
 def _locked_update(**kwargs):
@@ -135,9 +137,23 @@ def _locked_append_trail(lat, lon):
 def _locked_append_event(text):
     with state_lock:
         events = state["events"]
-        events.append({"t": time.time(), "text": text})
+        state["event_seq"] += 1
+        events.append({
+            "seq": state["event_seq"],
+            "t": time.time(),
+            "text": text,
+        })
         if len(events) > EVENT_MAX:
             del events[: len(events) - EVENT_MAX]
+
+
+def _serial_write_command(cmd: str) -> None:
+    ser = _ser_ref[0]
+    if ser is None:
+        raise RuntimeError("serial not open")
+    with _serial_write_lock:
+        ser.write((cmd + "\r\n").encode("utf-8"))
+        ser.flush()
 
 
 # Numeric regex building blocks.  The previous `[0-9.\-]+` / `[\d.]+`
@@ -176,6 +192,7 @@ _DRAFT_SAVED_RE = re.compile(
 _DRAFT_SPREAD_RE = re.compile(
     rf"spread=({_FLOAT})m\s+tier=(\w+)(?:\s+samples=(\d+))?"
 )
+_RECORDING_STARTED_RE = re.compile(r"\[recording\] started:\s+(.+)$")
 # Structured crossing candidate — emitted by lap_timer_crossing.cpp on
 # every side-flip of a detection line (both PASS and REJECT cases).  See
 # emit_candidate_event() in that file for the field contract.
@@ -387,6 +404,7 @@ def _parse_draft_event(line: str) -> None:
         return
     m = _DRAFT_SAVED_RE.search(line)
     if m:
+        saved_id = m.group(1)
         with state_lock:
             state["draft"] = {
                 "active": False,
@@ -397,6 +415,13 @@ def _parse_draft_event(line: str) -> None:
                 "status": (f"Saved {m.group(1)} ({m.group(2)}) — "
                            f"line {m.group(3)} m, heading {m.group(4)}°"),
             }
+        # Re-read the just-saved file over serial so the red "active
+        # track" overlay updates from the SD-backed JSON rather than
+        # leaving the old track geometry on screen until reboot.
+        try:
+            _serial_write_command(f"cat tracks/{saved_id}.json")
+        except RuntimeError:
+            pass
         return
     if "[draft] cancelled" in line:
         with state_lock:
@@ -519,8 +544,8 @@ def parse_line(line: str) -> None:
         if m:
             _locked_update(hdop=float(m.group(1)))
 
-    if ("[lap]" in line) or ("[session]" in line) or ("[xing]" in line) \
-            or ("[xing-draft]" in line):
+    if ("[lap]" in line) or ("[session]" in line) or ("[recording]" in line) \
+            or ("[xing]" in line) or ("[xing-draft]" in line):
         _locked_append_event(line)
 
     # Structured candidate events — extracted into a typed list so the
@@ -541,6 +566,85 @@ def parse_line(line: str) -> None:
     if line.startswith("[draft]"):
         _locked_append_event(line)
         _parse_draft_event(line)
+
+
+def _match_command_ack(cmd: str, line: str) -> tuple[bool, str] | None:
+    cmd = cmd.strip()
+    if not cmd or not line:
+        return None
+
+    if line.startswith("[draft] ERR:"):
+        return (False, line.split("[draft] ERR:", 1)[1].strip())
+    if line.startswith("[recording] ERR:"):
+        return (False, line.split("[recording] ERR:", 1)[1].strip())
+
+    if cmd.startswith("track draft "):
+        m = _DRAFT_STARTED_RE.search(line)
+        if m:
+            return (True, f"draft started: {m.group(1)}")
+        return None
+
+    if cmd == "mark p1":
+        if _DRAFT_P1_RE.search(line):
+            return (True, "p1 marked")
+        return None
+
+    if cmd == "mark p2":
+        if _DRAFT_P2_RE.search(line):
+            return (True, "p2 marked")
+        return None
+
+    if cmd == "track save":
+        m = _DRAFT_SAVED_RE.search(line)
+        if m:
+            return (True, f"saved: {m.group(1)}")
+        return None
+
+    if cmd == "track cancel":
+        if "[draft] cancelled" in line:
+            return (True, "draft cancelled")
+        if "[draft] (no active draft)" in line:
+            return (False, "no active draft")
+        return None
+
+    if cmd == "recording start":
+        m = _RECORDING_STARTED_RE.search(line)
+        if m:
+            return (True, f"recording started: {m.group(1)}")
+        return None
+
+    if cmd == "recording stop":
+        if "[recording] stopped and saved" in line:
+            return (True, "stopped and saved")
+        if "[recording] (not recording" in line:
+            return (False, "not recording — nothing to stop")
+        return None
+
+    return None
+
+
+def _command_timeout_s(cmd: str) -> float:
+    if cmd in ("mark p1", "mark p2"):
+        return 8.0
+    if cmd == "recording stop":
+        return 5.0
+    if cmd == "track save":
+        return 3.0
+    return 2.5
+
+
+def _wait_for_command_ack(cmd: str, after_seq: int,
+                          timeout_s: float) -> tuple[bool, str] | None:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        with state_lock:
+            pending = [e for e in state["events"] if e.get("seq", 0) > after_seq]
+        for ev in pending:
+            ack = _match_command_ack(cmd, ev["text"])
+            if ack is not None:
+                return ack
+        time.sleep(0.05)
+    return None
 
 
 def serial_reader() -> None:
@@ -605,8 +709,7 @@ def track_query_bootstrap() -> None:
 
     def send(cmd: str) -> None:
         try:
-            ser.write((cmd + "\r\n").encode("utf-8"))
-            ser.flush()
+            _serial_write_command(cmd)
         except Exception as exc:
             print(f"[live_map] serial write failed: {exc}")
 
@@ -639,7 +742,7 @@ HTML = r"""<!doctype html>
 <style>
  html,body{margin:0;height:100%;background:#0a0a0a;color:#eee;font:13px/1.4 ui-monospace,monospace}
  #map{position:absolute;inset:0}
- #info{position:absolute;top:8px;left:8px;z-index:1000;padding:8px 12px;background:rgba(0,0,0,.78);border:1px solid #444;min-width:240px;border-radius:6px}
+ #info{position:absolute;top:56px;left:8px;z-index:1000;padding:8px 12px;background:rgba(0,0,0,.78);border:1px solid #444;min-width:240px;border-radius:6px}
  #events{position:absolute;bottom:8px;left:8px;right:400px;max-height:150px;overflow-y:auto;padding:6px 10px;background:rgba(0,0,0,.78);border:1px solid #444;font-size:11px;z-index:1000;border-radius:6px}
  #viewb{position:absolute;bottom:8px;right:8px;z-index:1000;padding:10px 12px;background:rgba(0,0,0,.85);border:1px solid #555;border-radius:6px;width:380px}
  #viewb h3{margin:0 0 6px 0;font-size:12px;color:#9cf;font-weight:normal}
@@ -651,7 +754,7 @@ HTML = r"""<!doctype html>
     tall any individual panel gets.  Scrolls if the combined height
     exceeds the available viewport (minus space reserved for View B
     along the bottom). */
- #right-col{position:absolute;top:8px;right:8px;z-index:1000;width:280px;display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 240px);overflow-y:auto}
+ #right-col{position:absolute;top:56px;right:8px;z-index:1000;width:280px;display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 320px);overflow-y:auto}
  #cands{padding:8px 10px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px;max-height:260px;overflow-y:auto;font-size:11px}
  #cands h3{margin:0 0 6px 0;font-size:12px;color:#9cf;font-weight:normal}
  #cands .row{margin:2px 0;padding:2px 4px;border-left:3px solid #444}
@@ -1369,11 +1472,11 @@ document.getElementById('btn-rec-start').addEventListener('click',async ()=>{
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({cmd:'recording start'}),
     });
+    const body=await r.json().catch(()=>({}));
     if(!r.ok){
-      const body=await r.json().catch(()=>({}));
       setRecMsg('start failed: '+(body.error||r.status),'err');
     } else {
-      setRecMsg('start command sent — waiting for firmware ACK','ok');
+      setRecMsg(body.message||'start confirmed by firmware','ok');
     }
   } catch(e){setRecMsg('start failed: '+e, 'err');}
 });
@@ -1386,11 +1489,11 @@ document.getElementById('btn-rec-stop').addEventListener('click',async ()=>{
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({cmd:'recording stop'}),
     });
+    const body=await r.json().catch(()=>({}));
     if(!r.ok){
-      const body=await r.json().catch(()=>({}));
       setRecMsg('stop failed: '+(body.error||r.status),'err');
     } else {
-      setRecMsg('stop command sent — firmware finalizes .vbo','ok');
+      setRecMsg(body.message||'stop confirmed by firmware','ok');
     }
   } catch(e){setRecMsg('stop failed: '+e, 'err');}
 });
@@ -1481,18 +1584,36 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"error":"serial not open"}')
             return
+        with state_lock:
+            start_seq = state.get("event_seq", 0)
         try:
-            ser.write((cmd + "\r\n").encode("utf-8"))
-            ser.flush()
+            _serial_write_command(cmd)
         except Exception as exc:
             self.send_response(500)
             self.end_headers()
             self.wfile.write(f'{{"error":"{exc}"}}'.encode())
             return
-        self.send_response(200)
+        ack = _wait_for_command_ack(cmd, start_seq, _command_timeout_s(cmd))
+        if ack is None:
+            self.send_response(504)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(
+                b'{"error":"firmware did not acknowledge the command in time"}'
+            )
+            return
+        ok, message = ack
+        self.send_response(200 if ok else 409)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(b'{"ok":true}')
+        if ok:
+            self.wfile.write(
+                json.dumps({"ok": True, "message": message}).encode("utf-8")
+            )
+        else:
+            self.wfile.write(
+                json.dumps({"ok": False, "error": message}).encode("utf-8")
+            )
 
     def log_message(self, *args, **kwargs) -> None:
         return

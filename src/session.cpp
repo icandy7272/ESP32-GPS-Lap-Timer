@@ -119,10 +119,21 @@ void session_start_recording(const char* track_name)
     Serial.println("[session] recording started");
 }
 
-void session_stop_recording()
+bool session_stop_recording()
 {
-    if (s_phase != SESSION_RECORDING) {
-        return;
+    bool was_recording = false;
+    xSemaphoreTake(session_mutex, portMAX_DELAY);
+    was_recording = session_state.is_recording;
+    xSemaphoreGive(session_mutex);
+
+    if (s_phase != SESSION_RECORDING && !was_recording) {
+        return false;
+    }
+
+    if (s_phase != SESSION_RECORDING && was_recording) {
+        Serial.printf("[session] WARN: stop requested while phase=%d; "
+                      "resyncing to recording state\n",
+                      (int)s_phase);
     }
 
     xSemaphoreTake(session_mutex, portMAX_DELAY);
@@ -148,10 +159,15 @@ void session_stop_recording()
     // now guards the auto-start path on SESSION_PHASE so crossings are
     // ignored while phase == SESSION_FINISHED.
 
-    storage_end_session();
+    bool saved = storage_end_session();
     s_phase = SESSION_FINISHED;
 
-    Serial.println("[session] recording stopped");
+    if (saved) {
+        Serial.println("[session] recording stopped");
+    } else {
+        Serial.println("[session] WARN: recording stopped but final save failed");
+    }
+    return saved;
 }
 
 // --- Private helpers ---
@@ -332,6 +348,6 @@ static void handle_button_press(const ButtonEvent* ev)
     if (s_phase == SESSION_READY || s_phase == SESSION_FINISHED) {
         session_start_recording("Unknown Track");
     } else if (s_phase == SESSION_RECORDING) {
-        session_stop_recording();
+        (void)session_stop_recording();
     }
 }

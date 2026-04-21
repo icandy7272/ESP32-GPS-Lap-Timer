@@ -726,8 +726,19 @@ static void serial_console_handle_recording_stop() {
         Serial.println("[recording] (not recording — nothing to stop)");
         return;
     }
-    session_stop_recording();
-    Serial.println("[recording] stopped and saved");
+    bool saved = session_stop_recording();
+    bool still_recording = false;
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        still_recording = session_state.is_recording;
+        xSemaphoreGive(session_mutex);
+    }
+    if (saved) {
+        Serial.println("[recording] stopped and saved");
+    } else if (still_recording) {
+        Serial.println("[recording] ERR: stop refused — recording still active");
+    } else {
+        Serial.println("[recording] ERR: stopped but final session file was not committed");
+    }
 }
 
 static void serial_console_handle_line(const char* line) {

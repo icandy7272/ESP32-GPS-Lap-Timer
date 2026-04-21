@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import types
 import sys
 from typing import Any
 
@@ -29,16 +30,41 @@ def _load_live_map() -> Any:
     spec = importlib.util.spec_from_file_location("live_map", module_path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
-    # live_map opens a serial port at import time from the serial_reader
-    # thread, but only when its __main__ block runs.  Plain import is
-    # safe.  We do need pyserial to be importable — so if it is not,
-    # skip gracefully rather than crashing the suite.
+    # live_map imports pyserial at module import time.  The test only
+    # exercises parsing / HTML assembly, so install a tiny fake module
+    # ahead of exec_module() and avoid an environment-dependent skip.
+    fake_serial = types.ModuleType("serial")
+
+    class _FakeSerial:
+        def __init__(self) -> None:
+            self.port = None
+            self.baudrate = None
+            self.timeout = None
+            self.dtr = False
+            self.rts = False
+
+        def open(self) -> None:
+            return None
+
+        def read(self, _n: int = 0) -> bytes:
+            return b""
+
+        def write(self, _data: bytes) -> int:
+            return 0
+
+        def flush(self) -> None:
+            return None
+
+    fake_serial.Serial = _FakeSerial
+    prev_serial = sys.modules.get("serial")
+    sys.modules["serial"] = fake_serial
     try:
         spec.loader.exec_module(module)
-    except SystemExit:
-        # live_map calls sys.exit(1) if pyserial is missing.  Skip.
-        print("SKIP: pyserial not installed; skipping live_map parse tests")
-        sys.exit(0)
+    finally:
+        if prev_serial is None:
+            del sys.modules["serial"]
+        else:
+            sys.modules["serial"] = prev_serial
     return module
 
 
@@ -145,6 +171,48 @@ def main() -> int:
             live_map.parse_line(text)
         except Exception as exc:  # pragma: no cover — test fails below
             check(f"parse_line({text!r}) must not raise", f"raised {exc!r}", "no raise")
+
+    # --- live_map layout keeps custom panels away from Leaflet corners --
+    html = live_map.HTML
+    check(
+        "HTML offsets info panel below top-left Leaflet controls",
+        "#info{position:absolute;top:56px;left:8px" in html,
+        True,
+    )
+    check(
+        "HTML offsets right column below top-right Leaflet controls",
+        "#right-col{position:absolute;top:56px;right:8px" in html,
+        True,
+    )
+
+    # --- serial command ACK matching stays terminal-only and specific ---
+    ack = live_map._match_command_ack
+    check(
+        "recording stop success ack",
+        ack("recording stop", "[recording] stopped and saved"),
+        (True, "stopped and saved"),
+    )
+    check(
+        "recording stop not-recording is a failure ack",
+        ack("recording stop", "[recording] (not recording — nothing to stop)"),
+        (False, "not recording — nothing to stop"),
+    )
+    check(
+        "recording start error ack",
+        ack("recording start",
+            "[recording] ERR: session_start_recording refused (wrong phase or SD failure)"),
+        (False, "session_start_recording refused (wrong phase or SD failure)"),
+    )
+    check(
+        "track save success ack",
+        ack("track save", "[draft] saved: track_007 (home) length=12.5m heading=181.0"),
+        (True, "saved: track_007"),
+    )
+    check(
+        "sampling progress is not a terminal ACK",
+        ack("mark p1", "[draft] sampling P1 for 5.0 s..."),
+        None,
+    )
 
     if FAIL_COUNT == 0:
         print("test_live_map_parse: OK")
