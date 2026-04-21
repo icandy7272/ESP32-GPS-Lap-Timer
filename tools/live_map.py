@@ -808,6 +808,12 @@ HTML = r"""<!doctype html>
  #draft-markers{display:flex;gap:14px;font-size:11px;margin-top:4px}
  #draft-markers .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#444;margin-right:4px;vertical-align:middle}
  #draft-markers .on .dot{background:#5f5}
+ /* Inline hint beneath Save — tells operator WHY save is disabled
+    (need more walks across the draft line) or confirms it's ready. */
+ #draft-validate-hint{margin-top:6px;padding:4px 6px;font-size:11px;background:#111;border-left:3px solid #555;color:#aaa;min-height:14px}
+ #draft-validate-hint.ready{border-left-color:#5f5;color:#9f9}
+ #draft-validate-hint.blocked{border-left-color:#fc5;color:#fcc}
+ #draft-validate-hint.err{border-left-color:#f55;color:#f99}
  #events .lap{color:#5f5}
  #events .xing{color:#fc5}
  #events .session{color:#ff5}
@@ -835,6 +841,7 @@ HTML = r"""<!doctype html>
     <button id="btn-save" class="primary" disabled>Save</button>
     <button id="btn-cancel" class="danger" disabled>Cancel</button>
   </div>
+  <div id="draft-validate-hint">walk across the line to enable Save</div>
   <div id="draft-status">idle — press Start Draft</div>
 </div>
 <div id="rec-panel">
@@ -878,6 +885,15 @@ sat.addTo(map);
 L.control.layers({Satellite:sat,Street:osm},null,{position:'topright'}).addTo(map);
 
 const END_TOL_M=2.0;
+// Minimum accepted draft-validation crossings the firmware requires
+// before `track save` will persist a new track.  Must match
+// lap_timer_draft_validation_min_accepted() on the firmware side —
+// walking-test = 1, production = 2.  live_map is the walking-test
+// companion tool (laptop connected over USB), so 1 is the right
+// default.  The Save button is gated on this so operators see
+// "walk across once more" BEFORE clicking rather than the silent
+// firmware 409 they used to get.
+const MIN_ACCEPTED_CROSSINGS=1;
 
 let lineLayer=null, extLayer=null, headingLayer=null;
 let trailLayer=L.polyline([],{color:'#59f',weight:2,opacity:0.85}).addTo(map);
@@ -1009,8 +1025,8 @@ function update(state){
     return `<div><span style="color:#666">[${ago}s]</span> <span class="${cls}">${e.text.replace(/</g,'&lt;')}</span></div>`;
   }).join('');
 
-  // draft
-  renderDraft(state.draft||{});
+  // draft (Save button gating reads the live draft_validation counters)
+  renderDraft(state.draft||{}, state.draft_validation||{});
 
   // crossing candidates list + View B
   renderCandidates(state.candidates||[], state.draft_validation||{});
@@ -1367,18 +1383,47 @@ function renderViewB(line, trail, cur, cands){
                margin.left+2,margin.top+10);
 }
 
-function renderDraft(d){
+function renderDraft(d, dv){
   const active=!!d.active;
   const hasP1=!!d.p1, hasP2=!!d.p2;
+  // Firmware requires MIN_ACCEPTED_CROSSINGS draft-validation PASSes
+  // before `track save` will persist.  Gate the button here so the
+  // operator sees the requirement up-front rather than getting a 409
+  // after clicking.  dv is state.draft_validation which the event
+  // parser keeps in sync with every [xing-draft] PASS/REJECT.
+  const accepted=(dv && +dv.accepted)||0;
+  const rejected=(dv && +dv.rejected)||0;
+  const ready=active && hasP1 && hasP2;
+  const validated=accepted>=MIN_ACCEPTED_CROSSINGS;
   document.getElementById('btn-mark-p1').disabled=!active;
   document.getElementById('btn-mark-p2').disabled=!active;
-  document.getElementById('btn-save').disabled=!(active&&hasP1&&hasP2);
+  document.getElementById('btn-save').disabled=!(ready && validated);
   document.getElementById('btn-cancel').disabled=!active;
   document.getElementById('btn-new').disabled=active;
   document.getElementById('draft-name').disabled=active;
   document.getElementById('p1-ind').className=hasP1?'on':'';
   document.getElementById('p2-ind').className=hasP2?'on':'';
   document.getElementById('draft-status').textContent=d.status||(active?'…':'idle — press Start Draft');
+
+  // Inline hint under Save — replaces the silent-disabled button with
+  // a specific explanation the operator can act on.
+  const hint=document.getElementById('draft-validate-hint');
+  if(hint){
+    if(!active){
+      hint.className='';
+      hint.textContent='';
+    } else if(!ready){
+      hint.className='blocked';
+      hint.textContent=hasP1 ? 'mark P2 to complete the line' : 'mark P1 first';
+    } else if(validated){
+      hint.className='ready';
+      hint.textContent=`validated (${accepted} ✓ · ${rejected} ✗) — ready to Save`;
+    } else {
+      const need=MIN_ACCEPTED_CROSSINGS-accepted;
+      hint.className='blocked';
+      hint.textContent=`walk across the line ${need} more time${need===1?'':'s'} (now ${accepted} ✓ · ${rejected} ✗)`;
+    }
+  }
 
   // draft markers + line (orange, distinct from saved red).
   // Optional error circle (radius = firmware-reported sample spread in
@@ -1431,6 +1476,21 @@ function renderDraft(d){
   }else if(draftLineLayer){map.removeLayer(draftLineLayer);draftLineLayer=null;}
 }
 
+// Inline feedback for a failed draft / track-save command, preferring
+// the in-panel #draft-validate-hint over a modal alert.  Modal alerts
+// interrupt the walk-across flow; an inline red line is less jarring
+// and stays visible while the operator fixes the issue.  Falls back
+// to alert() when the hint element is absent or not currently shown.
+function showDraftCommandError(text){
+  const hint=document.getElementById('draft-validate-hint');
+  if(hint){
+    hint.className='err';
+    hint.textContent=text;
+    return;
+  }
+  alert(text);
+}
+
 async function sendCommand(cmd){
   try{
     const r=await fetch('/command',{
@@ -1440,9 +1500,9 @@ async function sendCommand(cmd){
     });
     if(!r.ok){
       const body=await r.json().catch(()=>({}));
-      alert('command failed: '+(body.error||r.status));
+      showDraftCommandError('command failed: '+(body.error||r.status));
     }
-  }catch(e){alert('command error: '+e);}
+  }catch(e){showDraftCommandError('command error: '+e);}
 }
 
 document.getElementById('btn-new').addEventListener('click',()=>{
