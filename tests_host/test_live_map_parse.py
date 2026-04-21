@@ -172,6 +172,22 @@ def main() -> int:
         except Exception as exc:  # pragma: no cover — test fails below
             check(f"parse_line({text!r}) must not raise", f"raised {exc!r}", "no raise")
 
+    # --- high-rate gps-live lines update the same state as 1 Hz gps ----
+    with live_map.state_lock:
+        live_map.state["current"] = None
+        live_map.state["trail"] = []
+    live_map.parse_line(
+        "[gps-live] lat=40.0059425 lon=116.4584473 sats=12 "
+        "fix_3d=1 speed=4.50 head=185.0 hdop=0.8 q=92 tier=3"
+    )
+    with live_map.state_lock:
+        check("gps-live updates current point",
+              live_map.state["current"], [40.0059425, 116.4584473])
+        check("gps-live appends trail point",
+              live_map.state["trail"], [[40.0059425, 116.4584473]])
+        check("gps-live updates sats", live_map.state["sats"], 12)
+        check("gps-live updates fix_3d", live_map.state["fix_3d"], True)
+
     # --- live_map layout keeps custom panels away from Leaflet corners --
     html = live_map.HTML
     check(

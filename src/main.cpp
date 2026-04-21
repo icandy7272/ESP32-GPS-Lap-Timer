@@ -741,6 +741,22 @@ static void serial_console_handle_recording_stop() {
     }
 }
 
+static void serial_console_handle_gps_stream(const char* arg) {
+    int rate = atoi(arg ? arg : "0");
+    if (rate < 0) {
+        rate = 0;
+    }
+    if (rate > 25) {
+        rate = 25;
+    }
+    gps_set_live_stream_rate((uint8_t)rate);
+    if (rate > 0) {
+        Serial.printf("[gps-live] stream=%dHz\n", rate);
+    } else {
+        Serial.println("[gps-live] stream=off");
+    }
+}
+
 static void serial_console_handle_line(const char* line) {
     SerialConsoleCommand command = serial_console_parse(line);
     switch (command.type) {
@@ -776,6 +792,9 @@ static void serial_console_handle_line(const char* line) {
             return;
         case SerialConsoleCommandType::TrackStatus:
             serial_console_handle_track_status();
+            return;
+        case SerialConsoleCommandType::GpsStream:
+            serial_console_handle_gps_stream(command.arg);
             return;
         case SerialConsoleCommandType::Invalid:
         default:

@@ -28,3 +28,8 @@ void gps_init(QueueHandle_t gps_queue);
 // FreeRTOS task function — pinned to Core 0, priority 22, 4096 stack.
 // Do not call directly; gps_init() creates the task.
 void gps_task(void* param);
+
+// USB serial live-map stream control. `0` disables the stream; 1-25 Hz
+// emits compact [gps-live] lines from the GPS fix path.
+void gps_set_live_stream_rate(uint8_t rate_hz);
+uint8_t gps_get_live_stream_rate();

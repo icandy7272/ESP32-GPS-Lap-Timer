@@ -106,6 +106,24 @@ static void test_mark_rejects_bad_subarg() {
     assert(strstr(cmd.error, "p1") != nullptr);
 }
 
+static void test_gps_stream_rate_command() {
+    SerialConsoleCommand cmd = serial_console_parse("gps stream 10");
+    assert(cmd.type == SerialConsoleCommandType::GpsStream);
+    assert(strcmp(cmd.arg, "10") == 0);
+}
+
+static void test_gps_stream_off_command() {
+    SerialConsoleCommand cmd = serial_console_parse("gps stream off");
+    assert(cmd.type == SerialConsoleCommandType::GpsStream);
+    assert(strcmp(cmd.arg, "0") == 0);
+}
+
+static void test_gps_stream_rejects_out_of_range_rate() {
+    SerialConsoleCommand cmd = serial_console_parse("gps stream 99");
+    assert(cmd.type == SerialConsoleCommandType::Invalid);
+    assert(strstr(cmd.error, "1-25") != nullptr);
+}
+
 int main() {
     test_help_command_parses();
     test_ls_command_trims_whitespace();
@@ -125,5 +143,8 @@ int main() {
     test_mark_p1_command();
     test_mark_p2_command();
     test_mark_rejects_bad_subarg();
+    test_gps_stream_rate_command();
+    test_gps_stream_off_command();
+    test_gps_stream_rejects_out_of_range_rate();
     return 0;
 }

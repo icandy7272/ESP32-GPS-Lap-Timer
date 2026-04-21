@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Live GPS + detection-line visualisation over USB serial.
 
-Reads the firmware's [gps] 1 Hz diagnostic line for current position,
-the [track] boot-log lines for the active P1/P2 segment, and lap /
-session events; serves a self-contained canvas-based live map at
-http://127.0.0.1:8080.
+Requests the firmware's compact [gps-live] stream over USB serial for
+higher-rate current position updates, still accepts the 1 Hz [gps]
+diagnostic line as a fallback, reads the [track] boot-log lines for the
+active P1/P2 segment, and lap / session events; serves a self-contained
+canvas-based live map at http://127.0.0.1:8080.
 
 Keeps one serial port open for the lifetime of the process — do NOT
 run at the same time as capture_serial.py / pio device monitor, and
@@ -50,6 +51,7 @@ LISTEN = ("127.0.0.1", 8080)
 TRAIL_MAX = 600
 EVENT_MAX = 60
 CANDIDATE_MAX = 40
+LIVE_GPS_STREAM_HZ = 10
 
 # Tolerance displayed on the map.  Keep in sync with the walking-test
 # value of CROSSING_END_TOLERANCE_M in lap_timer_internal.h so the
@@ -521,7 +523,7 @@ def parse_line(line: str) -> None:
             _track_discovery["buf"] = []
         return
 
-    if line.startswith("[gps]"):
+    if line.startswith("[gps]") or line.startswith("[gps-live]"):
         m = _LATLON_RE.search(line)
         if m:
             lat, lon = float(m.group(1)), float(m.group(2))
@@ -545,7 +547,8 @@ def parse_line(line: str) -> None:
             _locked_update(hdop=float(m.group(1)))
 
     if ("[lap]" in line) or ("[session]" in line) or ("[recording]" in line) \
-            or ("[xing]" in line) or ("[xing-draft]" in line):
+            or ("[xing]" in line) or ("[xing-draft]" in line) \
+            or line.startswith("[gps-live] stream"):
         _locked_append_event(line)
 
     # Structured candidate events — extracted into a typed list so the
@@ -618,6 +621,14 @@ def _match_command_ack(cmd: str, line: str) -> tuple[bool, str] | None:
             return (True, "stopped and saved")
         if "[recording] (not recording" in line:
             return (False, "not recording — nothing to stop")
+        return None
+
+    if cmd.startswith("gps stream "):
+        want = cmd[len("gps stream "):].strip()
+        if want in ("off", "0") and "[gps-live] stream=off" in line:
+            return (True, "gps stream off")
+        if f"[gps-live] stream={want}Hz" in line:
+            return (True, f"gps stream {want}Hz")
         return None
 
     return None
@@ -715,6 +726,7 @@ def track_query_bootstrap() -> None:
 
     send("ls tracks")
     _track_discovery["requested_ls"] = True
+    send(f"gps stream {LIVE_GPS_STREAM_HZ}")
 
     # Poll up to 5 s for the ls reply (reader thread populates first_track).
     for _ in range(50):
@@ -911,7 +923,7 @@ async function poll(){
     const state=await r.json();
     update(state);
   }catch(e){/*ignore*/}
-  setTimeout(poll,300);
+  setTimeout(poll,100);
 }
 
 function renderLine(line){
@@ -1571,6 +1583,7 @@ _ALLOWED_COMMANDS = {
     "mark p2",
     "recording start",
     "recording stop",
+    "gps stream off",
 }
 
 
@@ -1592,6 +1605,14 @@ def _is_allowed_command(cmd: str) -> bool:
             if ch in '"\\/:*?<>|':
                 return False
         return True
+    if cmd.startswith("gps stream "):
+        body = cmd[len("gps stream "):].strip()
+        if body == "off" or body == "0":
+            return True
+        if not body.isdigit():
+            return False
+        rate = int(body)
+        return 1 <= rate <= 25
     return False
 
 
@@ -1688,6 +1709,11 @@ def main() -> None:
         ThreadingHTTPServer(LISTEN, Handler).serve_forever()
     except KeyboardInterrupt:
         print("\n[live_map] bye")
+    finally:
+        try:
+            _serial_write_command("gps stream off")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

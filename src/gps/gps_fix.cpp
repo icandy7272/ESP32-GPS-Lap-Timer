@@ -6,7 +6,19 @@
 namespace {
 
 static constexpr float GPS_DIAG_LOW_SPEED_KMH = 5.0f;
+static uint8_t s_live_stream_rate_hz = 0;
 
+}
+
+void gps_set_live_stream_rate(uint8_t rate_hz) {
+    if (rate_hz > GPS_FIX_RATE_HZ) {
+        rate_hz = GPS_FIX_RATE_HZ;
+    }
+    s_live_stream_rate_hz = rate_hz;
+}
+
+uint8_t gps_get_live_stream_rate() {
+    return s_live_stream_rate_hz;
 }
 
 static bool is_pps_fresh() {
@@ -84,6 +96,30 @@ void gps_send_fix_if_ready() {
         xQueueSend(s_gps_queue, &point, 0);
     }
 
+    uint32_t now_ms = millis();
+    uint8_t live_rate_hz = s_live_stream_rate_hz;
+    if (live_rate_hz > 0) {
+        static uint32_t last_live_ms = 0;
+        uint32_t live_period_ms = 1000UL / live_rate_hz;
+        if (live_period_ms == 0) {
+            live_period_ms = 1;
+        }
+        if (last_live_ms == 0 || now_ms - last_live_ms >= live_period_ms) {
+            Serial.printf("[gps-live] lat=%.7f lon=%.7f sats=%d fix_3d=%d "
+                          "speed=%.2f head=%.1f hdop=%.1f q=%u tier=%u "
+                          "t_us=%lld\n",
+                          point.lat_deg, point.lon_deg,
+                          point.satellites, point.fix_3d ? 1 : 0,
+                          (double)point.speed_kmh,
+                          (double)point.heading_deg,
+                          (double)point.hdop,
+                          point.quality_score,
+                          point.quality_tier,
+                          (long long)point.timestamp_us);
+            last_live_ms = now_ms;
+        }
+    }
+
     static uint32_t last_diag_ms = 0;
     static uint16_t accepted_since_last = 0;
     static uint16_t drops_since_last = 0;
@@ -105,7 +141,6 @@ void gps_send_fix_if_ready() {
         max_sats_since_last = point.satellites;
     }
 
-    uint32_t now_ms = millis();
     if (now_ms - last_diag_ms >= 1000) {
         int min_sats = (accepted_since_last > 0) ? min_sats_since_last : 0;
         int max_sats = (accepted_since_last > 0) ? max_sats_since_last : 0;

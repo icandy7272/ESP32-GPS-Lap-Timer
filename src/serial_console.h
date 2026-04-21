@@ -22,6 +22,10 @@ enum class SerialConsoleCommandType {
     // the /api/recording HTTP endpoint behaviour.
     RecordingStart,    // "recording start"
     RecordingStop,     // "recording stop"
+    // High-rate live-map GPS stream. Keeps normal [gps] diagnostics at
+    // 1 Hz while allowing tools/live_map.py to request a lightweight
+    // position feed closer to the configured GPS fix rate.
+    GpsStream,         // "gps stream <1-25|off>"
 };
 
 struct SerialConsoleCommand {

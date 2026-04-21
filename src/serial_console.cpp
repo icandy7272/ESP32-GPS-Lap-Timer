@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 namespace {
@@ -199,6 +200,37 @@ SerialConsoleCommand serial_console_parse(const char* line) {
             return cmd;
         }
         set_error(&cmd, "mark expects p1 or p2");
+        return cmd;
+    }
+
+    // "gps stream 10" / "gps stream off" — enables a compact
+    // high-rate USB serial position stream for tools/live_map.py
+    // without changing the normal 1 Hz [gps] diagnostic line.
+    if (starts_with(trimmed, "gps")) {
+        const char* tail = skip_spaces(trimmed + strlen("gps"));
+        if (starts_with(tail, "stream")) {
+            const char* rate_arg = skip_spaces(tail + strlen("stream"));
+            if (strcmp(rate_arg, "off") == 0 || strcmp(rate_arg, "0") == 0) {
+                cmd.type = SerialConsoleCommandType::GpsStream;
+                snprintf(cmd.arg, sizeof(cmd.arg), "0");
+                return cmd;
+            }
+            if (rate_arg[0] == '\0') {
+                set_error(&cmd, "gps stream expects 1-25 or off");
+                return cmd;
+            }
+            char* end = nullptr;
+            long rate = strtol(rate_arg, &end, 10);
+            if (end == rate_arg || *skip_spaces(end) != '\0'
+                || rate < 1 || rate > 25) {
+                set_error(&cmd, "gps stream expects 1-25 or off");
+                return cmd;
+            }
+            cmd.type = SerialConsoleCommandType::GpsStream;
+            snprintf(cmd.arg, sizeof(cmd.arg), "%ld", rate);
+            return cmd;
+        }
+        set_error(&cmd, "gps expects stream");
         return cmd;
     }
 
