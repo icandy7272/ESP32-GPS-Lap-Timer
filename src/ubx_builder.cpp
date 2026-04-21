@@ -105,11 +105,25 @@ int ubx_build_cfg_gnss_all(uint8_t* out, size_t out_cap) {
         payload[base + 7] = static_cast<uint8_t>(flags >> 24);
     };
 
+    // Per-block flag word = (sigCfgMask << 16) | enable_bit.
+    // For u-blox M9N L1-only hardware, sigCfgMask=0x01 means the
+    // primary L1 signal for that constellation (GPS L1C/A, Galileo E1,
+    // BeiDou B1I, GLONASS L1OF, SBAS L1C/A, QZSS L1C/A).
+    //
+    // HISTORY: a previous value here for QZSS was 0x00010005, which
+    // set bit 2 (an undefined bit in this field) instead of the
+    // intended QZSS-L1S bit 18.  u-blox strictly validates CFG-GNSS
+    // and NAKs the ENTIRE message when any block's flags are invalid,
+    // so the bad QZSS flag silently reverted all six constellations
+    // back to the factory default (often just GPS+GLONASS) — which
+    // is exactly the "sats/HDOP didn't improve" symptom observed in
+    // the 2026-04-21 walking test.  Keeping QZSS to L1C/A only also
+    // matches what's actually usable outside Japan.
     set_block(0, 0, 8, 16, 0x00010001);  // GPS L1C/A
     set_block(1, 1, 1, 3,  0x00010001);  // SBAS L1C/A
     set_block(2, 2, 4, 8,  0x00010001);  // Galileo E1
     set_block(3, 3, 8, 16, 0x00010001);  // BeiDou B1I
-    set_block(4, 5, 0, 3,  0x00010005);  // QZSS L1C/A + L1S
+    set_block(4, 5, 0, 3,  0x00010001);  // QZSS L1C/A
     set_block(5, 6, 8, 14, 0x00010001);  // GLONASS L1OF
 
     return ubx_build_frame(0x06, 0x3E, payload, sizeof(payload), out, out_cap);

@@ -194,20 +194,44 @@ static void test_cfg_gnss_all() {
     assert_eq_byte("gnss_numTrkChUse",8, frame[8], 0xFF);
     assert_eq_byte("gnss_numBlocks",  9, frame[9], 0x06);
 
-    // Each of the 6 blocks must have its enable bit (bit 0 of flags) set.
+    // Each of the 6 blocks must have its enable bit (bit 0 of flags)
+    // set AND a valid sigCfgMask (bits 16-23) with no stray bits in
+    // between.  A previous QZSS block set bit 2 by mistake
+    // (0x00010005 instead of the L1C/A-only 0x00010001), which u-blox
+    // strictly validates and NAKs by rejecting the entire CFG-GNSS
+    // message — silently reverting all constellations to factory
+    // defaults.  Pinning the exact flag word per block catches that
+    // class of bug at host test time.
+    //
     // Block layout starts at offset 10 (6 sync+header + 4 gnss-header).
     constexpr int FIRST_BLOCK = 10;
     constexpr int BLOCK = 8;
     constexpr uint8_t EXPECTED_GNSS_IDS[6] = { 0, 1, 2, 3, 5, 6 };
+    // Per-block expected flag word = (sigCfgMask << 16) | 0x01.  For
+    // M9N L1-only all six constellations use sigCfgMask=0x01, giving
+    // the same 0x00010001 everywhere.  Any block diverging from this
+    // pattern must be justified with a comment in ubx_builder.cpp.
+    constexpr uint32_t EXPECTED_FLAGS[6] = {
+        0x00010001,  // GPS L1C/A
+        0x00010001,  // SBAS L1C/A
+        0x00010001,  // Galileo E1
+        0x00010001,  // BeiDou B1I
+        0x00010001,  // QZSS L1C/A
+        0x00010001,  // GLONASS L1OF
+    };
     for (int b = 0; b < 6; b++) {
         int base = FIRST_BLOCK + b * BLOCK;
         assert_eq_byte("gnss_block_id", base, frame[base], EXPECTED_GNSS_IDS[b]);
-        // flags[0] bit 0 = enable (all blocks should set it)
-        if ((frame[base + 4] & 0x01) != 0x01) {
-            char tag[64];
-            snprintf(tag, sizeof(tag),
-                     "gnss_block%d_enable_bit", b);
-            fail(tag);
+        uint32_t got_flags =
+            static_cast<uint32_t>(frame[base + 4])
+            | (static_cast<uint32_t>(frame[base + 5]) << 8)
+            | (static_cast<uint32_t>(frame[base + 6]) << 16)
+            | (static_cast<uint32_t>(frame[base + 7]) << 24);
+        if (got_flags != EXPECTED_FLAGS[b]) {
+            fprintf(stderr,
+                    "FAIL: gnss_block%d flags — got 0x%08X, want 0x%08X\n",
+                    b, got_flags, EXPECTED_FLAGS[b]);
+            fail_count++;
         }
     }
 
