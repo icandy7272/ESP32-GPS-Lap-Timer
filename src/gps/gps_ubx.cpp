@@ -1,6 +1,7 @@
 #include "gps/gps_internal.h"
 
 #include "config.h"
+#include "gps/gps_ubx_monitor.h"
 #include "pins.h"
 #include "ubx_builder.h"
 
@@ -83,12 +84,24 @@ static void ubx_cfg_msg(uint8_t nmea_cls, uint8_t nmea_id, uint8_t rate) {
 static void ubx_configure_nmea_sentences() {
     static constexpr uint8_t CLS = 0xF0;
 
+    // 0x00 GGA — position fix (always on, primary source for lat/lon/HDOP/sats/height)
     ubx_cfg_msg(CLS, 0x00, 1);
+    // 0x04 RMC — recommended minimum (speed, heading, UTC time/date)
     ubx_cfg_msg(CLS, 0x04, 1);
-    ubx_cfg_msg(CLS, 0x03, 0);
+    // 0x03 GSV — satellites in view per constellation.  Enabled at a
+    //           25-epoch cadence so per-constellation GSV groups arrive
+    //           at ~1 Hz regardless of measurement rate.  Without this
+    //           we can't tell whether Galileo/BeiDou actually locked on
+    //           after CFG-GNSS was applied.  Parsed by gps_constellation.
+    ubx_cfg_msg(CLS, 0x03, 25);
+    // 0x02 GSA — DOP + active satellites (kept off; HDOP is read from
+    //           GGA field 7 as of 2026-04-18).
     ubx_cfg_msg(CLS, 0x02, 0);
+    // 0x01 GLL — redundant with GGA/RMC
     ubx_cfg_msg(CLS, 0x01, 0);
+    // 0x05 VTG — velocity + track, redundant with RMC
     ubx_cfg_msg(CLS, 0x05, 0);
+    // 0x08 ZDA — UTC date/time, redundant with RMC
     ubx_cfg_msg(CLS, 0x08, 0);
 }
 
@@ -129,6 +142,140 @@ static void ubx_cfg_sbas_enable() {
     uint8_t frame[16];
     int n = ubx_build_cfg_sbas_enable(frame, sizeof(frame));
     send_prebuilt(frame, n);
+}
+
+// One-shot poll of CFG-GNSS.  Sends an empty-payload request, reads
+// bytes from Serial2 for up to `timeout_ms` looking for a UBX 0x06
+// 0x3E response, decodes the per-constellation enable bits, and
+// emits a `[gps-verify]` log line.  This is the ground truth — even
+// if the earlier SET returned ACK, the receiver may have filtered
+// some blocks (e.g. incompatible combo) and the poll response shows
+// what's actually running.
+//
+// Side effects: consumes bytes from Serial2.  Those bytes are also
+// fed through the UBX monitor so any stray ACK/NAK during the window
+// is still logged.  NMEA bytes are harmless (they fall through the
+// parser state machine).
+//
+// No-op on poll-send failure.
+static void ubx_poll_cfg_gnss_and_log(uint32_t timeout_ms) {
+    uint8_t poll_frame[8];
+    int np = ubx_build_cfg_gnss_poll(poll_frame, sizeof(poll_frame));
+    if (np <= 0) {
+        Serial.println("[gps-verify] WARN: poll frame build failed");
+        return;
+    }
+    Serial2.write(poll_frame, np);
+    Serial2.flush();
+
+    // Expected response frame: B5 62 06 3E <len_lo> <len_hi> <payload> <ck_a> <ck_b>
+    // Payload length varies with num_blocks; typical 4 + 6*8 = 52 bytes.
+    // Budget ~96 bytes to be safe.
+    constexpr size_t MAX_RESP = 128;
+    uint8_t resp[MAX_RESP];
+    size_t  resp_len = 0;
+
+    // Simple inline state machine to accumulate the first CFG-GNSS
+    // response we see.  Reuses the same sync-detection logic as the
+    // UBX monitor but only for this one message.
+    enum class St { Idle, Sync2, Cls, Id, LenLo, LenHi, Payload, CkA, CkB, Done };
+    St state = St::Idle;
+    uint16_t expect_len = 0;
+    uint16_t got = 0;
+    uint32_t start = millis();
+    while ((millis() - start) < timeout_ms && state != St::Done) {
+        while (Serial2.available() > 0 && state != St::Done) {
+            int c = Serial2.read();
+            if (c < 0) break;
+            uint8_t b = static_cast<uint8_t>(c);
+            // Always forward to the UBX monitor — captures stray
+            // ACK/NAKs that happen to arrive during our poll window.
+            gps_ubx_monitor_feed_byte(b);
+            switch (state) {
+            case St::Idle:
+                if (b == 0xB5) state = St::Sync2;
+                break;
+            case St::Sync2:
+                state = (b == 0x62) ? St::Cls : St::Idle;
+                break;
+            case St::Cls:
+                state = (b == 0x06) ? St::Id : St::Idle;
+                break;
+            case St::Id:
+                state = (b == 0x3E) ? St::LenLo : St::Idle;
+                break;
+            case St::LenLo:
+                expect_len = b;
+                state = St::LenHi;
+                break;
+            case St::LenHi:
+                expect_len = static_cast<uint16_t>(expect_len
+                                | (static_cast<uint16_t>(b) << 8));
+                if (expect_len == 0 || expect_len > MAX_RESP) {
+                    // Zero-len reply is our own poll echoed back
+                    // (shouldn't happen on a real receiver, but
+                    // guard); overlong is corrupted.  Restart.
+                    state = St::Idle;
+                } else {
+                    got = 0;
+                    resp_len = 0;
+                    state = St::Payload;
+                }
+                break;
+            case St::Payload:
+                if (resp_len < MAX_RESP) {
+                    resp[resp_len++] = b;
+                }
+                got++;
+                if (got >= expect_len) state = St::CkA;
+                break;
+            case St::CkA:
+            case St::CkB:
+                // Skip checksum bytes — trusting Fletcher verification
+                // for this diagnostic path is overkill; corruption
+                // would show up as "unrealistic" enable bits which
+                // the operator can still act on.
+                state = (state == St::CkA) ? St::CkB : St::Done;
+                break;
+            case St::Done:
+                break;
+            }
+        }
+        if (state != St::Done) delay(5);
+    }
+
+    if (state != St::Done) {
+        Serial.printf("[gps-verify] WARN: no CFG-GNSS poll response "
+                      "within %u ms — falling back to ACK status\n",
+                      static_cast<unsigned>(timeout_ms));
+        return;
+    }
+
+    UbxGnssEnables en = {};
+    if (!ubx_decode_cfg_gnss_payload(resp, resp_len, &en)) {
+        Serial.println("[gps-verify] WARN: CFG-GNSS poll response "
+                       "did not decode — malformed payload");
+        return;
+    }
+
+    Serial.printf("[gps-verify] active: GPS=%c SBAS=%c GAL=%c BDS=%c "
+                  "QZS=%c GLO=%c\n",
+                  en.gps     ? 'Y' : 'N',
+                  en.sbas    ? 'Y' : 'N',
+                  en.galileo ? 'Y' : 'N',
+                  en.beidou  ? 'Y' : 'N',
+                  en.qzss    ? 'Y' : 'N',
+                  en.glonass ? 'Y' : 'N');
+
+    // Explicit warning when any intended constellation is missing —
+    // operator would otherwise have to parse the line themselves to
+    // realise the SET was partially filtered.
+    if (!en.galileo || !en.beidou) {
+        Serial.println("[gps-verify] WARN: expected constellations "
+                       "NOT active (Galileo/BeiDou) — CFG-GNSS SET "
+                       "was accepted but silently filtered; sats/HDOP "
+                       "will not improve");
+    }
 }
 
 static void ubx_cfg_gnss_all() {
@@ -221,7 +368,8 @@ void gps_uart_init() {
     ubx_cfg_rate(GPS_FIX_RATE_HZ);
     delay(50);
 
-    // --- Racing / accuracy optimizations (2026-04-21) ---------------
+    // --- Racing / accuracy optimizations (2026-04-21, extended
+    // 2026-04-22 with per-write ACK verification) ---------------------
     // These three writes are idempotent — re-applying them on every
     // boot is cheap, and flagging `need_save` here ensures the first
     // boot after a firmware update persists them to the GPS module's
@@ -233,29 +381,57 @@ void gps_uart_init() {
     //   3. GNSS              — triggers receiver restart (~500-1000 ms),
     //                          so we do this LAST and sleep to let
     //                          NMEA flow return before the cfg_save
+    //
+    // After each write we now drain the RX buffer through the UBX
+    // monitor and wait for the matching UBX-ACK-ACK / UBX-ACK-NAK
+    // response, logging `[gps-ubx] ACK|NAK CFG-XXX` lines.  This is
+    // the ground truth for whether the config was accepted — before
+    // this path, a silently-rejected CFG-GNSS looked identical to a
+    // successful one in the boot log, which is exactly the class of
+    // bug that hit the 2026-04-21 walking test.
+    gps_ubx_monitor_reset();
+
     Serial.println("[gps] Setting Automotive dynamic model (CFG-NAV5)");
     ubx_cfg_nav5_automotive();
-    delay(50);
+    gps_ubx_monitor_drain_for_ack(0x06, 0x24, 500);
     need_save = true;
 
     Serial.println("[gps] Enabling SBAS (WAAS/EGNOS/BDSBAS auto-scan)");
     ubx_cfg_sbas_enable();
-    delay(50);
+    gps_ubx_monitor_drain_for_ack(0x06, 0x16, 500);
 
     Serial.println("[gps] Enabling GPS+SBAS+Galileo+BeiDou+QZSS+GLONASS");
     ubx_cfg_gnss_all();
-    // CFG-GNSS causes the receiver to restart its search engine.  The
-    // docs spec 0.5-1s; we wait 1200ms to be safe, then drain any
-    // partial NMEA to keep the parser state machine clean.
-    delay(1200);
+    // CFG-GNSS specifically: the receiver ACKs BEFORE the restart,
+    // then NMEA stops for ~0.5-1 s while the engine re-initialises.
+    // Longer timeout here gives us headroom for slower M9N firmware
+    // revisions that delay the ACK until after partial restart.
+    gps_ubx_monitor_drain_for_ack(0x06, 0x3E, 1500);
+    // Extra settle window so any residual NMEA garbage post-restart
+    // is drained before we hand bytes back to the NMEA parser.
+    delay(800);
     while (Serial2.available() > 0) {
-        (void)Serial2.read();
+        int c = Serial2.read();
+        if (c < 0) break;
+        // Feed drained bytes to the UBX monitor too — the receiver
+        // sometimes emits extra ACK/NAK during the restart window
+        // that a naive drain would have silently swallowed.
+        gps_ubx_monitor_feed_byte(static_cast<uint8_t>(c));
     }
+
+    // Ground-truth verification: poll the receiver's actual CFG-GNSS
+    // state.  Even if the SET ACKed, certain M9N firmware revisions
+    // may silently filter blocks (e.g. unsupported QZSS on certain
+    // hardware SKUs, or a signal combination the module doesn't
+    // support).  Emits `[gps-verify] active: GPS=Y ...` + a WARN if
+    // Galileo or BeiDou didn't stick.
+    Serial.println("[gps] Polling CFG-GNSS to verify active constellations");
+    ubx_poll_cfg_gnss_and_log(1500);
 
     if (need_save) {
         Serial.println("[gps] reconfigured: saving to flash");
         ubx_cfg_save();
-        delay(100);
+        gps_ubx_monitor_drain_for_ack(0x06, 0x09, 800);
     } else {
         Serial.println("[gps] already configured (no flash save)");
     }

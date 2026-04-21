@@ -249,6 +249,95 @@ static void test_cfg_gnss_all() {
     assert_eq_int("gnss_tiny_buf_rejected", n2, -1);
 }
 
+// --- CFG-GNSS poll is an empty-payload frame ----------------------
+static void test_cfg_gnss_poll() {
+    uint8_t frame[16] = {};
+    int n = ubx_build_cfg_gnss_poll(frame, sizeof(frame));
+    assert_eq_int("gnss_poll_frame_len", n, 8);
+    assert_eq_byte("gnss_poll_sync1", 0, frame[0], 0xB5);
+    assert_eq_byte("gnss_poll_sync2", 1, frame[1], 0x62);
+    assert_eq_byte("gnss_poll_cls",   2, frame[2], 0x06);
+    assert_eq_byte("gnss_poll_id",    3, frame[3], 0x3E);
+    assert_eq_byte("gnss_poll_len_lo",4, frame[4], 0x00);
+    assert_eq_byte("gnss_poll_len_hi",5, frame[5], 0x00);
+    assert_checksum_valid("gnss_poll_checksum", frame, n);
+}
+
+// --- CFG-GNSS response decoder ------------------------------------
+static void test_decode_cfg_gnss_all_enabled() {
+    // Build a response payload matching the "all 6 enabled" we send.
+    uint8_t payload[4 + 6 * 8] = {};
+    payload[0] = 0x00;
+    payload[1] = 0x00;
+    payload[2] = 0xFF;
+    payload[3] = 6;
+    auto set_block = [&](int idx, uint8_t gnss_id, uint32_t flags) {
+        int base = 4 + idx * 8;
+        payload[base + 0] = gnss_id;
+        payload[base + 4] = static_cast<uint8_t>(flags);
+        payload[base + 5] = static_cast<uint8_t>(flags >> 8);
+        payload[base + 6] = static_cast<uint8_t>(flags >> 16);
+        payload[base + 7] = static_cast<uint8_t>(flags >> 24);
+    };
+    set_block(0, 0, 0x00010001);
+    set_block(1, 1, 0x00010001);
+    set_block(2, 2, 0x00010001);
+    set_block(3, 3, 0x00010001);
+    set_block(4, 5, 0x00010001);
+    set_block(5, 6, 0x00010001);
+
+    UbxGnssEnables out = {};
+    bool ok = ubx_decode_cfg_gnss_payload(payload, sizeof(payload), &out);
+    assert_eq_int("decode_all_enabled_ok", ok ? 1 : 0, 1);
+    if (!out.gps)     fail("decode_all_enabled GPS should be true");
+    if (!out.sbas)    fail("decode_all_enabled SBAS should be true");
+    if (!out.galileo) fail("decode_all_enabled Galileo should be true");
+    if (!out.beidou)  fail("decode_all_enabled BeiDou should be true");
+    if (!out.qzss)    fail("decode_all_enabled QZSS should be true");
+    if (!out.glonass) fail("decode_all_enabled GLONASS should be true");
+}
+
+static void test_decode_cfg_gnss_factory_default() {
+    // Simulate the failure mode from the 2026-04-21 walking test:
+    // CFG-GNSS was NAKed, receiver reverted to GPS+GLONASS only.
+    // Decoder must report Galileo/BeiDou as disabled so the operator
+    // (or live_map) knows the config never took effect.
+    uint8_t payload[4 + 6 * 8] = {};
+    payload[3] = 6;
+    auto set_block = [&](int idx, uint8_t gnss_id, bool enabled) {
+        int base = 4 + idx * 8;
+        payload[base + 0] = gnss_id;
+        payload[base + 4] = enabled ? 0x01 : 0x00;
+    };
+    set_block(0, 0, true);   // GPS
+    set_block(1, 1, true);   // SBAS
+    set_block(2, 2, false);  // Galileo OFF
+    set_block(3, 3, false);  // BeiDou OFF
+    set_block(4, 5, false);  // QZSS OFF
+    set_block(5, 6, true);   // GLONASS
+
+    UbxGnssEnables out = {};
+    bool ok = ubx_decode_cfg_gnss_payload(payload, sizeof(payload), &out);
+    assert_eq_int("decode_factory_ok", ok ? 1 : 0, 1);
+    if (!out.gps)     fail("decode_factory GPS should be true");
+    if (!out.glonass) fail("decode_factory GLONASS should be true");
+    if (out.galileo)  fail("decode_factory Galileo should be false (NAK revert)");
+    if (out.beidou)   fail("decode_factory BeiDou should be false (NAK revert)");
+    if (out.qzss)     fail("decode_factory QZSS should be false");
+}
+
+static void test_decode_cfg_gnss_rejects_truncated() {
+    // Payload claims 6 blocks but is too short to contain them.
+    uint8_t payload[6] = {0x00, 0x00, 0xFF, 6, 0x00, 0x00};
+    UbxGnssEnables out = {};
+    bool ok = ubx_decode_cfg_gnss_payload(payload, sizeof(payload), &out);
+    assert_eq_int("decode_truncated_rejected", ok ? 1 : 0, 0);
+
+    // Null input is also rejected cleanly.
+    ok = ubx_decode_cfg_gnss_payload(nullptr, 100, &out);
+    assert_eq_int("decode_null_payload_rejected", ok ? 1 : 0, 0);
+}
+
 int main() {
     test_checksum_golden();
     test_empty_payload_frame();
@@ -256,6 +345,10 @@ int main() {
     test_cfg_nav5_automotive();
     test_cfg_sbas_enable();
     test_cfg_gnss_all();
+    test_cfg_gnss_poll();
+    test_decode_cfg_gnss_all_enabled();
+    test_decode_cfg_gnss_factory_default();
+    test_decode_cfg_gnss_rejects_truncated();
 
     if (fail_count > 0) {
         fprintf(stderr, "test_ubx_builder: %d FAILURE(S)\n", fail_count);

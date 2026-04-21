@@ -104,6 +104,22 @@ state = {
     # from the firmware's [lcd] ... emissions.  None until the first
     # [lcd] line arrives — panel renders a "waiting" placeholder.
     "lcd": None,
+    # GPS receiver diagnostics surfaced to the UI so an operator can
+    # tell at a glance whether the last boot's UBX config writes were
+    # accepted, which constellations are actually delivering satellite
+    # data, and whether CFG-GNSS readback matches intent.  Populated
+    # by parse_line() from three firmware log streams:
+    #   - [gps-ubx] ACK|NAK CFG-XXX   → per-config accept/reject trail
+    #   - [gps-const] GPS=N GAL=N ... → per-constellation sat counts
+    #   - [gps-verify] active: ...    → ground-truth enable bits
+    # All three are optional — older firmware won't emit them and the
+    # UI just shows a "no data" state.
+    "gps_diag": {
+        "ubx_events": [],        # list of {ts, kind, name, cls, id}
+        "nak_count": 0,          # running total of NAKs this session
+        "constellations": None,  # last [gps-const] dict or None
+        "verify": None,          # last [gps-verify] dict or None
+    },
 }
 
 # Shared reference to the open serial port so the bootstrap thread
@@ -212,6 +228,23 @@ _SATS_RE = re.compile(r"sats=(\d+)(?:-(\d+))?")
 _FIX3D_RE = re.compile(r"fix_3d=(\d)")
 _Q_RE = re.compile(r"q=(\d+)\s+tier=(\d+)")
 _HDOP_RE = re.compile(rf"hdop=({_FLOAT})")
+
+# GPS receiver diagnostics emitted by the firmware after 2026-04-22:
+#   [gps-ubx]   ACK|NAK CFG-NAV5 (cls=0x06 id=0x24)
+#   [gps-const] GPS=12 GAL=8 BDS=10 GLO=7 QZS=0
+#   [gps-verify] active: GPS=Y SBAS=Y GAL=Y BDS=Y QZS=N GLO=Y
+_UBX_ACK_RE = re.compile(
+    r"\[gps-ubx\]\s+(ACK|NAK)\s+(\S+)\s+\(cls=0x([0-9a-fA-F]+)\s+id=0x([0-9a-fA-F]+)\)"
+)
+_GPS_CONST_RE = re.compile(
+    r"\[gps-const\]\s+"
+    r"GPS=(\d+)\s+GAL=(\d+)\s+BDS=(\d+)\s+GLO=(\d+)\s+QZS=(\d+)"
+)
+_GPS_VERIFY_RE = re.compile(
+    r"\[gps-verify\]\s+active:\s+"
+    r"GPS=([YN])\s+SBAS=([YN])\s+GAL=([YN])\s+BDS=([YN])\s+QZS=([YN])\s+GLO=([YN])"
+)
+
 _TRACK_FILE_RE = re.compile(r"^(track_\d+\.json)\s*$")
 _SERIAL_HEADER_RE = re.compile(r"^\[serial\] --- tracks/([^ ]+) ---")
 _DRAFT_STARTED_RE = re.compile(r"\[draft\] started: (\S+)")
@@ -577,6 +610,60 @@ def parse_line(line: str) -> None:
             _track_discovery["buf"] = []
         return
 
+    # GPS receiver diagnostics surface.  Kept ABOVE the big [gps]
+    # dispatch below because these are cheap string matches and must
+    # not be missed by the heavier regex below firing first.
+    m = _UBX_ACK_RE.search(line)
+    if m:
+        kind = m.group(1)      # "ACK" or "NAK"
+        name = m.group(2)      # e.g. "CFG-NAV5"
+        cls_id = int(m.group(3), 16)
+        msg_id = int(m.group(4), 16)
+        with state_lock:
+            ev_list = state["gps_diag"]["ubx_events"]
+            ev_list.append({
+                "ts": time.time(),
+                "kind": kind,
+                "name": name,
+                "cls": cls_id,
+                "id": msg_id,
+            })
+            # Cap to last 32 events — one boot generates ~8 ACKs and
+            # we only expect a NAK during a pathology.
+            if len(ev_list) > 32:
+                del ev_list[:-32]
+            if kind == "NAK":
+                state["gps_diag"]["nak_count"] = (
+                    state["gps_diag"].get("nak_count", 0) + 1
+                )
+        # Don't return — fall through so the event also lands in the
+        # general [events] feed for the operator to scroll through.
+
+    m = _GPS_CONST_RE.search(line)
+    if m:
+        with state_lock:
+            state["gps_diag"]["constellations"] = {
+                "gps":     int(m.group(1)),
+                "galileo": int(m.group(2)),
+                "beidou":  int(m.group(3)),
+                "glonass": int(m.group(4)),
+                "qzss":    int(m.group(5)),
+                "ts": time.time(),
+            }
+
+    m = _GPS_VERIFY_RE.search(line)
+    if m:
+        with state_lock:
+            state["gps_diag"]["verify"] = {
+                "gps":     m.group(1) == "Y",
+                "sbas":    m.group(2) == "Y",
+                "galileo": m.group(3) == "Y",
+                "beidou":  m.group(4) == "Y",
+                "qzss":    m.group(5) == "Y",
+                "glonass": m.group(6) == "Y",
+                "ts": time.time(),
+            }
+
     if line.startswith("[gps]") or line.startswith("[gps-live]"):
         m = _LATLON_RE.search(line)
         if m:
@@ -602,7 +689,9 @@ def parse_line(line: str) -> None:
 
     if ("[lap]" in line) or ("[session]" in line) or ("[recording]" in line) \
             or ("[xing]" in line) or ("[xing-draft]" in line) \
-            or line.startswith("[gps-live] stream"):
+            or line.startswith("[gps-live] stream") \
+            or line.startswith("[gps-ubx]") \
+            or line.startswith("[gps-verify]"):
         _locked_append_event(line)
 
     # Structured candidate events — extracted into a typed list so the
@@ -945,6 +1034,24 @@ HTML = r"""<!doctype html>
     along the bottom). */
  #right-col{position:absolute;top:56px;right:8px;z-index:1000;width:280px;display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 320px);overflow-y:auto}
  #cands{padding:8px 10px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px;max-height:260px;overflow-y:auto;font-size:11px}
+ /* GPS receiver diagnostics panel — surfaces the [gps-ubx],
+    [gps-const], and [gps-verify] streams in a stable layout so the
+    operator can see at a glance whether the CFG writes stuck and
+    which constellations are delivering sats.  Each section has a
+    muted label row and a value row; status colour (green=ok,
+    orange=partial, red=bad) is driven by state.gps_diag in JS. */
+ #gps-diag-panel{padding:8px 10px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px;font-size:11px}
+ #gps-diag-panel h3{margin:0 0 6px 0;font-size:13px;color:#fc5;font-weight:normal}
+ #gps-diag-panel .diag-section{margin-top:6px}
+ #gps-diag-panel .diag-label{display:block;color:#888;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px}
+ #gps-diag-panel .diag-ok{color:#5f5}
+ #gps-diag-panel .diag-warn{color:#fc5}
+ #gps-diag-panel .diag-err{color:#f55}
+ #gps-diag-panel .diag-muted{color:#888}
+ #gps-diag-panel .diag-const-row{display:flex;justify-content:space-between;padding:1px 0}
+ #gps-diag-panel .diag-const-name{color:#aaa}
+ #gps-diag-panel .diag-const-zero{color:#f55}
+ #gps-diag-panel .diag-const-has{color:#9f9}
  #cands h3{margin:0 0 6px 0;font-size:12px;color:#9cf;font-weight:normal}
  #cands .row{margin:2px 0;padding:2px 4px;border-left:3px solid #444}
  #cands .pass{border-left-color:#5f5;color:#cfc}
@@ -1061,6 +1168,18 @@ HTML = r"""<!doctype html>
 <div id="cands">
   <h3>Crossing Candidates</h3>
   <div id="cand-list">(none yet — walk toward the line)</div>
+</div>
+<div id="gps-diag-panel">
+  <h3>GPS Receiver Diagnostics</h3>
+  <div class="diag-section"><span class="diag-label">CFG ACK/NAK</span>
+    <div id="gps-diag-ubx">(waiting for boot log — power-cycle the board to see CFG writes)</div>
+  </div>
+  <div class="diag-section"><span class="diag-label">Active constellations</span>
+    <div id="gps-diag-verify">(no [gps-verify] line yet)</div>
+  </div>
+  <div class="diag-section"><span class="diag-label">Satellites per constellation</span>
+    <div id="gps-diag-const">(no [gps-const] line yet — needs GSV enabled + open sky)</div>
+  </div>
 </div>
 </div><!-- /right-col -->
 <div id="viewb">
@@ -1191,8 +1310,79 @@ function renderSerialBanner(serial){
   }
 }
 
+// Render the GPS receiver diagnostics panel from state.gps_diag.
+// Three sections:
+//   - CFG ACK/NAK rollup: count of ACKs + most recent NAK (if any).
+//   - Active constellations from [gps-verify] readback.
+//   - Per-constellation satellite counts from [gps-const].
+function renderGpsDiag(diag){
+  if(!diag)return;
+  const ubxEl=document.getElementById('gps-diag-ubx');
+  if(ubxEl){
+    const evs=diag.ubx_events||[];
+    if(evs.length===0){
+      ubxEl.innerHTML='<span class="diag-muted">(waiting for boot log — power-cycle the board to see CFG writes)</span>';
+    } else {
+      const naks=evs.filter(e=>e.kind==='NAK');
+      const acks=evs.filter(e=>e.kind==='ACK');
+      let html='<span class="diag-ok">'+acks.length+' ACK</span>';
+      if(naks.length>0){
+        html+=' · <span class="diag-err">'+naks.length+' NAK</span>';
+        const last=naks[naks.length-1];
+        html+=' <span class="diag-err">(last: '+last.name+')</span>';
+      }
+      html+='<br><span class="diag-muted">last: '+evs[evs.length-1].kind+' '+evs[evs.length-1].name+'</span>';
+      ubxEl.innerHTML=html;
+    }
+  }
+  const verifyEl=document.getElementById('gps-diag-verify');
+  if(verifyEl){
+    const v=diag.verify;
+    if(!v){
+      verifyEl.innerHTML='<span class="diag-muted">(no [gps-verify] line yet)</span>';
+    } else {
+      const names=[['GPS','gps'],['SBAS','sbas'],['GAL','galileo'],
+                   ['BDS','beidou'],['QZS','qzss'],['GLO','glonass']];
+      let parts=[];
+      let missingCritical=false;
+      for(const [label,key] of names){
+        const on=!!v[key];
+        // Critical = Galileo + BeiDou: if these are off after a SET
+        // there's a real config problem that must be surfaced.
+        const crit=(key==='galileo'||key==='beidou');
+        if(crit && !on)missingCritical=true;
+        const cls=on?'diag-ok':(crit?'diag-err':'diag-muted');
+        parts.push('<span class="'+cls+'">'+label+(on?'✓':'✗')+'</span>');
+      }
+      let html=parts.join(' ');
+      if(missingCritical){
+        html+='<br><span class="diag-err">⚠ Galileo/BeiDou NOT active — sats/HDOP will not improve</span>';
+      }
+      verifyEl.innerHTML=html;
+    }
+  }
+  const constEl=document.getElementById('gps-diag-const');
+  if(constEl){
+    const c=diag.constellations;
+    if(!c){
+      constEl.innerHTML='<span class="diag-muted">(no [gps-const] line yet — needs GSV enabled + open sky)</span>';
+    } else {
+      const names=[['GPS','gps'],['GAL','galileo'],['BDS','beidou'],
+                   ['GLO','glonass'],['QZS','qzss']];
+      let rows=[];
+      for(const [label,key] of names){
+        const n=c[key]||0;
+        const cls=(n===0)?'diag-const-zero':'diag-const-has';
+        rows.push('<div class="diag-const-row"><span class="diag-const-name">'+label+'</span><span class="'+cls+'">'+n+' sats</span></div>');
+      }
+      constEl.innerHTML=rows.join('');
+    }
+  }
+}
+
 function update(state){
   renderSerialBanner(state.serial);
+  renderGpsDiag(state.gps_diag);
   const line=state.line||{};
   const cur=state.current;
   const trail=state.trail||[];

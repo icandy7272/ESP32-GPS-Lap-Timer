@@ -1,4 +1,6 @@
 #include "gps/gps_internal.h"
+#include "gps/gps_constellation.h"
+#include "gps/gps_ubx_monitor.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -199,10 +201,51 @@ static bool has_valid_prefix(const char* sentence) {
     return gn || gp;
 }
 
+// Parse the `num_sats` field (field 3) from a GSV sentence and feed
+// the per-constellation counter.  Must be called BEFORE any strtok
+// or in-place mutation of `sentence`, and BEFORE `has_valid_prefix`
+// since GSV sentences carry 5 distinct talker IDs (GP/GL/GA/GB/GQ)
+// that would otherwise be filtered out as non-positioning traffic.
+static void maybe_feed_gsv_counter(const char* sentence, int len) {
+    // $XXGSV,total_msgs,msg_num,num_sats,...
+    // shortest plausible: "$XXGSV,A,B,C,*hh\r\n" → ~18 chars.
+    if (len < 12 || sentence[0] != '$') return;
+    if (sentence[3] != 'G' || sentence[4] != 'S' || sentence[5] != 'V') return;
+
+    char talker[3];
+    talker[0] = sentence[1];
+    talker[1] = sentence[2];
+    talker[2] = '\0';
+
+    // Skip to field 3: "$XXGSV,total,msg,num_sats,..."
+    const char* p = sentence;
+    int comma_count = 0;
+    while (*p != '\0' && *p != '*') {
+        if (*p == ',') {
+            comma_count++;
+            if (comma_count == 3) {
+                p++;
+                break;
+            }
+        }
+        p++;
+    }
+    if (comma_count != 3 || *p == '\0' || *p == '*') return;
+
+    int num_sats = atoi(p);
+    gps_constellation_note_gsv(talker, num_sats);
+}
+
 static void process_sentence(char* sentence, int len) {
     if (!nmea_checksum_valid(sentence, len)) {
         return;
     }
+
+    // GSV must be counted before has_valid_prefix filters out its
+    // per-constellation talker IDs (GL/GA/GB/GQ aren't in the
+    // GN-or-GP-only positioning prefix set).
+    maybe_feed_gsv_counter(sentence, len);
+
     if (!has_valid_prefix(sentence)) {
         return;
     }
@@ -234,6 +277,16 @@ static void process_sentence(char* sentence, int len) {
 }
 
 void gps_feed_char(char c) {
+    // Run every byte through the UBX ACK/NAK monitor in parallel with
+    // the NMEA parser below.  Binary UBX frames (0xB5 0x62 sync) and
+    // ASCII NMEA coexist on the same UART; the monitor's state
+    // machine correctly ignores NMEA bytes (they never trigger its
+    // sync sequence) and only emits events for complete ACK / NAK
+    // frames.  Runtime ACKs are rare — most occur during
+    // gps_uart_init() — but spontaneous CFG changes from a future
+    // serial-console path would be caught here too.
+    gps_ubx_monitor_feed_byte(static_cast<uint8_t>(c));
+
     if (c == '$') {
         s_nmea_buf[0] = '$';
         s_nmea_len = 1;

@@ -65,3 +65,39 @@ int ubx_build_cfg_sbas_enable(uint8_t* out, size_t out_cap);
 //
 // Returns bytes written, or -1 if `out_cap < 60`.
 int ubx_build_cfg_gnss_all(uint8_t* out, size_t out_cap);
+
+// Build a CFG-GNSS poll frame (same class/id, zero payload).  The
+// receiver replies with a full CFG-GNSS frame carrying its current
+// per-constellation configuration — the ground truth for verifying
+// that an earlier CFG-GNSS SET actually took effect.
+//
+// Output size: 8 bytes (sync + header + no payload + checksum).
+//
+// Returns bytes written, or -1 if `out_cap < 8`.
+int ubx_build_cfg_gnss_poll(uint8_t* out, size_t out_cap);
+
+// Decoded enable bits from a CFG-GNSS response payload.  One bool
+// per constellation the lap timer cares about.  An unknown gnssId
+// in the payload is silently skipped.
+struct UbxGnssEnables {
+    bool gps;
+    bool sbas;
+    bool galileo;
+    bool beidou;
+    bool qzss;
+    bool glonass;
+};
+
+// Decode a CFG-GNSS response payload (as received from the receiver
+// — NOT including sync/header/checksum bytes, just the variable-
+// length payload starting with msgVer).  Populates `out` with the
+// per-constellation enable bits.
+//
+// Returns true on a structurally-valid payload; false if the length
+// header doesn't match a plausible block layout or `payload` is
+// null.  A successful return with all-false `out` means CFG-GNSS was
+// applied but every constellation is currently disabled (which is
+// itself useful diagnostic information).
+bool ubx_decode_cfg_gnss_payload(const uint8_t* payload,
+                                 size_t payload_len,
+                                 UbxGnssEnables* out);

@@ -1,5 +1,6 @@
 #include "ubx_builder.h"
 
+#include <stddef.h>
 #include <string.h>
 
 namespace {
@@ -127,4 +128,52 @@ int ubx_build_cfg_gnss_all(uint8_t* out, size_t out_cap) {
     set_block(5, 6, 8, 14, 0x00010001);  // GLONASS L1OF
 
     return ubx_build_frame(0x06, 0x3E, payload, sizeof(payload), out, out_cap);
+}
+
+int ubx_build_cfg_gnss_poll(uint8_t* out, size_t out_cap) {
+    // Polling an u-blox CFG message is done by sending the message
+    // with an empty payload.  The receiver replies with a full SET-
+    // style message carrying its current config.
+    return ubx_build_frame(0x06, 0x3E, nullptr, 0, out, out_cap);
+}
+
+bool ubx_decode_cfg_gnss_payload(const uint8_t* payload,
+                                 size_t payload_len,
+                                 UbxGnssEnables* out) {
+    if (payload == nullptr || out == nullptr) {
+        return false;
+    }
+    *out = {};
+    // Payload must be at least the 4-byte header.
+    if (payload_len < 4) {
+        return false;
+    }
+    uint8_t num_blocks = payload[3];
+    constexpr size_t HEADER = 4;
+    constexpr size_t BLOCK = 8;
+    size_t required = HEADER + static_cast<size_t>(num_blocks) * BLOCK;
+    if (payload_len < required) {
+        return false;
+    }
+
+    for (uint8_t i = 0; i < num_blocks; i++) {
+        size_t base = HEADER + static_cast<size_t>(i) * BLOCK;
+        uint8_t gnss_id = payload[base + 0];
+        // flags is u32 little-endian at base+4..base+7.  Bit 0 = enable.
+        uint32_t flags = static_cast<uint32_t>(payload[base + 4])
+                       | (static_cast<uint32_t>(payload[base + 5]) << 8)
+                       | (static_cast<uint32_t>(payload[base + 6]) << 16)
+                       | (static_cast<uint32_t>(payload[base + 7]) << 24);
+        bool enabled = (flags & 0x01) != 0;
+        switch (gnss_id) {
+        case 0: out->gps     = enabled; break;
+        case 1: out->sbas    = enabled; break;
+        case 2: out->galileo = enabled; break;
+        case 3: out->beidou  = enabled; break;
+        case 5: out->qzss    = enabled; break;
+        case 6: out->glonass = enabled; break;
+        default: break;  // unknown gnssId, skip
+        }
+    }
+    return true;
 }

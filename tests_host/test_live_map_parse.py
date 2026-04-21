@@ -294,6 +294,79 @@ def main() -> int:
         False,
     )
 
+    # --- GPS diagnostics stream parsing -----------------------------
+    # The three new firmware log streams must all land in state.gps_diag.
+    with live_map.state_lock:
+        live_map.state["gps_diag"] = {
+            "ubx_events": [],
+            "nak_count": 0,
+            "constellations": None,
+            "verify": None,
+        }
+    live_map.parse_line("[gps-ubx] ACK CFG-NAV5 (cls=0x06 id=0x24)")
+    live_map.parse_line("[gps-ubx] ACK CFG-SBAS (cls=0x06 id=0x16)")
+    live_map.parse_line(
+        "[gps-ubx] NAK CFG-GNSS (cls=0x06 id=0x3E) "
+        "- receiver rejected this configuration; nak_count=1")
+    with live_map.state_lock:
+        evs = live_map.state["gps_diag"]["ubx_events"]
+        check("ubx_events length after 3 lines", len(evs), 3)
+        check("first event kind", evs[0]["kind"], "ACK")
+        check("first event name", evs[0]["name"], "CFG-NAV5")
+        check("first event cls", evs[0]["cls"], 0x06)
+        check("first event id", evs[0]["id"], 0x24)
+        check("nak event kind", evs[2]["kind"], "NAK")
+        check("nak event name", evs[2]["name"], "CFG-GNSS")
+        check("nak_count running total", live_map.state["gps_diag"]["nak_count"], 1)
+
+    live_map.parse_line("[gps-const] GPS=12 GAL=6 BDS=10 GLO=7 QZS=0")
+    with live_map.state_lock:
+        c = live_map.state["gps_diag"]["constellations"]
+        check("constellations dict present", c is not None, True)
+        check("constellations GPS count", c["gps"], 12)
+        check("constellations Galileo count", c["galileo"], 6)
+        check("constellations BeiDou count", c["beidou"], 10)
+        check("constellations GLONASS count", c["glonass"], 7)
+        check("constellations QZSS count", c["qzss"], 0)
+
+    live_map.parse_line("[gps-verify] active: GPS=Y SBAS=Y GAL=N BDS=N QZS=N GLO=Y")
+    with live_map.state_lock:
+        v = live_map.state["gps_diag"]["verify"]
+        check("verify dict present", v is not None, True)
+        check("verify GPS true", v["gps"], True)
+        check("verify SBAS true", v["sbas"], True)
+        check("verify Galileo false (NAK revert)", v["galileo"], False)
+        check("verify BeiDou false (NAK revert)", v["beidou"], False)
+        check("verify GLONASS true", v["glonass"], True)
+        check("verify QZSS false", v["qzss"], False)
+
+    # Malformed / partial diag lines must not crash the parser.
+    for junk in [
+        "[gps-ubx] something weird (no cls field)",
+        "[gps-const] malformed counts",
+        "[gps-verify] active: GPS=yes SBAS=no",  # non-Y/N values
+        "[gps-const] GPS=12",                    # not all fields present
+    ]:
+        try:
+            live_map.parse_line(junk)
+        except Exception as exc:  # pragma: no cover
+            check(
+                f"parse_line({junk!r}) must not raise",
+                f"raised {exc!r}",
+                "no raise",
+            )
+
+    check(
+        "HTML has the GPS receiver diagnostics panel",
+        '<div id="gps-diag-panel">' in live_map.HTML,
+        True,
+    )
+    check(
+        "HTML update path calls renderGpsDiag",
+        "renderGpsDiag(state.gps_diag)" in live_map.HTML,
+        True,
+    )
+
     # --- serial health surface + disconnect banner in HTML ---------
     # Default at test startup: reader never ran, so connected=False.
     health = live_map._read_serial_health()

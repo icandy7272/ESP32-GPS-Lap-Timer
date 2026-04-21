@@ -1,4 +1,5 @@
 #include "gps/gps_internal.h"
+#include "gps/gps_constellation.h"
 #include "gps_filter.h"
 
 #include <esp_timer.h>
@@ -166,6 +167,11 @@ void gps_send_fix_if_ready() {
                       static_cast<unsigned long>(rejected_match),
                       point.pps_synced ? 1 : 0,
                       point.lat_deg, point.lon_deg);
+        // Per-constellation counts from GSV — emitted as its own
+        // structured line so parsers don't have to de-interleave from
+        // the wider [gps] summary.
+        gps_constellation_log_if_dirty();
+
         last_diag_ms = now_ms;
         accepted_since_last = 0;
         drops_since_last = 0;
