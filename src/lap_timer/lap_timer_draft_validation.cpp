@@ -338,6 +338,17 @@ void process_draft_validation_line(const GpsPoint* prev,
         return;
     }
 
+    // --- Gate 1b: MAX_CROSSING_HDOP --------------------------------
+    // Reject side-flips that happen on a low-confidence fix.  On the
+    // draft path this matters even more than on the real path: a
+    // single bad sample during walk-across can produce a fake PASS
+    // that satisfies the Save-button gate on the laptop.  Mirrors the
+    // gate added to process_line() in 2026-04-21's racing-accuracy
+    // pass.
+    if (curr->hdop > 0.0f && curr->hdop > MAX_CROSSING_HDOP) {
+        return;
+    }
+
     // --- Gate 2: ARM_DISTANCE_M -----------------------------------
     // Private arm accumulator — the operator must have walked at
     // least ARM_DISTANCE_M since the line was installed (or since

@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "pins.h"
+#include "ubx_builder.h"
 
 static void ubx_checksum(const uint8_t* data, int len,
                          uint8_t* ck_a, uint8_t* ck_b) {
@@ -99,6 +100,43 @@ static void ubx_cfg_save() {
     ubx_send(0x06, 0x09, payload, sizeof(payload));
 }
 
+// --- Racing / accuracy config helpers ---------------------------
+//
+// These three functions configure the u-blox receiver for the
+// accuracy the lap timer actually needs on a race track.  Each one
+// builds the exact UBX frame in a small stack buffer via the pure
+// builder in src/ubx_builder.cpp (testable on host), then hands
+// the bytes to Serial2.
+//
+// See src/ubx_builder.h for a full description of each frame's
+// payload layout and the rationale for Automotive / SBAS / multi-
+// constellation on an M9N.
+static void send_prebuilt(const uint8_t* frame, int frame_len) {
+    if (frame_len <= 0) {
+        return;
+    }
+    Serial2.write(frame, frame_len);
+    Serial2.flush();
+}
+
+static void ubx_cfg_nav5_automotive() {
+    uint8_t frame[44];
+    int n = ubx_build_cfg_nav5_automotive(frame, sizeof(frame));
+    send_prebuilt(frame, n);
+}
+
+static void ubx_cfg_sbas_enable() {
+    uint8_t frame[16];
+    int n = ubx_build_cfg_sbas_enable(frame, sizeof(frame));
+    send_prebuilt(frame, n);
+}
+
+static void ubx_cfg_gnss_all() {
+    uint8_t frame[60];
+    int n = ubx_build_cfg_gnss_all(frame, sizeof(frame));
+    send_prebuilt(frame, n);
+}
+
 static bool uart_detect_nmea(int timeout_ms) {
     unsigned long start = millis();
     while ((millis() - start) < static_cast<unsigned long>(timeout_ms)) {
@@ -182,6 +220,37 @@ void gps_uart_init() {
                   need_save ? " (will persist)" : " (RAM only)");
     ubx_cfg_rate(GPS_FIX_RATE_HZ);
     delay(50);
+
+    // --- Racing / accuracy optimizations (2026-04-21) ---------------
+    // These three writes are idempotent — re-applying them on every
+    // boot is cheap, and flagging `need_save` here ensures the first
+    // boot after a firmware update persists them to the GPS module's
+    // own flash so power loss mid-lap never reverts to portable model.
+    //
+    // Order matters:
+    //   1. NAV5 (dynamic model) — takes effect immediately, no restart
+    //   2. SBAS              — takes effect immediately, no restart
+    //   3. GNSS              — triggers receiver restart (~500-1000 ms),
+    //                          so we do this LAST and sleep to let
+    //                          NMEA flow return before the cfg_save
+    Serial.println("[gps] Setting Automotive dynamic model (CFG-NAV5)");
+    ubx_cfg_nav5_automotive();
+    delay(50);
+    need_save = true;
+
+    Serial.println("[gps] Enabling SBAS (WAAS/EGNOS/BDSBAS auto-scan)");
+    ubx_cfg_sbas_enable();
+    delay(50);
+
+    Serial.println("[gps] Enabling GPS+SBAS+Galileo+BeiDou+QZSS+GLONASS");
+    ubx_cfg_gnss_all();
+    // CFG-GNSS causes the receiver to restart its search engine.  The
+    // docs spec 0.5-1s; we wait 1200ms to be safe, then drain any
+    // partial NMEA to keep the parser state machine clean.
+    delay(1200);
+    while (Serial2.available() > 0) {
+        (void)Serial2.read();
+    }
 
     if (need_save) {
         Serial.println("[gps] reconfigured: saving to flash");

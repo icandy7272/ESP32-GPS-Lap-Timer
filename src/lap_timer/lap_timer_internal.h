@@ -57,6 +57,32 @@ static constexpr int32_t MIN_LAP_TIME_MS = 15000;
 static constexpr double CROSSING_END_TOLERANCE_M = 0.5;
 #endif
 static constexpr float MIN_CROSSING_SPEED_KMH = 1.0f;
+
+// Maximum HDOP (horizontal dilution of precision) accepted for crossing
+// evaluation.  HDOP > 5 means the visible-satellite geometry is poor
+// (stacked in sky, partial obstruction, or heavy multipath) and the
+// horizontal position can be tens of metres off.  Accepting such a fix
+// for a side-flip test produces random "ghost" crossings that either
+// increment the draft accepted counter with garbage or trigger false
+// laps on the active track.
+//
+// Calibration:
+//   - Open sky, 12+ sats: HDOP ~ 0.6-1.2
+//   - Light obstruction:  HDOP ~ 1.2-2.5
+//   - Urban walking test: HDOP ~ 2-5 typical, spikes to 10+
+//   - Indoor / near wall: HDOP > 10, sometimes 99 sentinel
+//
+// Walking-test threshold is slightly looser than production to avoid
+// starving the draft-validation counter during indoor or alley-way
+// tests near buildings.  The gate is skipped when hdop is negative
+// (sentinel for "no DOP reported" — old firmware paths before GGA
+// HDOP fallback landed).
+#ifdef WALKING_TEST_MODE
+static constexpr float MAX_CROSSING_HDOP = 5.0f;
+#else
+static constexpr float MAX_CROSSING_HDOP = 3.0f;
+#endif
+
 static constexpr int DEBOUNCE_SAMPLES = 2;
 static constexpr float MAX_LAP_RATIO = 1.5f;
 static constexpr int SPLINE_HISTORY = 4;

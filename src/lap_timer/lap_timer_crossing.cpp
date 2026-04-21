@@ -323,6 +323,18 @@ void process_line(int line_idx,
         return;
     }
 
+    // 2b) Reject low-confidence fixes by HDOP.  A horizontal DOP above
+    //     MAX_CROSSING_HDOP typically means satellite geometry is bad
+    //     enough that the reported position can drift tens of metres,
+    //     which is larger than any finish line is wide.  Crossings at
+    //     that noise level are meaningless — dropping the sample here
+    //     keeps both the arm state and the debounce logic clean.  The
+    //     `hdop > 0` guard skips this when HDOP is unavailable (older
+    //     fw without GGA-field-7 fallback, or legacy tests).
+    if (curr->hdop > 0.0f && curr->hdop > MAX_CROSSING_HDOP) {
+        return;
+    }
+
     update_arm_distance(line_idx, prev, curr);
 
     if (!s_arm_ready[line_idx]) {
