@@ -110,6 +110,42 @@ state = {
 # below can write query commands.  Set inside serial_reader once the
 # port is open.
 _ser_ref: list = [None]
+
+# Serial-link health.  `connected` is flipped to False when the
+# reader catches a Device-not-configured / port-gone error, and
+# back to True after a successful reopen.  Exposed via /api/state
+# so the UI can render a warning banner ("USB disconnected — stop
+# commands will fail") instead of silently serving stale data.
+# `last_error` carries the string of the most recent exception for
+# one-click debugging from the browser.
+_serial_health: dict = {
+    "connected": False,
+    "last_error": None,
+    "last_connect_ts": 0.0,
+    "last_disconnect_ts": 0.0,
+}
+_serial_health_lock = threading.Lock()
+
+
+def _mark_serial_connected() -> None:
+    with _serial_health_lock:
+        _serial_health["connected"] = True
+        _serial_health["last_error"] = None
+        _serial_health["last_connect_ts"] = time.time()
+
+
+def _mark_serial_disconnected(err: str) -> None:
+    with _serial_health_lock:
+        was_connected = _serial_health["connected"]
+        _serial_health["connected"] = False
+        _serial_health["last_error"] = err
+        if was_connected:
+            _serial_health["last_disconnect_ts"] = time.time()
+
+
+def _read_serial_health() -> dict:
+    with _serial_health_lock:
+        return dict(_serial_health)
 _serial_write_lock = threading.Lock()
 
 
@@ -462,6 +498,18 @@ _track_discovery = {
     "buf": [],
 }
 
+# Reboot detection + auto re-bootstrap.  Firmware's live-stream rate
+# lives in a static uint8_t that resets to 0 on every ESP32 reboot, so
+# after a board reset the 10 Hz [gps-live] feed silently falls back to
+# the 1 Hz [gps] diagnostic.  We catch the boot banner below and
+# re-send the bootstrap commands so the operator gets smooth trails
+# across reboots without touching the laptop.
+_reboot_watch = {
+    "last_bootstrap_ts": 0.0,
+    "bootstrap_in_flight": False,
+}
+_REBOOT_DEBOUNCE_S = 3.0  # Ignore repeat banners within 3s of last kick.
+
 
 def _try_parse_track_json(raw_lines: list[str]) -> None:
     try:
@@ -485,6 +533,12 @@ def _try_parse_track_json(raw_lines: list[str]) -> None:
 
 
 def parse_line(line: str) -> None:
+    # First thing: watch for a fresh-boot banner so the reboot
+    # detector can auto-resend `gps stream 10`.  Placed before any
+    # other parsing because it must not be short-circuited by a
+    # regex miss below.
+    _maybe_handle_reboot(line)
+
     # Boot-log track geometry (arrives once, at boot).
     m = _P1_RE.search(line)
     if m:
@@ -576,6 +630,19 @@ def _match_command_ack(cmd: str, line: str) -> tuple[bool, str] | None:
     if not cmd or not line:
         return None
 
+    # Specific ERR recognisers must run BEFORE the generic
+    # "[recording] ERR:" / "[draft] ERR:" prefix fallbacks below,
+    # otherwise the generic path returns a stripped raw string and
+    # the specific branch never executes (it would have delivered a
+    # friendlier, action-oriented message to the operator).
+    if cmd == "recording stop":
+        if "[recording] ERR: stop refused" in line:
+            return (False,
+                    "stop refused — recording still active (press Save again)")
+        if "[recording] ERR: stopped but final session file was not committed" in line:
+            return (False,
+                    "stopped but final file not committed — check SD card")
+
     if line.startswith("[draft] ERR:"):
         return (False, line.split("[draft] ERR:", 1)[1].strip())
     if line.startswith("[recording] ERR:"):
@@ -621,6 +688,12 @@ def _match_command_ack(cmd: str, line: str) -> tuple[bool, str] | None:
             return (True, "stopped and saved")
         if "[recording] (not recording" in line:
             return (False, "not recording — nothing to stop")
+        # Specific ERR variants were already routed above, before the
+        # generic "[recording] ERR:" prefix fallback would have
+        # stripped the line.  If we reach here with a "[recording]
+        # ERR:" line it means the specific matcher did not recognise
+        # it; let the generic fallback catch it and surface the raw
+        # firmware text rather than timing out.
         return None
 
     if cmd.startswith("gps stream "):
@@ -658,7 +731,12 @@ def _wait_for_command_ack(cmd: str, after_seq: int,
     return None
 
 
-def serial_reader() -> None:
+def _try_open_serial() -> "serial.Serial | None":
+    """Open the configured serial port or return None on failure.  Does
+    NOT exit the process on failure — the reader loop retries on its
+    own cadence so a USB unplug during field testing doesn't terminate
+    live_map and lose the UI state.
+    """
     ser = serial.Serial()
     ser.port = PORT
     ser.baudrate = BAUD
@@ -668,17 +746,64 @@ def serial_reader() -> None:
     try:
         ser.open()
     except Exception as exc:
-        print(f"[live_map] cannot open {PORT}: {exc}")
-        sys.exit(2)
-    _ser_ref[0] = ser
+        _mark_serial_disconnected(str(exc))
+        return None
+    return ser
+
+
+def serial_reader() -> None:
+    # Initial open: if the port isn't there at startup we still want
+    # live_map's HTTP server to come up so the operator can see the
+    # error banner and fix it (wrong port, cable unplugged, etc.)
+    # instead of puzzling over a process that crashed silently.
+    ser = _try_open_serial()
+    if ser is None:
+        print(f"[live_map] cannot open {PORT} at startup — continuing "
+              f"with HTTP server up, will retry in background")
+    else:
+        _ser_ref[0] = ser
+        _mark_serial_connected()
 
     buf = b""
+    last_reopen_attempt = 0.0
+    REOPEN_INTERVAL_S = 2.0
+
     while True:
+        # Reopen loop: triggered whenever we have no serial handle.
+        # Runs at most once per REOPEN_INTERVAL_S so we don't spin
+        # on a permanently-missing port.
+        if _ser_ref[0] is None:
+            now = time.time()
+            if now - last_reopen_attempt >= REOPEN_INTERVAL_S:
+                last_reopen_attempt = now
+                new_ser = _try_open_serial()
+                if new_ser is not None:
+                    _ser_ref[0] = new_ser
+                    _mark_serial_connected()
+                    print(f"[live_map] serial reconnected to {PORT}")
+                    # Fresh port = fresh receive buffer; drop any
+                    # partial line from the previous session so we
+                    # don't splice across the reconnect.
+                    buf = b""
+            else:
+                time.sleep(0.2)
+            continue
+
+        ser = _ser_ref[0]
         try:
             data = ser.read(1024)
         except Exception as exc:
-            print(f"[live_map] serial read error: {exc}")
-            time.sleep(1)
+            # Errno 6 "Device not configured" (cable unplugged) or
+            # any other OS-level serial failure: drop the handle,
+            # update health flag, let the reopen loop above retry.
+            err_str = str(exc)
+            print(f"[live_map] serial read error: {err_str} — will reconnect")
+            _mark_serial_disconnected(err_str)
+            try:
+                ser.close()
+            except Exception:
+                pass
+            _ser_ref[0] = None
             continue
         if not data:
             continue
@@ -697,6 +822,65 @@ def serial_reader() -> None:
             except Exception as exc:  # noqa: BLE001 — diagnostic catch-all
                 print(f"[live_map] parse_line raised on {line!r}: {exc}")
                 continue
+
+
+def _send_runtime_bootstrap_commands() -> None:
+    """Emit the two commands we want the firmware to run every time it
+    reaches the serial-console runtime state: enable the 10 Hz live
+    stream, and request the track JSON.  Split out of
+    track_query_bootstrap so the reboot detector in parse_line() can
+    reuse the same sequence without re-entering the slow cold-boot
+    wait.
+    """
+    def send(cmd: str) -> None:
+        try:
+            _serial_write_command(cmd)
+        except Exception as exc:
+            print(f"[live_map] serial write failed: {exc}")
+
+    # Re-arm the live stream FIRST so even if the ls/cat sequence below
+    # stalls, the operator already has smooth position updates.
+    send(f"gps stream {LIVE_GPS_STREAM_HZ}")
+    send("ls tracks")
+    _track_discovery["requested_ls"] = True
+
+
+def _kick_reboot_bootstrap() -> None:
+    """Spawn a one-shot thread that re-runs the runtime bootstrap after
+    a short settle.  Called from the reader thread when a reboot banner
+    is seen — must be non-blocking so the reader keeps draining serial.
+    """
+    def _run() -> None:
+        # Serial console only accepts commands after GPS init completes
+        # (~8 s cold boot from the capture we saw).  2 s is enough for
+        # the parser/state machine to be alive, and missing the window
+        # is harmless — we just resend.
+        time.sleep(2.0)
+        _send_runtime_bootstrap_commands()
+        _reboot_watch["bootstrap_in_flight"] = False
+        print("[live_map] reboot detected — re-armed gps stream "
+              f"{LIVE_GPS_STREAM_HZ} Hz")
+
+    _reboot_watch["last_bootstrap_ts"] = time.time()
+    _reboot_watch["bootstrap_in_flight"] = True
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _maybe_handle_reboot(line: str) -> None:
+    """Detect the very first line the ESP32 prints on a fresh boot and,
+    if it's not still inside the debounce window, kick a re-bootstrap.
+    We match on `[BOOT-EARLY] SETUP_ENTRY` because it's the only token
+    guaranteed to arrive exactly once per boot (before any subsystem
+    log noise).
+    """
+    if "[BOOT-EARLY] SETUP_ENTRY" not in line:
+        return
+    now = time.time()
+    if _reboot_watch["bootstrap_in_flight"]:
+        return
+    if now - _reboot_watch["last_bootstrap_ts"] < _REBOOT_DEBOUNCE_S:
+        return
+    _kick_reboot_bootstrap()
 
 
 def track_query_bootstrap() -> None:
@@ -718,15 +902,8 @@ def track_query_bootstrap() -> None:
     # serial console is actually processing input.
     time.sleep(4)
 
-    def send(cmd: str) -> None:
-        try:
-            _serial_write_command(cmd)
-        except Exception as exc:
-            print(f"[live_map] serial write failed: {exc}")
-
-    send("ls tracks")
-    _track_discovery["requested_ls"] = True
-    send(f"gps stream {LIVE_GPS_STREAM_HZ}")
+    _send_runtime_bootstrap_commands()
+    _reboot_watch["last_bootstrap_ts"] = time.time()
 
     # Poll up to 5 s for the ls reply (reader thread populates first_track).
     for _ in range(50):
@@ -832,8 +1009,19 @@ HTML = r"""<!doctype html>
  .metric{color:#aaa}
  .bold{color:#fff;font-weight:bold}
  .leaflet-container{background:#0a0a0a}
+ /* Serial-disconnect banner.  Sits across the top of the window at
+    a higher z-index than everything else so the operator can't miss
+    it — stale state is actively dangerous (looks like a live feed
+    but commands silently fail). */
+ #serial-banner{position:absolute;top:0;left:0;right:0;z-index:2000;
+   padding:8px 14px;background:#5a1818;color:#fff;
+   font:bold 13px ui-monospace,monospace;border-bottom:2px solid #f44;
+   display:none}
+ #serial-banner.on{display:block}
+ #serial-banner .detail{font-weight:normal;color:#fcc;margin-left:12px}
 </style></head><body>
 <div id="map"></div>
+<div id="serial-banner"></div>
 <div id="info">Waiting for serial data…</div>
 <div id="right-col">
 <div id="draft">
@@ -983,7 +1171,28 @@ function fitInitial(line,cur){
   return true;
 }
 
+function renderSerialBanner(serial){
+  // Stale-state is the worst failure mode — the page looks alive but
+  // every control silently no-ops.  Flip a high-z banner across the
+  // top of the window the moment the reader reports disconnected,
+  // clear it when reconnect succeeds.
+  const el=document.getElementById('serial-banner');
+  if(!el)return;
+  if(serial && serial.connected===false){
+    const err=serial.last_error ? ` (${serial.last_error})` : '';
+    el.innerHTML='⚠ USB serial disconnected — plug the board back in.'
+      + '<span class="detail">Save / Start / Save-track commands '
+      + 'will fail until the reader re-opens the port. The state '
+      + 'shown below is stale from the last connected moment'+err+'.</span>';
+    el.classList.add('on');
+  } else {
+    el.classList.remove('on');
+    el.innerHTML='';
+  }
+}
+
 function update(state){
+  renderSerialBanner(state.serial);
   const line=state.line||{};
   const cur=state.current;
   const trail=state.trail||[];
@@ -1628,7 +1837,13 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif self.path == "/state":
             with state_lock:
-                body = json.dumps(state).encode()
+                snapshot = dict(state)
+            # Merge the serial-link health snapshot so the browser can
+            # render a disconnect banner without needing a second poll.
+            # Kept under a nested "serial" key to avoid colliding with
+            # any top-level state field the firmware parser owns.
+            snapshot["serial"] = _read_serial_health()
+            body = json.dumps(snapshot).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -1663,7 +1878,11 @@ class Handler(BaseHTTPRequestHandler):
         if ser is None:
             self.send_response(503)
             self.end_headers()
-            self.wfile.write(b'{"error":"serial not open"}')
+            # Specific error so the UI can surface the disconnect
+            # instead of the generic "serial not open".  The operator
+            # knows exactly what to fix (plug the USB back in).
+            self.wfile.write(
+                b'{"error":"USB disconnected - plug the board back in"}')
             return
         with state_lock:
             start_seq = state.get("event_seq", 0)

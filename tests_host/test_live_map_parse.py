@@ -230,6 +230,102 @@ def main() -> int:
         None,
     )
 
+    # --- recording-stop ACK matcher covers the firmware ERR variants --
+    # Without these, a partial-save or refused-stop silently times out
+    # and the operator sees a generic "firmware did not acknowledge"
+    # message 5 seconds later with no actionable guidance.
+    stop_refused = ack(
+        "recording stop",
+        "[recording] ERR: stop refused — recording still active")
+    check(
+        "stop refused is a terminal failure ACK",
+        stop_refused is not None and stop_refused[0] is False,
+        True,
+    )
+    check(
+        "stop refused advises operator to retry",
+        stop_refused is not None and "press Save again" in stop_refused[1],
+        True,
+    )
+    partial = ack(
+        "recording stop",
+        "[recording] ERR: stopped but final session file was not committed")
+    check(
+        "stopped-but-not-committed is a terminal failure ACK",
+        partial is not None and partial[0] is False,
+        True,
+    )
+    check(
+        "stopped-but-not-committed advises checking SD",
+        partial is not None and "SD card" in partial[1],
+        True,
+    )
+
+    # --- reboot detector debounces + kicks a re-bootstrap ----------
+    # The boot banner prints many lines fast at reset; only the first
+    # [BOOT-EARLY] SETUP_ENTRY should trigger the re-bootstrap, and
+    # subsequent banners during the debounce window must be ignored
+    # so the serial writer isn't flooded with duplicate commands.
+    live_map._reboot_watch["last_bootstrap_ts"] = 0.0
+    live_map._reboot_watch["bootstrap_in_flight"] = False
+    live_map._maybe_handle_reboot("[BOOT-EARLY] SETUP_ENTRY")
+    check(
+        "first SETUP_ENTRY marks bootstrap in flight",
+        live_map._reboot_watch["bootstrap_in_flight"],
+        True,
+    )
+    # Another banner within debounce window must NOT spawn a second
+    # thread — the existing one is still running.
+    prev_ts = live_map._reboot_watch["last_bootstrap_ts"]
+    live_map._maybe_handle_reboot("[BOOT-EARLY] SETUP_ENTRY")
+    check(
+        "second SETUP_ENTRY during in-flight window is ignored",
+        live_map._reboot_watch["last_bootstrap_ts"],
+        prev_ts,
+    )
+    # Non-banner lines never trigger the reboot path.
+    live_map._reboot_watch["bootstrap_in_flight"] = False
+    live_map._reboot_watch["last_bootstrap_ts"] = 0.0
+    live_map._maybe_handle_reboot(
+        "[gps] lat=40.0059425 lon=116.4584473 sats=12")
+    check(
+        "non-banner line never triggers bootstrap",
+        live_map._reboot_watch["bootstrap_in_flight"],
+        False,
+    )
+
+    # --- serial health surface + disconnect banner in HTML ---------
+    # Default at test startup: reader never ran, so connected=False.
+    health = live_map._read_serial_health()
+    check(
+        "serial health exposes a `connected` bool",
+        isinstance(health.get("connected"), bool),
+        True,
+    )
+    live_map._mark_serial_connected()
+    check(
+        "_mark_serial_connected flips the flag",
+        live_map._read_serial_health()["connected"],
+        True,
+    )
+    live_map._mark_serial_disconnected("Device not configured")
+    h = live_map._read_serial_health()
+    check(
+        "_mark_serial_disconnected flips flag + records error",
+        h["connected"] is False and h["last_error"] == "Device not configured",
+        True,
+    )
+    check(
+        "HTML includes the serial-disconnect banner element",
+        '<div id="serial-banner"' in live_map.HTML,
+        True,
+    )
+    check(
+        "HTML update path paints the banner from state.serial",
+        "renderSerialBanner(state.serial)" in live_map.HTML,
+        True,
+    )
+
     if FAIL_COUNT == 0:
         print("test_live_map_parse: OK")
         return 0
