@@ -564,6 +564,98 @@ def main() -> int:
             2,
         )
 
+    # --- Track picker: [tracks-list] entries build the catalog ---
+    # Firmware emits one line per track plus an `end` terminator.  Parser
+    # must accumulate in state.tracks_catalog keyed by id (idempotent on
+    # re-emit so a mid-session name update doesn't duplicate the entry).
+    with live_map.state_lock:
+        live_map.state["tracks_catalog"] = []
+        live_map.state["active_track_id"] = None
+        live_map.state["active_track_name"] = None
+    live_map.parse_line('[tracks-list] track_001 "Home Loop"')
+    live_map.parse_line('[tracks-list] track_002 "Test Track"')
+    live_map.parse_line('[tracks-list] track_042 "With Spaces And 數字"')
+    live_map.parse_line('[tracks-list] end')
+    with live_map.state_lock:
+        cat = live_map.state["tracks_catalog"]
+        check("tracks_catalog length after list", len(cat), 3)
+        check("catalog first id", cat[0]["id"], "track_001")
+        check("catalog first name", cat[0]["name"], "Home Loop")
+        check("catalog second id", cat[1]["id"], "track_002")
+        check("catalog last id", cat[2]["id"], "track_042")
+    # Re-emitting the same id with a new name updates in place, no dup.
+    live_map.parse_line('[tracks-list] track_001 "Home Loop Renamed"')
+    with live_map.state_lock:
+        cat = live_map.state["tracks_catalog"]
+        check("catalog length stays 3 after rename", len(cat), 3)
+        check("catalog first name updated", cat[0]["name"], "Home Loop Renamed")
+
+    # [track] selected: and [track] auto-detected: both update active.
+    live_map.parse_line("[track] selected: track_002 (Test Track)")
+    with live_map.state_lock:
+        check("active id after selected", live_map.state["active_track_id"], "track_002")
+        check("active name after selected",
+              live_map.state["active_track_name"], "Test Track")
+    live_map.parse_line("[track] auto-detected: track_042 (With Spaces And 數字)")
+    with live_map.state_lock:
+        check("active id after auto-detect",
+              live_map.state["active_track_id"], "track_042")
+        check("active name after auto-detect",
+              live_map.state["active_track_name"], "With Spaces And 數字")
+
+    # --- Track picker ACK matcher ---
+    # track select → [track] selected: (success) / [track] ERR: (fail).
+    # Critical: must be command-family-gated so a stale [track] ERR
+    # from an earlier command can't terminate the wrong wait.
+    ack_pick = live_map._match_command_ack
+    sel_ack = ack_pick("track select track_002",
+                       "[track] selected: track_002 (Test Track)")
+    check("track select success ACK is terminal True",
+          sel_ack is not None and sel_ack[0] is True, True)
+    sel_err = ack_pick("track select track_999",
+                       "[track] ERR: track track_999 not found")
+    check("track select error ACK is terminal False",
+          sel_err is not None and sel_err[0] is False, True)
+    check("track select error carries message",
+          sel_err is not None and "not found" in sel_err[1], True)
+
+    auto_ack = ack_pick(
+        "track autodetect",
+        "[track] auto-detected: track_042 (My Track)")
+    check("track autodetect success ACK",
+          auto_ack is not None and auto_ack[0] is True, True)
+    auto_err = ack_pick(
+        "track autodetect",
+        "[track] ERR: autodetect requires a 3D fix")
+    check("track autodetect error ACK",
+          auto_err is not None and auto_err[0] is False, True)
+
+    # `tracks list` ACKs on the `end` terminator.
+    list_ack = ack_pick("tracks list", "[tracks-list] end")
+    check("tracks list end is terminal ACK",
+          list_ack is not None and list_ack[0] is True, True)
+    # A catalog entry line alone is NOT the terminal ACK.
+    mid_ack = ack_pick("tracks list", '[tracks-list] track_003 "Foo"')
+    check("tracks list mid-line is not terminal", mid_ack, None)
+
+    # --- Allowed-commands gate: track select <id> must match id regex
+    # but block path traversal and wrong prefix.
+    is_allowed = live_map._is_allowed_command
+    check("track select track_003 allowed",
+          is_allowed("track select track_003"), True)
+    check("track select track_42 allowed (2 digits)",
+          is_allowed("track select track_42"), True)
+    check("track select session_001 rejected (wrong prefix)",
+          is_allowed("track select session_001"), False)
+    check("track select track_ rejected (no digits)",
+          is_allowed("track select track_"), False)
+    check("track select track_12345 rejected (too many digits)",
+          is_allowed("track select track_12345"), False)
+    check("track select ../etc rejected (path traversal)",
+          is_allowed("track select ../etc"), False)
+    check("track autodetect allowed", is_allowed("track autodetect"), True)
+    check("tracks list allowed", is_allowed("tracks list"), True)
+
     if FAIL_COUNT == 0:
         print("test_live_map_parse: OK")
         return 0

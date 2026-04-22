@@ -741,6 +741,115 @@ static void serial_console_handle_recording_stop() {
     }
 }
 
+// Apply `track` as the active track: lap_timer_set_track handles
+// geometry copy + version bump + [track] runtime emit; we mirror
+// the HTTP /api/tracks/select path for the session_state name
+// update and the manual-vs-auto note.  Emits an ACK line the
+// live_map ACK matcher can recognise.
+static void serial_console_apply_track_selection(const TrackDefinition* track,
+                                                 bool is_auto) {
+    if (track == nullptr) {
+        Serial.println("[track] ERR: track not found");
+        return;
+    }
+    lap_timer_set_track(track);
+
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        strlcpy(session_state.track_name, track->name,
+                sizeof(session_state.track_name));
+        xSemaphoreGive(session_mutex);
+    }
+
+    if (is_auto) {
+        track_runtime_note_auto_detect();
+        Serial.printf("[track] auto-detected: %s (%s)\n",
+                      track->id, track->name);
+    } else {
+        track_runtime_note_manual_selection(false /* newly_created */);
+        Serial.printf("[track] selected: %s (%s)\n",
+                      track->id, track->name);
+    }
+}
+
+// "track select <id>" — block during recording so an in-flight
+// session can't silently switch geometry and invalidate its own
+// [laptiming] block.  The 409-equivalent is a single [track] ERR
+// line; live_map surfaces it to the UI.
+static void serial_console_handle_track_select(const char* id) {
+    bool recording = false;
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        recording = session_state.is_recording;
+        xSemaphoreGive(session_mutex);
+    }
+    if (recording) {
+        Serial.println("[track] ERR: cannot switch track during recording");
+        return;
+    }
+    const TrackDefinition* track = track_get_by_id(id);
+    if (track == nullptr) {
+        Serial.printf("[track] ERR: track %s not found\n", id);
+        return;
+    }
+    serial_console_apply_track_selection(track, false);
+}
+
+// "track autodetect" — re-run proximity search against the current
+// GPS fix.  Same as the boot-time late-auto-detect path but
+// operator-initiated.  Requires a valid 3D fix.
+static void serial_console_handle_track_autodetect() {
+    bool recording = false;
+    bool gps_fix = false;
+    double lat = 0.0;
+    double lon = 0.0;
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        recording = session_state.is_recording;
+        gps_fix = session_state.gps_fix_ok;
+        lat = session_state.gps_lat_deg;
+        lon = session_state.gps_lon_deg;
+        xSemaphoreGive(session_mutex);
+    }
+    if (recording) {
+        Serial.println("[track] ERR: cannot switch track during recording");
+        return;
+    }
+    if (!gps_fix) {
+        Serial.println("[track] ERR: autodetect requires a 3D fix");
+        return;
+    }
+    const TrackDefinition* track = track_auto_detect(lat, lon);
+    if (track == nullptr) {
+        Serial.println("[track] ERR: no track within range for autodetect");
+        return;
+    }
+    serial_console_apply_track_selection(track, true);
+}
+
+// "tracks list" — catalog dump for the live_map track picker.  Emits
+// one `[tracks-list] <id> "<name>"` line per track + a terminator
+// line `[tracks-list] end`.  Names are quoted so spaces survive, and
+// ASCII-sanitised defensively even though track_save already
+// validates names at creation time.
+static void serial_console_handle_tracks_list() {
+    int count = track_count();
+    for (int i = 0; i < count; i++) {
+        const TrackDefinition* t = track_get(i);
+        if (t == nullptr) continue;
+        // Defensive sanitisation: drop control chars + quote/backslash
+        // so a malformed track file on SD can't corrupt the listing.
+        char safe_name[sizeof(t->name)];
+        size_t ni = 0;
+        for (size_t k = 0; k < sizeof(t->name) - 1
+                         && t->name[k] != '\0'; k++) {
+            char c = t->name[k];
+            if (c == '"' || c == '\\' || (unsigned char)c < 0x20) c = '_';
+            safe_name[ni++] = c;
+        }
+        safe_name[ni] = '\0';
+        Serial.printf("[tracks-list] %s \"%s\"\n", t->id, safe_name);
+    }
+    Serial.println("[tracks-list] end");
+}
+
 static void serial_console_handle_gps_stream(const char* arg) {
     int rate = atoi(arg ? arg : "0");
     if (rate < 0) {
@@ -792,6 +901,15 @@ static void serial_console_handle_line(const char* line) {
             return;
         case SerialConsoleCommandType::TrackStatus:
             serial_console_handle_track_status();
+            return;
+        case SerialConsoleCommandType::TrackSelect:
+            serial_console_handle_track_select(command.arg);
+            return;
+        case SerialConsoleCommandType::TrackAutodetect:
+            serial_console_handle_track_autodetect();
+            return;
+        case SerialConsoleCommandType::TracksList:
+            serial_console_handle_tracks_list();
             return;
         case SerialConsoleCommandType::GpsStream:
             serial_console_handle_gps_stream(command.arg);

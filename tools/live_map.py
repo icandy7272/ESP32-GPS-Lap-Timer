@@ -104,6 +104,20 @@ state = {
     # from the firmware's [lcd] ... emissions.  None until the first
     # [lcd] line arrives — panel renders a "waiting" placeholder.
     "lcd": None,
+    # Track picker catalog.  Populated from [tracks-list] lines the
+    # firmware emits when we send `tracks list` at bootstrap or on
+    # any later refresh (e.g. after a track save).  Keyed by id so
+    # updates are idempotent and the UI can render a dropdown.
+    # Stored as list of {id, name} for stable ordering.
+    "tracks_catalog": [],
+    # Name of the track currently active on the firmware.  Sourced
+    # from `[track] selected:` / `[track] auto-detected:` ACK lines
+    # and from the firmware's session_state.track_name echo in
+    # [lcd] lines.  None until first update.  Used by the UI to
+    # highlight the selected entry in the dropdown and to render
+    # a "no active track" state when empty.
+    "active_track_id": None,
+    "active_track_name": None,
     # GPS receiver diagnostics surfaced to the UI so an operator can
     # tell at a glance whether the last boot's UBX config writes were
     # accepted, which constellations are actually delivering satellite
@@ -257,6 +271,26 @@ _GPS_VERIFY_RE = re.compile(
 )
 
 _TRACK_FILE_RE = re.compile(r"^(track_\d+\.json)\s*$")
+
+# Catalog entries emitted by the firmware's `tracks list` command.
+# Format: `[tracks-list] track_003 "My Home"` + terminator line
+# `[tracks-list] end`.  The name can contain spaces, colons, and any
+# ASCII byte that firmware's is_track_name_valid() allows; the `"`
+# character itself is replaced with `_` by the firmware before emit,
+# so we can safely match on the outer quotes.
+_TRACKS_LIST_ENTRY_RE = re.compile(
+    r'\[tracks-list\]\s+(track_\d{1,3})\s+"([^"]*)"'
+)
+# Active-track notifications.  The firmware emits these for:
+#   - "track select" serial command (manual)
+#   - "track autodetect" serial command (manual)
+#   - late auto-detect on first 3D fix at boot
+#   - /api/tracks/select HTTP path (browser phone UI)
+# Any of them can arrive at any time, so we update state["active_track_*"]
+# from both lines uniformly.
+_TRACK_SELECTED_RE = re.compile(
+    r'\[track\]\s+(?:selected|auto-detected):\s+(track_\d{1,3})\s+\(([^)]*)\)'
+)
 _SERIAL_HEADER_RE = re.compile(r"^\[serial\] --- tracks/([^ ]+) ---")
 _DRAFT_STARTED_RE = re.compile(r"\[draft\] started: (\S+)")
 _DRAFT_P1_RE = re.compile(
@@ -718,6 +752,38 @@ def parse_line(line: str) -> None:
                 "ts": time.time(),
             }
 
+    # Track catalog (dropdown picker).  The firmware emits one
+    # [tracks-list] line per track when we send `tracks list`, then a
+    # terminator `[tracks-list] end`.  Accumulate in a worker dict
+    # keyed by id so a mid-stream refresh (e.g. after track save)
+    # idempotently updates the name.
+    m = _TRACKS_LIST_ENTRY_RE.search(line)
+    if m:
+        tid, tname = m.group(1), m.group(2)
+        with state_lock:
+            cat = state["tracks_catalog"]
+            for entry in cat:
+                if entry.get("id") == tid:
+                    entry["name"] = tname
+                    break
+            else:
+                cat.append({"id": tid, "name": tname})
+    if line.startswith("[tracks-list] end"):
+        # End-of-list marker.  No side effects for now — UI just
+        # watches tracks_catalog length.  Kept as a dedicated branch
+        # so a future refresh-in-progress indicator is easy to wire.
+        pass
+
+    # Active-track changes (manual select, autodetect, or the boot
+    # auto-detect path).  Mirror into state so the dropdown can
+    # render the current selection.
+    m = _TRACK_SELECTED_RE.search(line)
+    if m:
+        tid, tname = m.group(1), m.group(2)
+        with state_lock:
+            state["active_track_id"] = tid
+            state["active_track_name"] = tname
+
     if line.startswith("[gps]") or line.startswith("[gps-live]"):
         m = _LATLON_RE.search(line)
         if m:
@@ -746,7 +812,10 @@ def parse_line(line: str) -> None:
             or line.startswith("[gps-live] stream") \
             or line.startswith("[gps-ubx]") \
             or line.startswith("[gps-verify]") \
-            or line.startswith("[stop-trace]"):
+            or line.startswith("[stop-trace]") \
+            or line.startswith("[track] selected:") \
+            or line.startswith("[track] auto-detected:") \
+            or line.startswith("[track] ERR:"):
         # [stop-trace] is the firmware's per-step diagnostic emitted
         # during session_stop_recording / storage_end_session.  Must
         # be in the event feed so the operator can see which
@@ -877,6 +946,32 @@ def _match_command_ack(cmd: str, line: str) -> tuple[bool, str] | None:
             return (True, f"gps stream {want}Hz")
         return None
 
+    # Track picker — both the manual `track select <id>` path and the
+    # `track autodetect` path terminate with a `[track] selected:` or
+    # `[track] auto-detected:` line from apply_track_selection in
+    # firmware.  Errors arrive as `[track] ERR: ...`.  Gated on the
+    # command family so an unrelated `[track] ERR:` (e.g. from a
+    # stale earlier request) can't hijack the ACK window.
+    if cmd.startswith("track select ") or cmd == "track autodetect":
+        if "[track] ERR:" in line:
+            msg = line.split("[track] ERR:", 1)[1].strip()
+            return (False, msg)
+        if "[track] selected:" in line:
+            payload = line.split("[track] selected:", 1)[1].strip()
+            return (True, "selected: " + payload)
+        if "[track] auto-detected:" in line:
+            payload = line.split("[track] auto-detected:", 1)[1].strip()
+            return (True, "auto-detected: " + payload)
+        return None
+
+    if cmd == "tracks list":
+        # End-of-list marker confirms the firmware actually processed
+        # the listing request — useful as a liveness probe during
+        # bootstrap without blocking on a specific entry.
+        if "[tracks-list] end" in line:
+            return (True, "catalog refreshed")
+        return None
+
     return None
 
 
@@ -896,6 +991,20 @@ def _command_timeout_s(cmd: str) -> float:
         # the trace lines pinpoint the step.
         return 15.0
     if cmd == "track save":
+        return 3.0
+    if cmd.startswith("track select ") or cmd == "track autodetect":
+        # Both paths load a track from in-memory cache, call
+        # lap_timer_set_track (geometry copy, no I/O), and print the
+        # ACK line.  No SD work, so a tight window is fine.  Bumped
+        # above the 2.5 s default because lap_timer_task may be
+        # mid-fix-processing and the version-bump + ACK emit sit
+        # behind a mutex briefly.
+        return 3.0
+    if cmd == "tracks list":
+        # Catalog emission is a tight loop over the in-memory track
+        # array (max ~16 entries), each emitting one 50-100 byte
+        # line over 115200-baud UART.  Even 16 entries = <5 ms of
+        # wire time.  Generous 3 s covers contention.
         return 3.0
     return 2.5
 
@@ -1055,6 +1164,14 @@ def _send_runtime_bootstrap_commands() -> None:
     _bootstrap_send(f"gps stream {LIVE_GPS_STREAM_HZ}")
     _bootstrap_send("ls tracks")
     _track_discovery["requested_ls"] = True
+
+    # Catalog dump for the track-picker dropdown.  The firmware emits
+    # one `[tracks-list] <id> "<name>"` line per track plus a
+    # `[tracks-list] end` terminator; the parser keeps tracks_catalog
+    # up-to-date keyed by id so a mid-session rename / save idempotently
+    # updates the dropdown.  Cheaper than iterating `cat tracks/*` to
+    # pull each track's JSON.
+    _bootstrap_send("tracks list")
 
     # If we've previously discovered the active track filename (either
     # this session's ls reply or a prior cat response), re-request its
@@ -1287,6 +1404,21 @@ HTML = r"""<!doctype html>
  #rec-msg{margin-top:4px;font-size:11px;min-height:14px}
  #rec-msg.ok{color:#7f7}
  #rec-msg.err{color:#f77}
+ /* Track picker — dropdown + auto-detect button.  Driven by the
+    firmware's `tracks list` catalog (cached in state.tracks_catalog).
+    Disabled while recording because the firmware blocks track switch
+    during a session to protect [laptiming] integrity. */
+ #track-picker{padding:8px 10px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px}
+ #track-picker h3{margin:0 0 6px 0;font-size:12px;color:#9cf;font-weight:normal}
+ #track-picker select{width:100%;box-sizing:border-box;padding:5px 7px;background:#111;color:#eee;border:1px solid #555;border-radius:3px;font-family:inherit;font-size:12px}
+ #track-picker select:disabled{opacity:0.5;cursor:not-allowed}
+ #track-picker .row{display:flex;gap:6px;margin-top:6px}
+ #track-picker button{flex:1;padding:5px 8px;border:1px solid #666;background:#222;color:#eee;font:inherit;font-size:12px;border-radius:3px;cursor:pointer}
+ #track-picker button:hover:not([disabled]){background:#2a2a2a}
+ #track-picker button[disabled]{opacity:0.4;cursor:not-allowed}
+ #track-picker-status{margin-top:4px;font-size:11px;min-height:14px;color:#9cf}
+ #track-picker-status.err{color:#f77}
+ #track-picker-status.ok{color:#7f7}
  /* LCD mirror panel — canvas approximates the on-device TFT layout. */
  #lcd-panel{padding:8px 10px;background:rgba(0,0,0,.82);border:1px solid #555;border-radius:6px}
  #lcd-panel h3{margin:0 0 6px 0;font-size:12px;color:#9cf;font-weight:normal}
@@ -1351,6 +1483,16 @@ HTML = r"""<!doctype html>
   </div>
   <div id="draft-validate-hint">walk across the line to enable Save</div>
   <div id="draft-status">idle — press Start Draft</div>
+</div>
+<div id="track-picker">
+  <h3>Active Track</h3>
+  <select id="track-select" disabled>
+    <option value="">loading...</option>
+  </select>
+  <div class="row">
+    <button id="btn-track-autodetect" disabled title="Pick the nearest track by GPS proximity">Auto-detect by proximity</button>
+  </div>
+  <div id="track-picker-status"></div>
 </div>
 <div id="rec-panel">
   <h3>Recording</h3>
@@ -1581,9 +1723,67 @@ function renderGpsDiag(diag){
   }
 }
 
+// Track-picker state: remember whether we've been recording so we
+// can auto-restore the dropdown's enabled state when it stops.
+let lastTrackPickerSignature = "";
+
+function renderTrackPicker(state){
+  const sel = document.getElementById('track-select');
+  const btnAuto = document.getElementById('btn-track-autodetect');
+  if(!sel || !btnAuto) return;
+  const catalog = state.tracks_catalog || [];
+  const activeId = state.active_track_id || "";
+  const isRecording = !!(state.lcd && state.lcd.rec);
+
+  // Rebuild <option>s only when catalog or active id changes.
+  // Avoids clobbering an in-progress user selection on every poll.
+  const sig = JSON.stringify({c: catalog, a: activeId});
+  if(sig !== lastTrackPickerSignature){
+    lastTrackPickerSignature = sig;
+    if(catalog.length === 0){
+      sel.innerHTML = '<option value="">(no tracks on SD)</option>';
+    } else {
+      const parts = catalog.map(t => {
+        const selected = (t.id === activeId) ? ' selected' : '';
+        // Text content is safe (set via textContent-equivalent by
+        // building innerHTML with our own escape).  Names were
+        // sanitised firmware-side; double-guard here.
+        const safeName = (t.name||'').replace(/[<>&"]/g, '?');
+        const safeId = (t.id||'').replace(/[<>&"]/g, '?');
+        return `<option value="${safeId}"${selected}>${safeName} (${safeId})</option>`;
+      });
+      sel.innerHTML = parts.join('');
+    }
+  }
+
+  // Lock the picker while a session is active — firmware blocks the
+  // switch anyway with a 409-style [track] ERR, but disabling here
+  // gives immediate feedback and avoids a round-trip.
+  sel.disabled = isRecording || catalog.length === 0;
+  btnAuto.disabled = isRecording;
+  const statusEl = document.getElementById('track-picker-status');
+  if(statusEl){
+    if(isRecording){
+      statusEl.className = 'err';
+      statusEl.textContent = 'locked during recording — Save Recording first to switch';
+    } else if(catalog.length === 0){
+      statusEl.className = '';
+      statusEl.textContent = 'waiting for tracks list from firmware...';
+    } else if(activeId){
+      const entry = catalog.find(t => t.id === activeId);
+      statusEl.className = 'ok';
+      statusEl.textContent = 'active: ' + (entry ? (entry.name + ' (' + activeId + ')') : activeId);
+    } else {
+      statusEl.className = '';
+      statusEl.textContent = 'no track selected';
+    }
+  }
+}
+
 function update(state){
   renderSerialBanner(state.serial);
   renderGpsDiag(state.gps_diag);
+  renderTrackPicker(state);
   const line=state.line||{};
   const cur=state.current;
   const trail=state.trail||[];
@@ -2170,6 +2370,51 @@ document.getElementById('btn-rec-stop').addEventListener('click',async ()=>{
   } catch(e){setRecMsg('stop failed: '+e, 'err');}
 });
 
+// --- Track picker -----------------------------------------------
+// `change` fires when the operator picks a different entry from the
+// dropdown.  Sends `track select <id>` and surfaces the ACK /
+// error inline.  We don't force re-fetch of catalog here — the
+// firmware's `[track] selected:` line will update active_track_id
+// via the normal parse path.
+function setTrackPickerStatus(text, cls){
+  var el = document.getElementById('track-picker-status');
+  if(!el) return;
+  el.className = cls || '';
+  el.textContent = text || '';
+}
+document.getElementById('track-select').addEventListener('change', async (ev) => {
+  const id = ev.target.value;
+  if(!id) return;
+  setTrackPickerStatus('Selecting ' + id + '...', '');
+  try {
+    const r = await fetch('/command', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cmd: 'track select ' + id}),
+    });
+    const body = await r.json().catch(() => ({}));
+    if(!r.ok){
+      setTrackPickerStatus('select failed: ' + (body.error || r.status), 'err');
+    } else {
+      setTrackPickerStatus(body.message || ('selected ' + id), 'ok');
+    }
+  } catch(e) { setTrackPickerStatus('select failed: ' + e, 'err'); }
+});
+document.getElementById('btn-track-autodetect').addEventListener('click', async () => {
+  setTrackPickerStatus('Auto-detecting from GPS fix...', '');
+  try {
+    const r = await fetch('/command', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cmd: 'track autodetect'}),
+    });
+    const body = await r.json().catch(() => ({}));
+    if(!r.ok){
+      setTrackPickerStatus('autodetect failed: ' + (body.error || r.status), 'err');
+    } else {
+      setTrackPickerStatus(body.message || 'autodetect confirmed', 'ok');
+    }
+  } catch(e) { setTrackPickerStatus('autodetect failed: ' + e, 'err'); }
+});
+
 poll();
 </script></body></html>
 """
@@ -2179,6 +2424,8 @@ _ALLOWED_COMMANDS = {
     "track cancel",
     "track save",
     "track status",
+    "track autodetect",
+    "tracks list",
     "mark p1",
     "mark p2",
     "recording start",
@@ -2213,6 +2460,17 @@ def _is_allowed_command(cmd: str) -> bool:
             return False
         rate = int(body)
         return 1 <= rate <= 25
+    if cmd.startswith("track select "):
+        # Mirror firmware's is_track_id_valid: track_<1-3 digits>.
+        body = cmd[len("track select "):].strip()
+        if not body.startswith("track_"):
+            return False
+        digits = body[len("track_"):]
+        if not digits.isdigit():
+            return False
+        if not (1 <= len(digits) <= 3):
+            return False
+        return True
     return False
 
 

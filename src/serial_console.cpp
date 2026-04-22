@@ -109,6 +109,27 @@ bool is_track_name_valid(const char* name) {
     return true;
 }
 
+// Track IDs are the filename stem pattern emitted by the firmware's
+// own storage layer — `track_NNN` where NNN is 1-3 digits.  Tight
+// pattern on purpose: live_map must not be able to inject a path
+// traversal or a malformed id that would confuse track_get_by_id
+// or subsequent SD reads.  Matches `^track_\d{1,3}$`.
+bool is_track_id_valid(const char* id) {
+    if (!id || id[0] == '\0') return false;
+    const char* prefix = "track_";
+    for (int i = 0; prefix[i] != '\0'; i++) {
+        if (id[i] != prefix[i]) return false;
+    }
+    const char* digits = id + 6;  // strlen("track_")
+    int ndigits = 0;
+    while (digits[ndigits] != '\0') {
+        if (!isdigit(static_cast<unsigned char>(digits[ndigits]))) return false;
+        ndigits++;
+        if (ndigits > 3) return false;
+    }
+    return ndigits >= 1;
+}
+
 const char* skip_spaces(const char* p) {
     while (*p && isspace(static_cast<unsigned char>(*p))) {
         p++;
@@ -156,7 +177,22 @@ SerialConsoleCommand serial_console_parse(const char* line) {
         return cmd;
     }
 
-    // "track save", "track cancel", "track status", "track draft <name>"
+    // "tracks list" — catalog listing for the live_map track picker.
+    // Checked BEFORE the singular "track" branch because both share the
+    // same prefix; an unconditional starts_with("track") would swallow
+    // "tracks list" as "track s list" (invalid) before we can route it.
+    if (starts_with(trimmed, "tracks")) {
+        const char* tail = skip_spaces(trimmed + strlen("tracks"));
+        if (strcmp(tail, "list") == 0) {
+            cmd.type = SerialConsoleCommandType::TracksList;
+            return cmd;
+        }
+        set_error(&cmd, "tracks expects list");
+        return cmd;
+    }
+
+    // "track save", "track cancel", "track status", "track draft <name>",
+    // "track select <id>", "track autodetect"
     if (starts_with(trimmed, "track")) {
         const char* tail = skip_spaces(trimmed + strlen("track"));
         if (strcmp(tail, "save") == 0) {
@@ -169,6 +205,24 @@ SerialConsoleCommand serial_console_parse(const char* line) {
         }
         if (strcmp(tail, "status") == 0) {
             cmd.type = SerialConsoleCommandType::TrackStatus;
+            return cmd;
+        }
+        if (strcmp(tail, "autodetect") == 0) {
+            cmd.type = SerialConsoleCommandType::TrackAutodetect;
+            return cmd;
+        }
+        if (starts_with(tail, "select")) {
+            const char* id = skip_spaces(tail + strlen("select"));
+            if (!is_track_id_valid(id)) {
+                set_error(&cmd, "track select expects track_NNN");
+                return cmd;
+            }
+            if (strlen(id) >= sizeof(cmd.arg)) {
+                set_error(&cmd, "track id too long");
+                return cmd;
+            }
+            cmd.type = SerialConsoleCommandType::TrackSelect;
+            snprintf(cmd.arg, sizeof(cmd.arg), "%s", id);
             return cmd;
         }
         if (starts_with(tail, "draft")) {
@@ -185,7 +239,7 @@ SerialConsoleCommand serial_console_parse(const char* line) {
             snprintf(cmd.arg, sizeof(cmd.arg), "%s", name);
             return cmd;
         }
-        set_error(&cmd, "track expects draft|save|cancel|status");
+        set_error(&cmd, "track expects draft|save|cancel|status|select|autodetect");
         return cmd;
     }
 

@@ -17,6 +17,17 @@ enum class SerialConsoleCommandType {
     TrackSave,         // "track save"
     TrackCancel,       // "track cancel"
     TrackStatus,       // "track status"
+    // Track selection — lets live_map (and any other serial client)
+    // switch the active track without dropping to WiFi.  Mirrors
+    // the /api/tracks/select HTTP endpoint behaviour: refuses if
+    // currently recording.
+    TrackSelect,       // "track select <id>"
+    TrackAutodetect,   // "track autodetect"
+    // Catalog listing for the live_map track picker.  Emits one
+    // "[tracks-list] <id> <name>" line per track + a
+    // "[tracks-list] end" terminator so the client knows when to
+    // stop collecting.  Cheaper than `ls tracks` + iterated `cat`.
+    TracksList,        // "tracks list"
     // Recording control — lets live_map (and any other serial client)
     // toggle session recording without needing WiFi access.  Matches
     // the /api/recording HTTP endpoint behaviour.

@@ -124,6 +124,63 @@ static void test_gps_stream_rejects_out_of_range_rate() {
     assert(strstr(cmd.error, "1-25") != nullptr);
 }
 
+// --- "track select <id>" --------------------------------------------
+// Live_map's track-picker dropdown emits this when the operator
+// chooses a track.  ID must match the track_NNN pattern the firmware
+// uses on disk; anything else is path-traversal-shaped garbage.
+
+static void test_track_select_command() {
+    SerialConsoleCommand cmd = serial_console_parse("track select track_003");
+    assert(cmd.type == SerialConsoleCommandType::TrackSelect);
+    assert(strcmp(cmd.arg, "track_003") == 0);
+}
+
+static void test_track_select_rejects_missing_id() {
+    SerialConsoleCommand cmd = serial_console_parse("track select");
+    assert(cmd.type == SerialConsoleCommandType::Invalid);
+    assert(strstr(cmd.error, "track_NNN") != nullptr);
+}
+
+static void test_track_select_rejects_path_traversal() {
+    // Critical: a malformed id mustn't be passed to track_get_by_id
+    // / SD reads.  The pattern check rejects anything that isn't
+    // exactly track_<digits>.
+    SerialConsoleCommand cmd = serial_console_parse("track select ../etc/passwd");
+    assert(cmd.type == SerialConsoleCommandType::Invalid);
+}
+
+static void test_track_select_rejects_bad_prefix() {
+    SerialConsoleCommand cmd = serial_console_parse("track select session_001");
+    assert(cmd.type == SerialConsoleCommandType::Invalid);
+}
+
+static void test_track_select_rejects_too_many_digits() {
+    // 4-digit IDs aren't issued by the firmware's storage layer
+    // (max 3 digits per is_track_id_valid).
+    SerialConsoleCommand cmd = serial_console_parse("track select track_1234");
+    assert(cmd.type == SerialConsoleCommandType::Invalid);
+}
+
+static void test_track_autodetect_command() {
+    SerialConsoleCommand cmd = serial_console_parse("track autodetect");
+    assert(cmd.type == SerialConsoleCommandType::TrackAutodetect);
+}
+
+// --- "tracks list" -------------------------------------------------
+// Catalog dump for the dropdown.  The plural prefix matters — must
+// not be eaten by the singular `track` branch.
+
+static void test_tracks_list_command() {
+    SerialConsoleCommand cmd = serial_console_parse("tracks list");
+    assert(cmd.type == SerialConsoleCommandType::TracksList);
+}
+
+static void test_tracks_unknown_subcommand_rejected() {
+    SerialConsoleCommand cmd = serial_console_parse("tracks foo");
+    assert(cmd.type == SerialConsoleCommandType::Invalid);
+    assert(strstr(cmd.error, "list") != nullptr);
+}
+
 int main() {
     test_help_command_parses();
     test_ls_command_trims_whitespace();
@@ -146,5 +203,13 @@ int main() {
     test_gps_stream_rate_command();
     test_gps_stream_off_command();
     test_gps_stream_rejects_out_of_range_rate();
+    test_track_select_command();
+    test_track_select_rejects_missing_id();
+    test_track_select_rejects_path_traversal();
+    test_track_select_rejects_bad_prefix();
+    test_track_select_rejects_too_many_digits();
+    test_track_autodetect_command();
+    test_tracks_list_command();
+    test_tracks_unknown_subcommand_rejected();
     return 0;
 }
