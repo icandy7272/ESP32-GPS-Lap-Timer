@@ -121,12 +121,32 @@ void session_start_recording(const char* track_name)
 
 bool session_stop_recording()
 {
+    // Milestone log so long-session stop hangs can be diagnosed from
+    // the boot/serial log alone.  2026-04-22 walking test: short
+    // recordings save fine, a 10-minute session hung with LCD rec=1
+    // and zero serial output from either session_stop_recording or
+    // storage_end_session.  Without per-step markers there is no way
+    // to tell whether the command reached the handler, which mutex
+    // it's stuck on, or how far storage_end_session got before
+    // blocking on SD.  Each milestone emits the current uptime in
+    // ms so off-device analysis can compute delta-times between
+    // steps.  Cheap — ~8 lines per stop event.
+    Serial.printf("[stop-trace] session_stop: entry t=%lu\n",
+                  (unsigned long)millis());
+
     bool was_recording = false;
     xSemaphoreTake(session_mutex, portMAX_DELAY);
     was_recording = session_state.is_recording;
     xSemaphoreGive(session_mutex);
 
+    Serial.printf("[stop-trace] session_stop: mutex1_ok was_recording=%d "
+                  "phase=%d t=%lu\n",
+                  was_recording ? 1 : 0, (int)s_phase,
+                  (unsigned long)millis());
+
     if (s_phase != SESSION_RECORDING && !was_recording) {
+        Serial.printf("[stop-trace] session_stop: not_recording_exit t=%lu\n",
+                      (unsigned long)millis());
         return false;
     }
 
@@ -151,6 +171,9 @@ bool session_stop_recording()
     session_state.current_lap_start_us = 0;
     xSemaphoreGive(session_mutex);
 
+    Serial.printf("[stop-trace] session_stop: is_recording_cleared "
+                  "t=%lu\n", (unsigned long)millis());
+
     // NOTE: do NOT call lap_timer_reset() here.  Resetting would set
     // s_first_crossing back to true, which means the next start/finish
     // crossing would re-trigger handle_finish_crossing()'s first-crossing
@@ -159,7 +182,12 @@ bool session_stop_recording()
     // now guards the auto-start path on SESSION_PHASE so crossings are
     // ignored while phase == SESSION_FINISHED.
 
+    Serial.printf("[stop-trace] session_stop: calling_end_session t=%lu\n",
+                  (unsigned long)millis());
     bool saved = storage_end_session();
+    Serial.printf("[stop-trace] session_stop: end_session_returned "
+                  "saved=%d t=%lu\n",
+                  saved ? 1 : 0, (unsigned long)millis());
     s_phase = SESSION_FINISHED;
 
     if (saved) {

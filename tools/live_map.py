@@ -876,7 +876,17 @@ def _command_timeout_s(cmd: str) -> float:
     if cmd in ("mark p1", "mark p2"):
         return 8.0
     if cmd == "recording stop":
-        return 5.0
+        # Long sessions (several minutes of 25 Hz fixes) produce
+        # 1-2 MB VBO tmp files.  SD-card sync + rename on that size
+        # can legitimately take 5-10 s on a slow / busy / fragmented
+        # card.  The walking test on 2026-04-22 reproduced a 10-min
+        # session hanging at save; the firmware now emits detailed
+        # [stop-trace] milestones so we can tell whether the delay
+        # is real SD work or a true deadlock.  Generous 15 s window
+        # lets a slow-but-not-deadlocked stop complete before we
+        # show the operator a red error.  If genuinely deadlocked,
+        # the trace lines pinpoint the step.
+        return 15.0
     if cmd == "track save":
         return 3.0
     return 2.5

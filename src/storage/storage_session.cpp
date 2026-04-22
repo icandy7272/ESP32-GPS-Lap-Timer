@@ -64,6 +64,8 @@ bool storage_start_session(const char* track_name) {
 }
 
 bool storage_end_session() {
+    Serial.printf("[stop-trace] end_session: entry active=%d t=%lu\n",
+                  s_session_active ? 1 : 0, (unsigned long)millis());
     if (!s_session_active) {
         return false;
     }
@@ -82,6 +84,7 @@ bool storage_end_session() {
     VboEntry pending;
     char drain_line_buf[VBO_LINE_BUF_LEN];
     int drained = 0;
+    uint32_t drain_start = millis();
     while (xQueueReceive(vbo_write_queue, &pending, 0) == pdTRUE) {
         format_vbo_line(&pending, drain_line_buf, sizeof(drain_line_buf));
         xSemaphoreTake(spi_mutex, portMAX_DELAY);
@@ -92,23 +95,45 @@ bool storage_end_session() {
         }
         drained++;
     }
+    Serial.printf("[stop-trace] end_session: drain_done drained=%d "
+                  "took_ms=%lu t=%lu\n",
+                  drained, (unsigned long)(millis() - drain_start),
+                  (unsigned long)millis());
     if (drained > 0) {
         Serial.printf("[storage] drained %d pending VBO entries at stop\n", drained);
     }
 
     s_session_active = false;
 
+    uint32_t t0 = millis();
     xSemaphoreTake(spi_mutex, portMAX_DELAY);
+    Serial.printf("[stop-trace] end_session: spi_mutex_acquired t=%lu\n",
+                  (unsigned long)millis());
     s_vbo_file.write("\r\n[laptiming]\r\n", 15);
 
     write_laptiming_lines();
+    Serial.printf("[stop-trace] end_session: laptiming_written "
+                  "took_ms=%lu\n",
+                  (unsigned long)(millis() - t0));
 
+    uint32_t t_flush = millis();
     s_vbo_file.flush();
+    Serial.printf("[stop-trace] end_session: flushed took_ms=%lu\n",
+                  (unsigned long)(millis() - t_flush));
+    uint32_t t_sync = millis();
     s_vbo_file.sync();
+    Serial.printf("[stop-trace] end_session: synced took_ms=%lu\n",
+                  (unsigned long)(millis() - t_sync));
+    uint32_t t_close = millis();
     s_vbo_file.close();
+    Serial.printf("[stop-trace] end_session: closed took_ms=%lu\n",
+                  (unsigned long)(millis() - t_close));
     xSemaphoreGive(spi_mutex);
 
+    uint32_t t_dirsync = millis();
     sync_directory("/");
+    Serial.printf("[stop-trace] end_session: dirsync_root took_ms=%lu\n",
+                  (unsigned long)(millis() - t_dirsync));
 
     // Be defensive against a missing sessions/ directory at stop time.
     // storage_init() creates it, but if the FAT metadata was damaged or
@@ -121,9 +146,15 @@ bool storage_end_session() {
     char final_path[PATH_BUF_LEN];
     build_final_path(final_path, sizeof(final_path));
 
+    uint32_t t_rename = millis();
     xSemaphoreTake(spi_mutex, portMAX_DELAY);
     bool renamed = sd.rename(TMP_FILENAME, final_path);
     xSemaphoreGive(spi_mutex);
+    Serial.printf("[stop-trace] end_session: rename renamed=%d "
+                  "took_ms=%lu t=%lu\n",
+                  renamed ? 1 : 0,
+                  (unsigned long)(millis() - t_rename),
+                  (unsigned long)millis());
 
     // Close the sidecar before renaming.  Any truncation/corruption
     // from a concurrent fs access is avoided by draining writes above
@@ -156,10 +187,18 @@ bool storage_end_session() {
                               LAP_SIDECAR_TMP_FILENAME, sidecar_final);
             }
         }
+        uint32_t t_dirsync2 = millis();
         sync_directory(SESSIONS_DIR);
+        Serial.printf("[stop-trace] end_session: dirsync_sessions "
+                      "took_ms=%lu\n",
+                      (unsigned long)(millis() - t_dirsync2));
         Serial.printf("[storage] session saved: %s (%u bytes)\n",
                       final_path, s_bytes_written);
+        uint32_t t_meta = millis();
         write_session_metadata_json(final_path);
+        Serial.printf("[stop-trace] end_session: metadata_written "
+                      "took_ms=%lu\n",
+                      (unsigned long)(millis() - t_meta));
     } else {
         Serial.printf("[storage] WARN: rename failed, data in %s\n", TMP_FILENAME);
         // Leave the sidecar at LAP_SIDECAR_TMP_FILENAME too — both
