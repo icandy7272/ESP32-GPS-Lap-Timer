@@ -56,7 +56,14 @@ int ubx_build_cfg_sbas_enable(uint8_t* out, size_t out_cap);
 
 // Build a UBX-CFG-GNSS (0x06 0x3E) frame enabling all major L1
 // constellations on a u-blox M9N: GPS L1C/A, SBAS L1C/A, Galileo
-// E1, BeiDou B1I, QZSS L1C/A+L1S, GLONASS L1OF.
+// E1, BeiDou B1I, QZSS L1C/A, GLONASS L1OF.
+//
+// QZSS is deliberately L1C/A only (sigCfgMask 0x01, not 0x05): the
+// L1S safety signal is Japan-region specific, and a previous encoding
+// of 0x00010005 accidentally set bit 2 (an undefined sigCfgMask bit)
+// which u-blox NAKs silently for the entire CFG-GNSS message — taking
+// the whole multi-constellation config down with it.  Keep it L1C/A.
+// See src/ubx_builder.cpp for the full decision log.
 //
 // Each of the 6 config blocks has its enable bit set and a
 // sigCfgMask appropriate for M9N's L1-only hardware.

@@ -467,6 +467,78 @@ def main() -> int:
         True,
     )
 
+    # --- codex follow-up review 2026-04-22 regressions ------------------
+    # Five bugs that were found in the fix-pass commit itself, now
+    # pinned so a revert or refactor regression trips a host test
+    # instead of a walking test.
+    ack_matcher = live_map._match_command_ack
+
+    # Generic [draft] ERR: must NOT hijack a recording-command wait.
+    # Before the cmd-gated fallback was added, an unrelated draft
+    # error could falsely terminate the wrong pending command.
+    check(
+        "draft ERR does not attribute to recording start",
+        ack_matcher("recording start", "[draft] ERR: no active draft"),
+        None,
+    )
+    # Conversely, a recording ERR must not hijack a draft-command wait.
+    check(
+        "recording ERR does not attribute to mark p1",
+        ack_matcher("mark p1", "[recording] ERR: stop refused — still active"),
+        None,
+    )
+    # But the family-matched ones still work: [draft] ERR on mark p1
+    # should still surface to mark-family commands.
+    draft_err_on_draft = ack_matcher(
+        "mark p1", "[draft] ERR: no draft in progress")
+    check(
+        "draft ERR still attributes to mark p1 (same family)",
+        draft_err_on_draft is not None and draft_err_on_draft[0] is False,
+        True,
+    )
+    rec_err_on_rec = ack_matcher(
+        "recording start",
+        "[recording] ERR: session_start_recording refused (wrong phase)")
+    check(
+        "recording ERR still attributes to recording start (same family)",
+        rec_err_on_rec is not None and rec_err_on_rec[0] is False,
+        True,
+    )
+
+    # _track_discovery JSON capture state is cleared by the
+    # reconnect helper even when ls_reply_seen / first_track survive.
+    live_map._track_discovery["in_json"] = True
+    live_map._track_discovery["brace_depth"] = 2
+    live_map._track_discovery["buf"] = ["{", "  \"name\": \"x\","]
+    live_map._track_discovery["ls_reply_seen"] = True
+    live_map._track_discovery["first_track"] = "track_042.json"
+    live_map._reset_track_discovery_json_capture()
+    check(
+        "json reset clears in_json",
+        live_map._track_discovery["in_json"],
+        False,
+    )
+    check(
+        "json reset clears brace_depth",
+        live_map._track_discovery["brace_depth"],
+        0,
+    )
+    check(
+        "json reset clears buf",
+        live_map._track_discovery["buf"],
+        [],
+    )
+    check(
+        "json reset preserves ls_reply_seen",
+        live_map._track_discovery["ls_reply_seen"],
+        True,
+    )
+    check(
+        "json reset preserves first_track",
+        live_map._track_discovery["first_track"],
+        "track_042.json",
+    )
+
     if FAIL_COUNT == 0:
         print("test_live_map_parse: OK")
         return 0

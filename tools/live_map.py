@@ -542,6 +542,24 @@ _track_discovery = {
     "buf": [],
 }
 
+
+def _reset_track_discovery_json_capture() -> None:
+    """Drop any in-flight JSON capture state.
+
+    If a ``cat tracks/*.json`` reply is cut mid-stream (USB drop,
+    board reboot with bytes in transit, user pressing stop between
+    braces), the parser's brace-depth counter stays positive and
+    ``in_json`` stays True forever, causing ``parse_line()`` to
+    swallow every subsequent line as part of the same (never-ending)
+    JSON.  Call this on reconnect / reboot so the next cat can start
+    fresh.  ls_reply_seen / first_track are preserved because those
+    are SD-card facts that don't change across a simple reconnect.
+    (Codex review 2026-04-22.)
+    """
+    _track_discovery["in_json"] = False
+    _track_discovery["brace_depth"] = 0
+    _track_discovery["buf"] = []
+
 # Reboot detection + auto re-bootstrap.  Firmware's live-stream rate
 # lives in a static uint8_t that resets to 0 on every ESP32 reboot, so
 # after a board reset the 10 Hz [gps-live] feed silently falls back to
@@ -776,9 +794,23 @@ def _match_command_ack(cmd: str, line: str) -> tuple[bool, str] | None:
             return (False,
                     "stopped but final file not committed — check SD card")
 
-    if line.startswith("[draft] ERR:"):
+    # Gate the generic ERR: fallbacks by command family so an
+    # unrelated concurrent event can't terminate the wrong pending
+    # command.  Before this gating the pattern was:
+    #   caller waits for ACK of "recording start"
+    #   firmware prints "[draft] ERR: no active draft" (unrelated)
+    #   matcher returns (False, "no active draft") → caller sees
+    #     recording-start as failed with a confusing message
+    # (codex review 2026-04-22 MEDIUM).
+    _DRAFT_FAMILY = {
+        "mark p1", "mark p2", "track save", "track cancel",
+    }
+    is_draft_cmd = cmd in _DRAFT_FAMILY or cmd.startswith("track draft ")
+    is_recording_cmd = cmd in {"recording start", "recording stop"}
+
+    if is_draft_cmd and line.startswith("[draft] ERR:"):
         return (False, line.split("[draft] ERR:", 1)[1].strip())
-    if line.startswith("[recording] ERR:"):
+    if is_recording_cmd and line.startswith("[recording] ERR:"):
         return (False, line.split("[recording] ERR:", 1)[1].strip())
 
     if cmd.startswith("track draft "):
@@ -918,6 +950,14 @@ def serial_reader() -> None:
                     # partial line from the previous session so we
                     # don't splice across the reconnect.
                     buf = b""
+                    # Drop any mid-JSON capture state so a
+                    # interrupted `cat tracks/...json` reply from
+                    # the previous session doesn't permanently
+                    # swallow post-reconnect lines (codex review
+                    # 2026-04-22 MEDIUM: in_json/brace_depth were
+                    # the only _track_discovery fields left behind
+                    # on reconnect).
+                    _reset_track_discovery_json_capture()
             else:
                 time.sleep(0.2)
             continue
@@ -1035,6 +1075,14 @@ def _kick_reboot_bootstrap() -> None:
     worker.
     """
     def _run() -> None:
+        # A board reboot interrupts whatever was streaming —
+        # including a `cat tracks/*.json` response that the parser
+        # was mid-way through.  Clear the JSON capture so the fresh
+        # cat we're about to issue can be read cleanly rather than
+        # being appended to a stale in-flight buffer (codex review
+        # 2026-04-22 MEDIUM).
+        _reset_track_discovery_json_capture()
+
         # Small initial settle so the first retry has a chance to
         # land if the boot is fast (fix already cached).  Longer
         # waits happen via the per-retry sleep below.
@@ -1121,7 +1169,13 @@ def track_query_bootstrap() -> None:
     time.sleep(4)
 
     _send_runtime_bootstrap_commands()
-    _reboot_watch["last_bootstrap_ts"] = time.time()
+    # Seed the reboot detector's debounce timestamp so the first live
+    # boot banner after startup doesn't re-kick the bootstrap
+    # immediately.  Held under _reboot_watch_lock for consistency with
+    # every other write to this dict (codex follow-up review found
+    # this was the only remaining unsynchronised access).
+    with _reboot_watch_lock:
+        _reboot_watch["last_bootstrap_ts"] = time.time()
 
     # Poll up to 5 s for the ls reply (reader thread populates first_track).
     for _ in range(50):

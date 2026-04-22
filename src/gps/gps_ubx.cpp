@@ -266,16 +266,37 @@ static void ubx_poll_cfg_gnss_and_log(uint32_t timeout_ms) {
                                 | (static_cast<uint16_t>(b) << 8));
                 ck_a_run = static_cast<uint8_t>(ck_a_run + b);
                 ck_b_run = static_cast<uint8_t>(ck_b_run + ck_a_run);
+                // Reject implausible declared lengths BEFORE entering
+                // Payload or Skip.  u-blox M9N legitimate frames in
+                // our stream (ACK/NAK, CFG-GNSS poll reply) are all
+                // ≤ 128 bytes; SKIP_MAX bounds a false-sync to
+                // ~45 ms of UART time at 115200 baud so a single
+                // bogus length can't eat the entire 1500 ms poll
+                // window and make us miss a valid CFG-GNSS reply
+                // (codex follow-up review: previously "declared_len +
+                // 2" was blindly burned for any length up to 65535).
+                {
+                    constexpr uint16_t SKIP_MAX = 512;
+                    if (expect_len > SKIP_MAX) {
+                        Serial.printf(
+                            "[gps-verify] WARN: implausible UBX length %u "
+                            "for cls=0x%02X id=0x%02X — likely false sync, "
+                            "resuming scan\n",
+                            static_cast<unsigned>(expect_len),
+                            cur_cls, cur_id);
+                        state = St::Idle;
+                        break;
+                    }
+                }
                 if (cur_cls == 0x06 && cur_id == 0x3E && expect_len > 0
                     && expect_len <= MAX_RESP) {
                     got = 0;
                     resp_len = 0;
                     state = St::Payload;
                 } else {
-                    // Non-target frame (or zero-length echo, or
-                    // overlong garbage) — skip its body + checksum so
-                    // we resume sync AFTER it ends.  declared_len + 2
-                    // is always correct for a well-formed UBX frame.
+                    // Non-target frame (or zero-length echo) — skip
+                    // its body + checksum so we resume sync AFTER it
+                    // ends.  Length was bounds-checked above.
                     skip_remaining = static_cast<uint32_t>(expect_len) + 2;
                     state = St::Skip;
                 }

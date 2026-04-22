@@ -219,9 +219,27 @@ static void test_cfg_gnss_all() {
         0x00010001,  // QZSS L1C/A
         0x00010001,  // GLONASS L1OF
     };
+    // Per-block reserved/max tracking channels.  u-blox strictly
+    // validates these against M9N's 32-channel engine: the sum of
+    // resTrkCh across all enabled blocks MUST be <= 32 or the whole
+    // CFG-GNSS message is NAKed (same failure mode as the QZSS
+    // sigCfgMask bug from 2026-04-21).  Pinning the exact bytes here
+    // so any future edit that pushes the total over budget fails a
+    // host test instead of a walking test.  (codex review
+    // 2026-04-22 MEDIUM: the old test pinned only IDs and flags.)
+    constexpr uint8_t EXPECTED_RES_TRK[6] = { 8, 1, 4, 8, 0, 8 };
+    constexpr uint8_t EXPECTED_MAX_TRK[6] = { 16, 3, 8, 16, 3, 14 };
+    int res_trk_sum = 0;
     for (int b = 0; b < 6; b++) {
         int base = FIRST_BLOCK + b * BLOCK;
         assert_eq_byte("gnss_block_id", base, frame[base], EXPECTED_GNSS_IDS[b]);
+        assert_eq_byte("gnss_block_resTrkCh",
+                       base + 1, frame[base + 1], EXPECTED_RES_TRK[b]);
+        assert_eq_byte("gnss_block_maxTrkCh",
+                       base + 2, frame[base + 2], EXPECTED_MAX_TRK[b]);
+        assert_eq_byte("gnss_block_reserved1",
+                       base + 3, frame[base + 3], 0x00);
+        res_trk_sum += EXPECTED_RES_TRK[b];
         uint32_t got_flags =
             static_cast<uint32_t>(frame[base + 4])
             | (static_cast<uint32_t>(frame[base + 5]) << 8)
@@ -233,6 +251,16 @@ static void test_cfg_gnss_all() {
                     b, got_flags, EXPECTED_FLAGS[b]);
             fail_count++;
         }
+    }
+
+    // Enforce the M9N 32-channel reservation budget.  29 is the
+    // current total; anything over 32 is a receiver-NAK trap.
+    if (res_trk_sum > 32) {
+        fprintf(stderr,
+                "FAIL: gnss resTrkCh sum %d exceeds M9N 32-channel "
+                "engine budget — u-blox will NAK CFG-GNSS\n",
+                res_trk_sum);
+        fail_count++;
     }
 
     // Specifically check Galileo (block 2) and BeiDou (block 3) are
