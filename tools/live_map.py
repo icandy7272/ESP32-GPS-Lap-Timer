@@ -293,8 +293,17 @@ _TRACKS_LIST_ENTRY_RE = re.compile(
 #   - /api/tracks/select HTTP path (browser phone UI)
 # Any of them can arrive at any time, so we update state["active_track_*"]
 # from both lines uniformly.
+# Anchored to the full line + greedy name capture.  Older pattern
+# `\(([^)]*)\)` stopped at the first `)`, so a valid name like
+# `Home (North)` parsed as `Home (North` — same class of bug the
+# `[draft] saved:` regex fixed in 45a66ad.  Using `(.*)` greedy + `\)$`
+# anchor lets the engine extend the name capture until the final `)`
+# that matches end-of-line.  The id constraint `track_\d{1,3}` also
+# rejects garbage-prefixed lines that would otherwise slip past
+# `.search()` with a lax `(\S+)` id pattern.  Codex review
+# 2026-04-22 third round, Medium.
 _TRACK_SELECTED_RE = re.compile(
-    r'\[track\]\s+(?:selected|auto-detected):\s+(track_\d{1,3})\s+\(([^)]*)\)'
+    r'^\[track\]\s+(?:selected|auto-detected):\s+(track_\d{1,3})\s+\((.*)\)$'
 )
 _SERIAL_HEADER_RE = re.compile(r"^\[serial\] --- tracks/([^ ]+) ---")
 _DRAFT_STARTED_RE = re.compile(r"\[draft\] started: (\S+)")
@@ -305,13 +314,20 @@ _DRAFT_P2_RE = re.compile(
     rf"\[draft\] p2\s*=\s*\(({_FLOAT}),\s*({_FLOAT})\)(?:\s+heading=({_FLOAT}))?"
 )
 _DRAFT_SAVED_RE = re.compile(
-    # Name capture uses non-greedy `(.+?)` anchored on the literal
-    # `) length=` that always follows the closing paren on the
-    # firmware side.  The previous `([^)]+)` stopped at the FIRST
-    # `)`, which silently broke names like `Home (North)` — firmware
-    # accepts those (is_track_name_valid only rejects control chars
-    # + `"\\/:*?<>|`).  Codex review 2026-04-22 Medium.
-    rf"\[draft\] saved: (\S+) \((.+?)\) length=({_FLOAT})m heading=({_FLOAT})"
+    # Fully anchored + greedy name capture + track_\d{1,3} id
+    # constraint.  Three concerns in one pattern:
+    #   1) Names with `)` like `Home (North)` parse correctly
+    #      because `(.*)` extends to the last `) length=` before EOL.
+    #   2) Delimiter-injection names like `Foo) length=1.0m heading=2.0`
+    #      (which is_track_name_valid accepts) can't desync the parse
+    #      because the `$` anchor forces the FINAL length/heading
+    #      tokens to come from the firmware suffix, not the spoofed
+    #      interior.
+    #   3) Garbage-prefixed lines are rejected by the `^` anchor +
+    #      strict id shape, so a malicious serial injection can't
+    #      poison catalog/active state through a loose search().
+    # Codex review 2026-04-22 third round, Medium+Low.
+    rf"^\[draft\] saved: (track_\d{{1,3}}) \((.*)\) length=({_FLOAT})m heading=({_FLOAT})$"
 )
 # Spread + confidence tier appended to `[draft] p1/p2` lines by the
 # 5-second sampling path.  Optional so old firmwares that do not emit
@@ -550,13 +566,26 @@ def _parse_draft_event(line: str) -> None:
             # (codex review 2026-04-22 Finding 2).  Catalog update is
             # idempotent by id so a re-emit of the same save line
             # doesn't duplicate.
-            cat = state["tracks_catalog"]
-            for entry in cat:
-                if entry.get("id") == saved_id:
-                    entry["name"] = saved_name
-                    break
-            else:
-                cat.append({"id": saved_id, "name": saved_name})
+            #
+            # Upsert into BOTH the public catalog AND any in-flight
+            # pending refresh.  Without the pending upsert, if a
+            # `tracks list` refresh was mid-stream (begin received
+            # but end not yet received) when the save fired, the
+            # final `end` swap at [tracks-list] end would replace
+            # the public catalog with pending and silently drop the
+            # just-saved entry.  Codex review 2026-04-22 third
+            # round, Low.
+            def _upsert_track_list(lst):
+                for entry in lst:
+                    if entry.get("id") == saved_id:
+                        entry["name"] = saved_name
+                        return
+                lst.append({"id": saved_id, "name": saved_name})
+
+            _upsert_track_list(state["tracks_catalog"])
+            pending = state.get("_tracks_catalog_pending")
+            if pending is not None:
+                _upsert_track_list(pending)
             state["active_track_id"] = saved_id
             state["active_track_name"] = saved_name
         # Re-read the just-saved file over serial so the red "active
@@ -789,7 +818,13 @@ def parse_line(line: str) -> None:
     # Medium: previously append/update-only so deleted tracks stayed
     # visible forever).  Mid-session refresh is supported — a new
     # `begin` cleanly restarts the pending accumulator.
-    if line.startswith("[tracks-list] begin"):
+    # Exact match (after strip) rather than startswith so a garbage
+    # serial line like `[tracks-list] beginning with junk` can't be
+    # misread as a refresh-begin signal.  Firmware emits the markers
+    # verbatim; any prefix overlap is defensive hardening only.
+    # Codex review 2026-04-22 third round, Low.
+    stripped = line.strip()
+    if stripped == "[tracks-list] begin":
         with state_lock:
             state["_tracks_catalog_pending"] = []
     m = _TRACKS_LIST_ENTRY_RE.search(line)
@@ -812,7 +847,7 @@ def parse_line(line: str) -> None:
                         break
                 else:
                     cat.append({"id": tid, "name": tname})
-    if line.startswith("[tracks-list] end"):
+    if stripped == "[tracks-list] end":
         with state_lock:
             pending = state.get("_tracks_catalog_pending")
             if pending is not None:
@@ -863,14 +898,16 @@ def parse_line(line: str) -> None:
             or line.startswith("[track] selected:") \
             or line.startswith("[track] auto-detected:") \
             or line.startswith("[track] ERR:") \
-            or line.startswith("[tracks-list] begin") \
-            or line.startswith("[tracks-list] end"):
+            or line.strip() == "[tracks-list] begin" \
+            or line.strip() == "[tracks-list] end":
         # Only the begin/end MARKERS surface in the events feed —
         # not every catalog entry.  A 15-track catalog was producing
         # 17 events per `tracks list` (1 begin + 15 entries + 1 end),
         # noisily spamming the UI on every reboot bootstrap.  The
         # markers alone satisfy _wait_for_command_ack's scan for
         # [tracks-list] end (codex review 2026-04-22 Finding 3).
+        # Exact-match required so garbage like `[tracks-list] ending
+        # ...` can't false-trigger an ACK.
         # [stop-trace] is the firmware's per-step diagnostic emitted
         # during session_stop_recording / storage_end_session.  Must
         # be in the event feed so the operator can see which
@@ -1038,8 +1075,10 @@ def _match_command_ack(cmd: str, line: str) -> tuple[bool, str] | None:
     if cmd == "tracks list":
         # End-of-list marker confirms the firmware actually processed
         # the listing request — useful as a liveness probe during
-        # bootstrap without blocking on a specific entry.
-        if "[tracks-list] end" in line:
+        # bootstrap without blocking on a specific entry.  Exact
+        # match so garbage like `[tracks-list] ending ...` can't
+        # false-ACK.
+        if line.strip() == "[tracks-list] end":
             return (True, "catalog refreshed")
         return None
 

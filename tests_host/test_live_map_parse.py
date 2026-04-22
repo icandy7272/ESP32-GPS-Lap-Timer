@@ -766,6 +766,116 @@ def main() -> int:
         check("paren-in-name active name captured verbatim",
               live_map.state["active_track_name"], "Home (North)")
 
+    # Codex review 2026-04-22 third round Medium:
+    # _TRACK_SELECTED_RE had the SAME parens bug as _DRAFT_SAVED_RE.
+    # `[track] selected:` / `auto-detected:` lines carry the track
+    # name verbatim; anchored greedy capture should handle embedded
+    # parens correctly.
+    with live_map.state_lock:
+        live_map.state["active_track_id"] = None
+        live_map.state["active_track_name"] = None
+    live_map.parse_line("[track] selected: track_013 (Home (North))")
+    with live_map.state_lock:
+        check("[track] selected with parens captures full name",
+              live_map.state["active_track_name"], "Home (North)")
+        check("[track] selected with parens captures id",
+              live_map.state["active_track_id"], "track_013")
+    live_map.parse_line("[track] auto-detected: track_014 (Outer Loop (E))")
+    with live_map.state_lock:
+        check("[track] auto-detected with parens captures full name",
+              live_map.state["active_track_name"], "Outer Loop (E)")
+        check("[track] auto-detected with parens captures id",
+              live_map.state["active_track_id"], "track_014")
+
+    # Codex review 2026-04-22 third round Medium:
+    # `is_track_name_valid` accepts characters like `)`, ` `, `=`,
+    # digits, `.`, `m`, and letters, which means a valid name could
+    # contain a fake `) length=<float>m heading=<float>` suffix and
+    # spoof the parser.  The anchored-greedy regex + `$` end-of-line
+    # forces the FINAL length/heading to come from the firmware
+    # suffix, so the spoofed interior just becomes part of the name.
+    with live_map.state_lock:
+        live_map.state["tracks_catalog"] = []
+        live_map.state["_tracks_catalog_pending"] = None
+        live_map.state["active_track_id"] = None
+        live_map.state["active_track_name"] = None
+    spoof = ("[draft] saved: track_015 (Foo) length=1.0m heading=2.0) "
+             "length=8.33m heading=90.0")
+    live_map.parse_line(spoof)
+    with live_map.state_lock:
+        cat = live_map.state["tracks_catalog"]
+        # The outer length/heading (the REAL firmware suffix) must
+        # be the ones captured.  Name should include the entire
+        # spoofed interior.
+        check("delimiter-in-name spoof: catalog has one entry",
+              len(cat), 1)
+        if cat:
+            check("spoof id",
+                  cat[0]["id"], "track_015")
+            check("spoof name absorbs spoofed interior",
+                  cat[0]["name"], "Foo) length=1.0m heading=2.0")
+
+    # Codex review 2026-04-22 third round Low:
+    # Garbage-prefixed lines must not slip past search() with the
+    # loose (\S+) id.  Anchoring `^[draft] saved:` + id constraint
+    # `track_\d{1,3}` blocks these.
+    with live_map.state_lock:
+        live_map.state["tracks_catalog"] = []
+        live_map.state["active_track_id"] = None
+        live_map.state["active_track_name"] = None
+    live_map.parse_line(
+        "garbage [draft] saved: ../../evil (Injected) "
+        "length=1.0m heading=2.0")
+    with live_map.state_lock:
+        check("garbage-prefixed [draft] saved ignored",
+              live_map.state["tracks_catalog"], [])
+        check("garbage-prefixed line does not flip active id",
+              live_map.state["active_track_id"], None)
+    live_map.parse_line(
+        "[draft] saved: ../../evil (Injected) length=1.0m heading=2.0")
+    with live_map.state_lock:
+        check("bad-id [draft] saved ignored",
+              live_map.state["tracks_catalog"], [])
+
+    # Codex review 2026-04-22 third round Low:
+    # Exact-match [tracks-list] begin/end, not startswith.
+    # `[tracks-list] beginning something` or `[tracks-list] endjunk`
+    # must not false-trigger.
+    with live_map.state_lock:
+        live_map.state["_tracks_catalog_pending"] = None
+    live_map.parse_line("[tracks-list] beginning of time")
+    with live_map.state_lock:
+        check("[tracks-list] beginning does not open pending",
+              live_map.state["_tracks_catalog_pending"], None)
+
+    # Codex review 2026-04-22 third round Low:
+    # If a draft saves WHILE a tracks-list refresh is mid-stream
+    # (begin received, end not yet), the new entry must be upserted
+    # into BOTH the public catalog AND the pending accumulator so
+    # the `end` atomic swap doesn't silently drop it.
+    with live_map.state_lock:
+        live_map.state["tracks_catalog"] = [
+            {"id": "track_001", "name": "Old"},
+        ]
+        live_map.state["_tracks_catalog_pending"] = None
+        live_map.state["active_track_id"] = "track_001"
+        live_map.state["active_track_name"] = "Old"
+    live_map.parse_line("[tracks-list] begin")
+    live_map.parse_line('[tracks-list] track_001 "Old"')
+    # Mid-stream draft save.
+    live_map.parse_line(
+        "[draft] saved: track_042 (Fresh) length=10.0m heading=180.0")
+    # End closes the swap.  Without the dual-upsert, track_042 would
+    # be lost because pending has no record of it.
+    live_map.parse_line("[tracks-list] end")
+    with live_map.state_lock:
+        cat = live_map.state["tracks_catalog"]
+        ids = sorted(t["id"] for t in cat)
+        check("mid-refresh draft save survives atomic swap",
+              "track_042" in ids, True)
+        check("active id after mid-refresh save",
+              live_map.state["active_track_id"], "track_042")
+
     # --- Finding 3 narrowing: only begin/end in events, not entries ---
     # Previously the filter included every [tracks-list] entry, so a
     # 15-track catalog spammed 17 events per `tracks list`.  Now the
