@@ -110,6 +110,11 @@ state = {
     # updates are idempotent and the UI can render a dropdown.
     # Stored as list of {id, name} for stable ordering.
     "tracks_catalog": [],
+    # Transient accumulator for an in-flight refresh.  None when no
+    # refresh is active; a list while we're between [tracks-list]
+    # begin..end.  Atomically swapped into tracks_catalog on end so
+    # the UI never sees a half-rebuilt list.
+    "_tracks_catalog_pending": None,
     # Name of the track currently active on the firmware.  Sourced
     # from `[track] selected:` / `[track] auto-detected:` ACK lines
     # and from the firmware's session_state.track_name echo in
@@ -752,27 +757,46 @@ def parse_line(line: str) -> None:
                 "ts": time.time(),
             }
 
-    # Track catalog (dropdown picker).  The firmware emits one
-    # [tracks-list] line per track when we send `tracks list`, then a
-    # terminator `[tracks-list] end`.  Accumulate in a worker dict
-    # keyed by id so a mid-stream refresh (e.g. after track save)
-    # idempotently updates the name.
+    # Track catalog (dropdown picker).  The firmware emits a
+    # [tracks-list] begin marker, one entry per track, then a
+    # [tracks-list] end terminator.  The begin marker is the clean-
+    # slate point: swap the pending list for the old one on `end` so
+    # a refresh (e.g. after a track_delete on the phone UI) doesn't
+    # leave stale entries in the dropdown (codex review 2026-04-22
+    # Medium: previously append/update-only so deleted tracks stayed
+    # visible forever).  Mid-session refresh is supported — a new
+    # `begin` cleanly restarts the pending accumulator.
+    if line.startswith("[tracks-list] begin"):
+        with state_lock:
+            state["_tracks_catalog_pending"] = []
     m = _TRACKS_LIST_ENTRY_RE.search(line)
     if m:
         tid, tname = m.group(1), m.group(2)
         with state_lock:
-            cat = state["tracks_catalog"]
-            for entry in cat:
-                if entry.get("id") == tid:
-                    entry["name"] = tname
-                    break
+            # If we're between begin..end, accumulate into the
+            # pending list.  If we missed the begin marker (older
+            # firmware, or we connected mid-stream), fall back to the
+            # old upsert-in-place semantics so we still collect
+            # something useful.
+            pending = state.get("_tracks_catalog_pending")
+            if pending is not None:
+                pending.append({"id": tid, "name": tname})
             else:
-                cat.append({"id": tid, "name": tname})
+                cat = state["tracks_catalog"]
+                for entry in cat:
+                    if entry.get("id") == tid:
+                        entry["name"] = tname
+                        break
+                else:
+                    cat.append({"id": tid, "name": tname})
     if line.startswith("[tracks-list] end"):
-        # End-of-list marker.  No side effects for now — UI just
-        # watches tracks_catalog length.  Kept as a dedicated branch
-        # so a future refresh-in-progress indicator is easy to wire.
-        pass
+        with state_lock:
+            pending = state.get("_tracks_catalog_pending")
+            if pending is not None:
+                # Atomic swap — replaces any stale entries from
+                # before this refresh.
+                state["tracks_catalog"] = pending
+                state["_tracks_catalog_pending"] = None
 
     # Active-track changes (manual select, autodetect, or the boot
     # auto-detect path).  Mirror into state so the dropdown can
@@ -815,7 +839,13 @@ def parse_line(line: str) -> None:
             or line.startswith("[stop-trace]") \
             or line.startswith("[track] selected:") \
             or line.startswith("[track] auto-detected:") \
-            or line.startswith("[track] ERR:"):
+            or line.startswith("[track] ERR:") \
+            or line.startswith("[tracks-list]"):
+        # [tracks-list] entries + begin/end markers need to be in the
+        # events feed so _wait_for_command_ack can see the terminator
+        # (codex review 2026-04-22 Medium: previously `tracks list`
+        # POSTs returned 504 despite the firmware having emitted the
+        # `end` line, because the event filter dropped them).
         # [stop-trace] is the firmware's per-step diagnostic emitted
         # during session_stop_recording / storage_end_session.  Must
         # be in the event feed so the operator can see which
@@ -946,22 +976,38 @@ def _match_command_ack(cmd: str, line: str) -> tuple[bool, str] | None:
             return (True, f"gps stream {want}Hz")
         return None
 
-    # Track picker — both the manual `track select <id>` path and the
-    # `track autodetect` path terminate with a `[track] selected:` or
-    # `[track] auto-detected:` line from apply_track_selection in
-    # firmware.  Errors arrive as `[track] ERR: ...`.  Gated on the
-    # command family so an unrelated `[track] ERR:` (e.g. from a
-    # stale earlier request) can't hijack the ACK window.
-    if cmd.startswith("track select ") or cmd == "track autodetect":
+    # Track picker — specific ACK shapes per subcommand.
+    # Codex review 2026-04-22 Medium: the previous version accepted
+    # any `[track] selected:` OR `[track] auto-detected:` for EITHER
+    # command, which let a later unrelated [track] line satisfy the
+    # wrong wait.  Now `track select <id>` requires a `selected:` line
+    # whose id matches exactly, and `track autodetect` requires an
+    # `auto-detected:` line specifically.
+    if cmd.startswith("track select "):
+        want_id = cmd[len("track select "):].strip()
         if "[track] ERR:" in line:
             msg = line.split("[track] ERR:", 1)[1].strip()
             return (False, msg)
         if "[track] selected:" in line:
             payload = line.split("[track] selected:", 1)[1].strip()
-            return (True, "selected: " + payload)
+            # Payload looks like "track_042 (My Track)".  Require the
+            # first token to match the requested id so a pending
+            # select-A can't be ACKed by a later select-B emit.
+            if payload.startswith(want_id + " ") or payload.startswith(want_id + "("):
+                return (True, "selected: " + payload)
+            # Ignore unrelated [track] selected: — keep waiting.
+            return None
+        return None
+
+    if cmd == "track autodetect":
+        if "[track] ERR:" in line:
+            msg = line.split("[track] ERR:", 1)[1].strip()
+            return (False, msg)
         if "[track] auto-detected:" in line:
             payload = line.split("[track] auto-detected:", 1)[1].strip()
             return (True, "auto-detected: " + payload)
+        # A plain "[track] selected:" is from a concurrent manual
+        # select, not our autodetect.  Keep waiting.
         return None
 
     if cmd == "tracks list":
@@ -1743,8 +1789,24 @@ function renderTrackPicker(state){
     if(catalog.length === 0){
       sel.innerHTML = '<option value="">(no tracks on SD)</option>';
     } else {
+      // Always lead with a disabled placeholder selected by default
+      // when we don't yet know the active track — or the active id
+      // points to a track not in our catalog (e.g. selected via the
+      // phone app before live_map connected).  Without this the
+      // browser would default visually to the first <option> while
+      // the firmware has a different (or no) active track; the
+      // operator sees a dropdown showing "Track A" but the map
+      // still reflects Track B.  Codex review 2026-04-22 Medium.
+      const activeInCatalog = !!catalog.find(t => t.id === activeId);
+      const showPlaceholder = !activeId || !activeInCatalog;
+      const placeholderLabel = !activeId
+        ? '(no active track — pick one)'
+        : '(active: ' + activeId + ' — not in catalog)';
+      const placeholderHtml = showPlaceholder
+        ? '<option value="" disabled selected>' + placeholderLabel + '</option>'
+        : '';
       const parts = catalog.map(t => {
-        const selected = (t.id === activeId) ? ' selected' : '';
+        const selected = (t.id === activeId && activeInCatalog) ? ' selected' : '';
         // Text content is safe (set via textContent-equivalent by
         // building innerHTML with our own escape).  Names were
         // sanitised firmware-side; double-guard here.
@@ -1752,7 +1814,7 @@ function renderTrackPicker(state){
         const safeId = (t.id||'').replace(/[<>&"]/g, '?');
         return `<option value="${safeId}"${selected}>${safeName} (${safeId})</option>`;
       });
-      sel.innerHTML = parts.join('');
+      sel.innerHTML = placeholderHtml + parts.join('');
     }
   }
 
@@ -2461,15 +2523,23 @@ def _is_allowed_command(cmd: str) -> bool:
         rate = int(body)
         return 1 <= rate <= 25
     if cmd.startswith("track select "):
-        # Mirror firmware's is_track_id_valid: track_<1-3 digits>.
+        # Mirror firmware's is_track_id_valid: track_<1-3 ASCII digits>.
+        # Python str.isdigit() accepts non-ASCII digits (e.g. U+FF11
+        # FULLWIDTH ONE, ०-९ Devanagari).  The firmware uses C
+        # isdigit() on unsigned char, which only matches '0'-'9', so
+        # using Python isdigit() here would forward inputs the
+        # firmware later rejects — confusing the ACK wait.  Use an
+        # explicit ASCII-digit check instead (codex review 2026-04-22
+        # Low).
         body = cmd[len("track select "):].strip()
         if not body.startswith("track_"):
             return False
         digits = body[len("track_"):]
-        if not digits.isdigit():
-            return False
         if not (1 <= len(digits) <= 3):
             return False
+        for ch in digits:
+            if ch < "0" or ch > "9":
+                return False
         return True
     return False
 

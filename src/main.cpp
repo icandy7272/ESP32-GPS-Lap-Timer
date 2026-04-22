@@ -200,6 +200,12 @@ static void serial_console_print_help() {
     Serial.println("  track save           persist draft to SD and activate");
     Serial.println("  track cancel         discard draft");
     Serial.println("  track status         print current draft state");
+    Serial.println("  track select <id>    activate existing track (track_NNN)");
+    Serial.println("  track autodetect     pick nearest track by GPS fix");
+    Serial.println("  tracks list          dump track catalog for live_map");
+    Serial.println("  recording start      begin a recording session");
+    Serial.println("  recording stop       end + save current session");
+    Serial.println("  gps stream <1-25|off>  compact [gps-live] stream for tools");
 }
 
 static void serial_console_print_invalid(const SerialConsoleCommand& command) {
@@ -741,24 +747,88 @@ static void serial_console_handle_recording_stop() {
     }
 }
 
-// Apply `track` as the active track: lap_timer_set_track handles
-// geometry copy + version bump + [track] runtime emit; we mirror
-// the HTTP /api/tracks/select path for the session_state name
-// update and the manual-vs-auto note.  Emits an ACK line the
-// live_map ACK matcher can recognise.
+// Atomically check "not recording" + snapshot the track we're about
+// to switch to + update session_state.track_name, under a single
+// session_mutex critical section.  Returns true + fills out_copy on
+// success; returns false and emits the [track] ERR line on any
+// failure (mutex contention, recording active, track not found).
+//
+// Codex review 2026-04-22:
+//   HIGH#1: the old 50 ms timeout defaulted `recording=false` on
+//           contention, failing OPEN; this variant uses a 1000 ms
+//           timeout and returns false (fail CLOSED) on contention.
+//   HIGH#2: the old code did check + set_track + track_name update
+//           as three separate lock-take cycles, leaving a window
+//           where a concurrent recording start could start with
+//           the old track_name while lap geometry had just been
+//           switched.  Now the operations that can be done under
+//           the mutex happen inside one critical section.
+static bool serial_console_try_claim_track_switch(
+    const char* id_or_null_for_auto,
+    double auto_lat, double auto_lon, bool is_auto,
+    TrackDefinition* out_copy) {
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        Serial.println("[track] ERR: session_mutex contended — retry");
+        return false;
+    }
+
+    if (session_state.is_recording) {
+        xSemaphoreGive(session_mutex);
+        Serial.println("[track] ERR: cannot switch track during recording");
+        return false;
+    }
+
+    // For autodetect we need the GPS fix we already snapshotted.
+    // (The caller already has gps_fix_ok/lat/lon from a prior read;
+    // autodetect uses the track_auto_detect lookup here, inside the
+    // mutex, so the caller doesn't have to re-read those fields.)
+    const TrackDefinition* track = nullptr;
+    if (is_auto) {
+        if (!session_state.gps_fix_ok) {
+            xSemaphoreGive(session_mutex);
+            Serial.println("[track] ERR: autodetect requires a 3D fix");
+            return false;
+        }
+        track = track_auto_detect(auto_lat, auto_lon);
+        if (track == nullptr) {
+            xSemaphoreGive(session_mutex);
+            Serial.println("[track] ERR: no track within range for autodetect");
+            return false;
+        }
+    } else {
+        track = track_get_by_id(id_or_null_for_auto);
+        if (track == nullptr) {
+            xSemaphoreGive(session_mutex);
+            Serial.printf("[track] ERR: track %s not found\n",
+                          id_or_null_for_auto);
+            return false;
+        }
+    }
+
+    // Snapshot the track into the caller's buffer so subsequent
+    // lap_timer_set_track() work (which must happen outside this
+    // critical section because it internally takes session_mutex)
+    // references a stable local copy, not a shared pointer that
+    // could be shifted by a concurrent WiFi-task track delete.
+    *out_copy = *track;
+
+    // Update session_state.track_name NOW, before we release the
+    // mutex.  This closes the old HIGH#2 window where a concurrent
+    // recording start could capture the stale name while geometry
+    // had just been switched.
+    strlcpy(session_state.track_name, out_copy->name,
+            sizeof(session_state.track_name));
+
+    xSemaphoreGive(session_mutex);
+    return true;
+}
+
 static void serial_console_apply_track_selection(const TrackDefinition* track,
                                                  bool is_auto) {
-    if (track == nullptr) {
-        Serial.println("[track] ERR: track not found");
-        return;
-    }
+    // Track pointer here points to a caller-owned local — not the
+    // shared s_tracks[] array — so lap_timer_set_track's internal
+    // copy is safe against concurrent delete.
     lap_timer_set_track(track);
-
-    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        strlcpy(session_state.track_name, track->name,
-                sizeof(session_state.track_name));
-        xSemaphoreGive(session_mutex);
-    }
 
     if (is_auto) {
         track_runtime_note_auto_detect();
@@ -776,60 +846,52 @@ static void serial_console_apply_track_selection(const TrackDefinition* track,
 // [laptiming] block.  The 409-equivalent is a single [track] ERR
 // line; live_map surfaces it to the UI.
 static void serial_console_handle_track_select(const char* id) {
-    bool recording = false;
-    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        recording = session_state.is_recording;
-        xSemaphoreGive(session_mutex);
+    TrackDefinition snap = {};
+    if (!serial_console_try_claim_track_switch(id, 0.0, 0.0,
+                                               false, &snap)) {
+        return;  // helper already emitted [track] ERR
     }
-    if (recording) {
-        Serial.println("[track] ERR: cannot switch track during recording");
-        return;
-    }
-    const TrackDefinition* track = track_get_by_id(id);
-    if (track == nullptr) {
-        Serial.printf("[track] ERR: track %s not found\n", id);
-        return;
-    }
-    serial_console_apply_track_selection(track, false);
+    serial_console_apply_track_selection(&snap, false);
 }
 
 // "track autodetect" — re-run proximity search against the current
 // GPS fix.  Same as the boot-time late-auto-detect path but
 // operator-initiated.  Requires a valid 3D fix.
 static void serial_console_handle_track_autodetect() {
-    bool recording = false;
-    bool gps_fix = false;
+    // Snapshot the GPS fix coords outside the claim mutex — the
+    // helper itself reads gps_fix_ok again under the mutex to close
+    // any stale-read race.  Under-mutex double-read is cheap.
     double lat = 0.0;
     double lon = 0.0;
-    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        recording = session_state.is_recording;
-        gps_fix = session_state.gps_fix_ok;
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(500)) == pdTRUE) {
         lat = session_state.gps_lat_deg;
         lon = session_state.gps_lon_deg;
         xSemaphoreGive(session_mutex);
-    }
-    if (recording) {
-        Serial.println("[track] ERR: cannot switch track during recording");
+    } else {
+        Serial.println("[track] ERR: session_mutex contended — retry");
         return;
     }
-    if (!gps_fix) {
-        Serial.println("[track] ERR: autodetect requires a 3D fix");
+    TrackDefinition snap = {};
+    if (!serial_console_try_claim_track_switch(nullptr, lat, lon,
+                                               true, &snap)) {
         return;
     }
-    const TrackDefinition* track = track_auto_detect(lat, lon);
-    if (track == nullptr) {
-        Serial.println("[track] ERR: no track within range for autodetect");
-        return;
-    }
-    serial_console_apply_track_selection(track, true);
+    serial_console_apply_track_selection(&snap, true);
 }
 
 // "tracks list" — catalog dump for the live_map track picker.  Emits
-// one `[tracks-list] <id> "<name>"` line per track + a terminator
-// line `[tracks-list] end`.  Names are quoted so spaces survive, and
-// ASCII-sanitised defensively even though track_save already
-// validates names at creation time.
+// a `[tracks-list] begin` marker, then one `[tracks-list] <id>
+// "<name>"` line per track, then a `[tracks-list] end` terminator.
+// Names are quoted so spaces survive, and ASCII-sanitised
+// defensively even though track_save already validates names at
+// creation time.
+//
+// The begin marker is new in 2026-04-22 (codex review Medium): it
+// lets the laptop-side parser distinguish a fresh refresh from a
+// mid-session append, so it can atomically replace a stale catalog
+// on each full listing instead of accumulating deleted entries.
 static void serial_console_handle_tracks_list() {
+    Serial.println("[tracks-list] begin");
     int count = track_count();
     for (int i = 0; i < count; i++) {
         const TrackDefinition* t = track_get(i);

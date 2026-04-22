@@ -108,6 +108,15 @@ void lap_timer_task(void* param) {
                     lap_timer_reset();
                     Serial.printf("[lap_timer] Auto-detected: %s (%d candidate(s) within 5km)\n",
                                   detected_name, candidates);
+                    // Also emit the structured active-track line the
+                    // live_map picker parses.  Without this, a fresh
+                    // laptop connect after boot auto-detect has no
+                    // way to know which track the firmware already
+                    // picked, and the dropdown defaults to the first
+                    // entry visually but has no authoritative
+                    // selection (codex review 2026-04-22 Medium).
+                    Serial.printf("[track] auto-detected: %s (%s)\n",
+                                  detected->id, detected_name);
                 }
             } else if (xSemaphoreTake(s_session_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                 strlcpy(session_state.track_name, "No Track",

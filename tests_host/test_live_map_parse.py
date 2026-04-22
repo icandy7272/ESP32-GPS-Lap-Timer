@@ -565,30 +565,52 @@ def main() -> int:
         )
 
     # --- Track picker: [tracks-list] entries build the catalog ---
-    # Firmware emits one line per track plus an `end` terminator.  Parser
-    # must accumulate in state.tracks_catalog keyed by id (idempotent on
-    # re-emit so a mid-session name update doesn't duplicate the entry).
+    # Firmware emits a `begin` marker, one line per track, then an
+    # `end` terminator.  Parser accumulates into a pending buffer
+    # and atomically swaps on `end` so a refresh (e.g. after a
+    # track_delete from the phone UI) cleanly replaces stale entries.
     with live_map.state_lock:
         live_map.state["tracks_catalog"] = []
+        live_map.state["_tracks_catalog_pending"] = None
         live_map.state["active_track_id"] = None
         live_map.state["active_track_name"] = None
+    live_map.parse_line('[tracks-list] begin')
     live_map.parse_line('[tracks-list] track_001 "Home Loop"')
     live_map.parse_line('[tracks-list] track_002 "Test Track"')
     live_map.parse_line('[tracks-list] track_042 "With Spaces And 數字"')
+    # Before `end` the pending list is populated but the public
+    # catalog is still empty — UI must never see a half-rebuilt list.
+    with live_map.state_lock:
+        check("tracks_catalog still empty mid-refresh",
+              live_map.state["tracks_catalog"], [])
+        check("pending has 3 entries mid-refresh",
+              len(live_map.state["_tracks_catalog_pending"]), 3)
     live_map.parse_line('[tracks-list] end')
     with live_map.state_lock:
         cat = live_map.state["tracks_catalog"]
-        check("tracks_catalog length after list", len(cat), 3)
+        check("tracks_catalog length after end", len(cat), 3)
         check("catalog first id", cat[0]["id"], "track_001")
         check("catalog first name", cat[0]["name"], "Home Loop")
         check("catalog second id", cat[1]["id"], "track_002")
         check("catalog last id", cat[2]["id"], "track_042")
-    # Re-emitting the same id with a new name updates in place, no dup.
+        check("pending cleared after end",
+              live_map.state["_tracks_catalog_pending"], None)
+
+    # Refresh with FEWER tracks (track_042 was deleted on firmware).
+    # A second begin/end cycle must REPLACE the catalog, not merge —
+    # this is the codex 2026-04-22 Medium fix for the stale-entry
+    # bug.
+    live_map.parse_line('[tracks-list] begin')
     live_map.parse_line('[tracks-list] track_001 "Home Loop Renamed"')
+    live_map.parse_line('[tracks-list] track_002 "Test Track"')
+    live_map.parse_line('[tracks-list] end')
     with live_map.state_lock:
         cat = live_map.state["tracks_catalog"]
-        check("catalog length stays 3 after rename", len(cat), 3)
-        check("catalog first name updated", cat[0]["name"], "Home Loop Renamed")
+        check("catalog shrunk on refresh (track_042 gone)", len(cat), 2)
+        check("catalog first name updated on refresh",
+              cat[0]["name"], "Home Loop Renamed")
+        check("track_042 no longer in catalog",
+              [t["id"] for t in cat if t["id"] == "track_042"], [])
 
     # [track] selected: and [track] auto-detected: both update active.
     live_map.parse_line("[track] selected: track_002 (Test Track)")
@@ -604,14 +626,25 @@ def main() -> int:
               live_map.state["active_track_name"], "With Spaces And 數字")
 
     # --- Track picker ACK matcher ---
-    # track select → [track] selected: (success) / [track] ERR: (fail).
-    # Critical: must be command-family-gated so a stale [track] ERR
-    # from an earlier command can't terminate the wrong wait.
+    # track select → requires [track] selected: <matching id>.  A
+    # selected line for a DIFFERENT id must not ACK (codex review
+    # 2026-04-22 Medium: two rapid dropdown changes could have the
+    # second request ACK on the first request's echo).
     ack_pick = live_map._match_command_ack
     sel_ack = ack_pick("track select track_002",
                        "[track] selected: track_002 (Test Track)")
     check("track select success ACK is terminal True",
           sel_ack is not None and sel_ack[0] is True, True)
+    # Wrong-id emit must NOT terminate our wait.
+    wrong_id_ack = ack_pick(
+        "track select track_002",
+        "[track] selected: track_003 (Some Other)")
+    check("track select ignores wrong-id emit", wrong_id_ack, None)
+    # Autodetect emit must NOT terminate a manual select wait.
+    auto_on_select = ack_pick(
+        "track select track_002",
+        "[track] auto-detected: track_002 (Test Track)")
+    check("track select ignores auto-detected line", auto_on_select, None)
     sel_err = ack_pick("track select track_999",
                        "[track] ERR: track track_999 not found")
     check("track select error ACK is terminal False",
@@ -619,11 +652,17 @@ def main() -> int:
     check("track select error carries message",
           sel_err is not None and "not found" in sel_err[1], True)
 
+    # track autodetect accepts ONLY auto-detected: lines, not selected:.
     auto_ack = ack_pick(
         "track autodetect",
         "[track] auto-detected: track_042 (My Track)")
     check("track autodetect success ACK",
           auto_ack is not None and auto_ack[0] is True, True)
+    selected_on_auto = ack_pick(
+        "track autodetect",
+        "[track] selected: track_042 (My Track)")
+    check("track autodetect ignores selected line",
+          selected_on_auto, None)
     auto_err = ack_pick(
         "track autodetect",
         "[track] ERR: autodetect requires a 3D fix")
@@ -653,6 +692,15 @@ def main() -> int:
           is_allowed("track select track_12345"), False)
     check("track select ../etc rejected (path traversal)",
           is_allowed("track select ../etc"), False)
+    # Non-ASCII digits must be rejected even though Python's
+    # str.isdigit() considers them digits — the firmware uses C
+    # isdigit() and will reject them.  Forwarding them would
+    # desync the ACK wait from the firmware (codex review
+    # 2026-04-22 Low).
+    check("track select with fullwidth digit rejected",
+          is_allowed("track select track_\uff11"), False)
+    check("track select with devanagari digit rejected",
+          is_allowed("track select track_\u0966"), False)
     check("track autodetect allowed", is_allowed("track autodetect"), True)
     check("tracks list allowed", is_allowed("tracks list"), True)
 
