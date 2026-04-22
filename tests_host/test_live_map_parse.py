@@ -266,33 +266,101 @@ def main() -> int:
     # [BOOT-EARLY] SETUP_ENTRY should trigger the re-bootstrap, and
     # subsequent banners during the debounce window must be ignored
     # so the serial writer isn't flooded with duplicate commands.
-    live_map._reboot_watch["last_bootstrap_ts"] = 0.0
-    live_map._reboot_watch["bootstrap_in_flight"] = False
+    with live_map._reboot_watch_lock:
+        live_map._reboot_watch["last_bootstrap_ts"] = 0.0
+        live_map._reboot_watch["bootstrap_in_flight"] = False
+        live_map._reboot_watch["stream_ack_seen"] = False
     live_map._maybe_handle_reboot("[BOOT-EARLY] SETUP_ENTRY")
-    check(
-        "first SETUP_ENTRY marks bootstrap in flight",
-        live_map._reboot_watch["bootstrap_in_flight"],
-        True,
-    )
+    with live_map._reboot_watch_lock:
+        check(
+            "first SETUP_ENTRY marks bootstrap in flight",
+            live_map._reboot_watch["bootstrap_in_flight"],
+            True,
+        )
     # Another banner within debounce window must NOT spawn a second
     # thread — the existing one is still running.
-    prev_ts = live_map._reboot_watch["last_bootstrap_ts"]
+    with live_map._reboot_watch_lock:
+        prev_ts = live_map._reboot_watch["last_bootstrap_ts"]
     live_map._maybe_handle_reboot("[BOOT-EARLY] SETUP_ENTRY")
-    check(
-        "second SETUP_ENTRY during in-flight window is ignored",
-        live_map._reboot_watch["last_bootstrap_ts"],
-        prev_ts,
-    )
+    with live_map._reboot_watch_lock:
+        check(
+            "second SETUP_ENTRY during in-flight window is ignored",
+            live_map._reboot_watch["last_bootstrap_ts"],
+            prev_ts,
+        )
     # Non-banner lines never trigger the reboot path.
-    live_map._reboot_watch["bootstrap_in_flight"] = False
-    live_map._reboot_watch["last_bootstrap_ts"] = 0.0
+    with live_map._reboot_watch_lock:
+        live_map._reboot_watch["bootstrap_in_flight"] = False
+        live_map._reboot_watch["last_bootstrap_ts"] = 0.0
     live_map._maybe_handle_reboot(
         "[gps] lat=40.0059425 lon=116.4584473 sats=12")
-    check(
-        "non-banner line never triggers bootstrap",
-        live_map._reboot_watch["bootstrap_in_flight"],
-        False,
-    )
+    with live_map._reboot_watch_lock:
+        check(
+            "non-banner line never triggers bootstrap",
+            live_map._reboot_watch["bootstrap_in_flight"],
+            False,
+        )
+
+    # --- stream ACK from firmware flips stream_ack_seen ------------
+    # The retry loop in _kick_reboot_bootstrap polls this flag and
+    # exits early when set; parse_line() sets it on any [gps-live]
+    # stream status line.
+    with live_map._reboot_watch_lock:
+        live_map._reboot_watch["stream_ack_seen"] = False
+    live_map.parse_line("[gps-live] stream=10Hz")
+    with live_map._reboot_watch_lock:
+        check(
+            "stream=NHz ACK flips stream_ack_seen",
+            live_map._reboot_watch["stream_ack_seen"],
+            True,
+        )
+    with live_map._reboot_watch_lock:
+        live_map._reboot_watch["stream_ack_seen"] = False
+    live_map.parse_line("[gps-live] stream=off")
+    with live_map._reboot_watch_lock:
+        check(
+            "stream=off ACK also flips stream_ack_seen",
+            live_map._reboot_watch["stream_ack_seen"],
+            True,
+        )
+
+    # --- track_query_bootstrap() regression for codex finding #1 ---
+    # Before the fix, the final `send(f"cat tracks/{track_name}")`
+    # inside track_query_bootstrap() raised NameError because the
+    # nested helper had been extracted into _send_runtime_bootstrap_
+    # commands().  This test walks the exact crash path codex found:
+    # serial already open, ls reply already seen, first_track known.
+    live_map._ser_ref[0] = object()  # fake truthy handle
+    live_map._track_discovery["ls_reply_seen"] = True
+    live_map._track_discovery["first_track"] = "track_001.json"
+    live_map._track_discovery["requested_cat"] = False
+    try:
+        live_map.track_query_bootstrap()
+        check(
+            "track_query_bootstrap completes without NameError",
+            True,
+            True,
+        )
+        check(
+            "track_query_bootstrap sets requested_cat",
+            live_map._track_discovery["requested_cat"],
+            True,
+        )
+    except NameError as exc:  # pragma: no cover
+        check(
+            "track_query_bootstrap must not raise NameError",
+            f"raised {exc!r}",
+            "no raise",
+        )
+    except Exception:
+        # Other exceptions (write on fake handle) are expected and
+        # harmless for this test — we only care NameError is gone.
+        pass
+    finally:
+        live_map._ser_ref[0] = None
+        live_map._track_discovery["ls_reply_seen"] = False
+        live_map._track_discovery["first_track"] = None
+        live_map._track_discovery["requested_cat"] = False
 
     # --- GPS diagnostics stream parsing -----------------------------
     # The three new firmware log streams must all land in state.gps_diag.

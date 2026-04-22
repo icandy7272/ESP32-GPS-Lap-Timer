@@ -175,13 +175,47 @@ static void ubx_poll_cfg_gnss_and_log(uint32_t timeout_ms) {
     uint8_t resp[MAX_RESP];
     size_t  resp_len = 0;
 
-    // Simple inline state machine to accumulate the first CFG-GNSS
-    // response we see.  Reuses the same sync-detection logic as the
-    // UBX monitor but only for this one message.
-    enum class St { Idle, Sync2, Cls, Id, LenLo, LenHi, Payload, CkA, CkB, Done };
+    // State machine for accumulating a CFG-GNSS response while
+    // coexisting with other UBX traffic.  Codex review 2026-04-22
+    // caught two real bugs in the earlier version:
+    //
+    //   1) Non-target frames (e.g. a UBX-ACK-ACK the receiver emits
+    //      for our poll itself, cls=0x05 id=0x01) used to drop us
+    //      back to Idle mid-frame, so their payload bytes were then
+    //      mis-scanned for new 0xB5 0x62 sync sequences.  A single
+    //      UBX-ACK-ACK has 0x01 in payload byte 1 and could plausibly
+    //      contain 0xB5 in another field (though not today's ACK
+    //      payload, any future UBX class could) — lock-onto-garbage
+    //      risk.  Fix: for non-target frames, skip by declared length
+    //      so we resume sync AFTER the frame ends.
+    //
+    //   2) Checksum bytes on the target frame were read and
+    //      discarded.  A corrupted response would silently produce
+    //      bogus enable bits printed as [gps-verify] ground truth.
+    //      Fix: compute Fletcher-8 over cls..payload and compare to
+    //      the received ck_a/ck_b; on mismatch, WARN and continue
+    //      looking for a clean frame within the remaining timeout.
+    //
+    // States:
+    //   Idle → Sync2 → Cls → Id → LenLo → LenHi
+    //     └── target (cls=0x06 id=0x3E) → Payload (with running ck)
+    //     │     → CkA → CkB → validate → Done or Idle (on mismatch)
+    //     └── non-target → Skip (burn declared_len + 2 chk bytes) → Idle
+    enum class St {
+        Idle, Sync2, Cls, Id, LenLo, LenHi,
+        Payload, CkA, CkB,
+        Skip,  // consume non-target frame body + checksum
+        Done,
+    };
     St state = St::Idle;
-    uint16_t expect_len = 0;
-    uint16_t got = 0;
+    uint16_t expect_len = 0;      // target frame payload length
+    uint16_t got = 0;              // target frame bytes consumed
+    uint8_t  cur_cls = 0;          // class of currently-scanned frame
+    uint8_t  cur_id = 0;
+    uint32_t skip_remaining = 0;   // bytes left to consume for non-target frame
+    uint8_t  ck_a_run = 0;         // Fletcher-8 over cls..payload
+    uint8_t  ck_b_run = 0;
+    uint8_t  ck_a_recv = 0;
     uint32_t start = millis();
     while ((millis() - start) < timeout_ms && state != St::Done) {
         while (Serial2.available() > 0 && state != St::Done) {
@@ -190,52 +224,100 @@ static void ubx_poll_cfg_gnss_and_log(uint32_t timeout_ms) {
             uint8_t b = static_cast<uint8_t>(c);
             // Always forward to the UBX monitor — captures stray
             // ACK/NAKs that happen to arrive during our poll window.
+            // Safe even for our own frame's bytes (monitor expects
+            // ACK class=0x05, our CFG-GNSS is class=0x06, so the
+            // monitor ignores it).
             gps_ubx_monitor_feed_byte(b);
             switch (state) {
             case St::Idle:
                 if (b == 0xB5) state = St::Sync2;
                 break;
             case St::Sync2:
-                state = (b == 0x62) ? St::Cls : St::Idle;
+                if (b == 0x62) {
+                    state = St::Cls;
+                    ck_a_run = 0;
+                    ck_b_run = 0;
+                } else if (b == 0xB5) {
+                    // stay in Sync2 — 0xB5 0xB5 sequences latch
+                } else {
+                    state = St::Idle;
+                }
                 break;
             case St::Cls:
-                state = (b == 0x06) ? St::Id : St::Idle;
+                cur_cls = b;
+                ck_a_run = static_cast<uint8_t>(ck_a_run + b);
+                ck_b_run = static_cast<uint8_t>(ck_b_run + ck_a_run);
+                state = St::Id;
                 break;
             case St::Id:
-                state = (b == 0x3E) ? St::LenLo : St::Idle;
+                cur_id = b;
+                ck_a_run = static_cast<uint8_t>(ck_a_run + b);
+                ck_b_run = static_cast<uint8_t>(ck_b_run + ck_a_run);
+                state = St::LenLo;
                 break;
             case St::LenLo:
                 expect_len = b;
+                ck_a_run = static_cast<uint8_t>(ck_a_run + b);
+                ck_b_run = static_cast<uint8_t>(ck_b_run + ck_a_run);
                 state = St::LenHi;
                 break;
             case St::LenHi:
                 expect_len = static_cast<uint16_t>(expect_len
                                 | (static_cast<uint16_t>(b) << 8));
-                if (expect_len == 0 || expect_len > MAX_RESP) {
-                    // Zero-len reply is our own poll echoed back
-                    // (shouldn't happen on a real receiver, but
-                    // guard); overlong is corrupted.  Restart.
-                    state = St::Idle;
-                } else {
+                ck_a_run = static_cast<uint8_t>(ck_a_run + b);
+                ck_b_run = static_cast<uint8_t>(ck_b_run + ck_a_run);
+                if (cur_cls == 0x06 && cur_id == 0x3E && expect_len > 0
+                    && expect_len <= MAX_RESP) {
                     got = 0;
                     resp_len = 0;
                     state = St::Payload;
+                } else {
+                    // Non-target frame (or zero-length echo, or
+                    // overlong garbage) — skip its body + checksum so
+                    // we resume sync AFTER it ends.  declared_len + 2
+                    // is always correct for a well-formed UBX frame.
+                    skip_remaining = static_cast<uint32_t>(expect_len) + 2;
+                    state = St::Skip;
                 }
                 break;
             case St::Payload:
                 if (resp_len < MAX_RESP) {
                     resp[resp_len++] = b;
                 }
+                ck_a_run = static_cast<uint8_t>(ck_a_run + b);
+                ck_b_run = static_cast<uint8_t>(ck_b_run + ck_a_run);
                 got++;
                 if (got >= expect_len) state = St::CkA;
                 break;
             case St::CkA:
+                ck_a_recv = b;
+                state = St::CkB;
+                break;
             case St::CkB:
-                // Skip checksum bytes — trusting Fletcher verification
-                // for this diagnostic path is overkill; corruption
-                // would show up as "unrealistic" enable bits which
-                // the operator can still act on.
-                state = (state == St::CkA) ? St::CkB : St::Done;
+                if (ck_a_recv == ck_a_run && b == ck_b_run) {
+                    state = St::Done;
+                } else {
+                    // Checksum mismatch: corrupted frame (or we locked
+                    // onto a false sync pattern).  Warn and resume
+                    // scanning — another clean frame may arrive within
+                    // the remaining timeout.
+                    Serial.printf(
+                        "[gps-verify] WARN: CFG-GNSS response checksum "
+                        "mismatch (got %02X %02X, want %02X %02X) — "
+                        "resuming scan\n",
+                        ck_a_recv, b, ck_a_run, ck_b_run);
+                    state = St::Idle;
+                }
+                break;
+            case St::Skip:
+                // Burn bytes belonging to a non-target frame so we
+                // resume sync AFTER its checksum.
+                if (skip_remaining > 0) {
+                    skip_remaining--;
+                }
+                if (skip_remaining == 0) {
+                    state = St::Idle;
+                }
                 break;
             case St::Done:
                 break;

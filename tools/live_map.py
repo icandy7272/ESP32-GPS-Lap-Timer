@@ -202,10 +202,21 @@ def _locked_append_event(text):
 
 
 def _serial_write_command(cmd: str) -> None:
-    ser = _ser_ref[0]
-    if ser is None:
-        raise RuntimeError("serial not open")
+    """Write a command to the firmware, serialised against both
+    concurrent writers AND the reader's disconnect / reconnect path.
+
+    Codex review 2026-04-22 flagged a real race: the previous version
+    snapshotted _ser_ref[0] outside the lock, so the reader thread
+    could close the port and null the ref after the snapshot but
+    before the write, then the writer would call .write() on a dead
+    handle.  Now the snapshot, the None-check, and the write itself
+    all happen inside _serial_write_lock — which serial_reader() also
+    takes when dropping/replacing the handle on disconnect.
+    """
     with _serial_write_lock:
+        ser = _ser_ref[0]
+        if ser is None:
+            raise RuntimeError("serial not open")
         ser.write((cmd + "\r\n").encode("utf-8"))
         ser.flush()
 
@@ -537,11 +548,36 @@ _track_discovery = {
 # the 1 Hz [gps] diagnostic.  We catch the boot banner below and
 # re-send the bootstrap commands so the operator gets smooth trails
 # across reboots without touching the laptop.
+#
+# Codex review 2026-04-22 caught two real bugs in the earlier
+# fire-and-forget approach:
+#
+#   1) The 2-second settle fired commands before the firmware's
+#      main loop was consuming USB serial, so on a slow-fix boot
+#      (up to 30 s in gps_uart_init's wait-for-fix loop) the
+#      commands were dropped silently.  Now we retry every 3 s
+#      and stop the moment we observe the firmware's ACK line
+#      (`[gps-live] stream=XHz`), so the exact boot cadence
+#      doesn't matter.
+#
+#   2) The dict was mutated from three places (parse_line reader
+#      thread, the kicked worker, and _maybe_handle_reboot) with
+#      no synchronisation, so the debounce guarantee wasn't real.
+#      A lock around every access closes that race.
 _reboot_watch = {
     "last_bootstrap_ts": 0.0,
     "bootstrap_in_flight": False,
+    # Flipped to True by parse_line() when the firmware acknowledges
+    # "gps stream N" — the retry loop stops the moment this goes
+    # True.  Reset on every new kick so one reboot's ack doesn't
+    # satisfy the next reboot's kick.
+    "stream_ack_seen": False,
 }
-_REBOOT_DEBOUNCE_S = 3.0  # Ignore repeat banners within 3s of last kick.
+_reboot_watch_lock = threading.Lock()
+_REBOOT_DEBOUNCE_S = 3.0   # Ignore repeat banners within 3 s of last kick.
+_REBOOT_RETRY_INTERVAL_S = 3.0
+_REBOOT_MAX_RETRIES = 15   # 15 * 3 s = 45 s, covers the firmware's 30 s
+                           # wait-for-fix window plus ~15 s headroom.
 
 
 def _try_parse_track_json(raw_lines: list[str]) -> None:
@@ -693,6 +729,14 @@ def parse_line(line: str) -> None:
             or line.startswith("[gps-ubx]") \
             or line.startswith("[gps-verify]"):
         _locked_append_event(line)
+
+    # Any firmware acknowledgement of the gps-stream command lets the
+    # reboot-bootstrap retry loop exit early instead of running its
+    # whole 45 s retry budget.  Matches both "=NHz" (rate enabled) and
+    # "=off" (disabled) so the operator can also stop the stream
+    # manually during debugging without hanging the retry loop.
+    if line.startswith("[gps-live] stream"):
+        _reboot_watch_note_stream_ack()
 
     # Structured candidate events — extracted into a typed list so the
     # UI does not need to re-parse the free-text event log.  The two
@@ -885,14 +929,24 @@ def serial_reader() -> None:
             # Errno 6 "Device not configured" (cable unplugged) or
             # any other OS-level serial failure: drop the handle,
             # update health flag, let the reopen loop above retry.
+            #
+            # CRITICAL: hold _serial_write_lock while we null the
+            # shared handle and close the port, so any concurrent
+            # _serial_write_command() sees the None transition
+            # atomically.  Without this lock, a writer that already
+            # passed the None check could still call .write() on a
+            # half-closed file descriptor and either blow up with a
+            # cryptic OSError or succeed against the next process's
+            # handle if the OS reuses the fd number quickly.
             err_str = str(exc)
             print(f"[live_map] serial read error: {err_str} — will reconnect")
             _mark_serial_disconnected(err_str)
-            try:
-                ser.close()
-            except Exception:
-                pass
-            _ser_ref[0] = None
+            with _serial_write_lock:
+                _ser_ref[0] = None
+                try:
+                    ser.close()
+                except Exception:
+                    pass
             continue
         if not data:
             continue
@@ -913,45 +967,117 @@ def serial_reader() -> None:
                 continue
 
 
-def _send_runtime_bootstrap_commands() -> None:
-    """Emit the two commands we want the firmware to run every time it
-    reaches the serial-console runtime state: enable the 10 Hz live
-    stream, and request the track JSON.  Split out of
-    track_query_bootstrap so the reboot detector in parse_line() can
-    reuse the same sequence without re-entering the slow cold-boot
-    wait.
+def _bootstrap_send(cmd: str) -> None:
+    """Single helper both the one-shot bootstrap path and the reboot-
+    detector path use to fire a command at the firmware.  Lifted out
+    of a nested scope so track_query_bootstrap() can also use it —
+    codex review 2026-04-22 caught a NameError where the old nested
+    send() had been deleted but a call site at the end of
+    track_query_bootstrap() still referenced it.
     """
-    def send(cmd: str) -> None:
-        try:
-            _serial_write_command(cmd)
-        except Exception as exc:
-            print(f"[live_map] serial write failed: {exc}")
+    try:
+        _serial_write_command(cmd)
+    except Exception as exc:
+        print(f"[live_map] serial write failed: {exc}")
 
+
+def _send_runtime_bootstrap_commands() -> None:
+    """Emit every command we want the firmware to run when it reaches
+    the serial-console runtime state: enable the 10 Hz live stream,
+    list tracks, and if we already know which track is active, also
+    re-request its JSON so the map geometry is always fresh after a
+    reconnect or reboot.
+
+    Track JSON request is idempotent on the firmware side — repeating
+    it after a reboot is how we recover the map overlay without
+    relying on the board re-emitting the [track] boot log.
+    """
     # Re-arm the live stream FIRST so even if the ls/cat sequence below
     # stalls, the operator already has smooth position updates.
-    send(f"gps stream {LIVE_GPS_STREAM_HZ}")
-    send("ls tracks")
+    _bootstrap_send(f"gps stream {LIVE_GPS_STREAM_HZ}")
+    _bootstrap_send("ls tracks")
     _track_discovery["requested_ls"] = True
+
+    # If we've previously discovered the active track filename (either
+    # this session's ls reply or a prior cat response), re-request its
+    # JSON so a reboot doesn't leave stale geometry on the UI.  First-
+    # run on a cold start goes through track_query_bootstrap()'s poll
+    # loop which eventually calls _bootstrap_send("cat tracks/...") on
+    # its own.
+    track = _track_discovery.get("first_track")
+    if track:
+        _bootstrap_send(f"cat tracks/{track}")
+
+
+def _reboot_watch_note_stream_ack() -> None:
+    """Called from parse_line() when we observe the firmware's
+    `[gps-live] stream=XHz` or `=off` line.  Marks the current
+    reboot's bootstrap as acknowledged so the retry loop can stop.
+    """
+    with _reboot_watch_lock:
+        _reboot_watch["stream_ack_seen"] = True
 
 
 def _kick_reboot_bootstrap() -> None:
-    """Spawn a one-shot thread that re-runs the runtime bootstrap after
-    a short settle.  Called from the reader thread when a reboot banner
-    is seen — must be non-blocking so the reader keeps draining serial.
+    """Spawn a worker thread that keeps re-sending the bootstrap
+    commands until the firmware ACKs the gps-stream request or we
+    exhaust the retry budget.
+
+    Why retries: firmware's main loop doesn't consume serial console
+    commands until after gps_uart_init() finishes, which can take up
+    to 30 s on a cold/slow-fix boot.  A single fire at T+2 s lands
+    on the floor during that window.  Retrying every 3 s covers the
+    whole boot spectrum; the moment the firmware echoes
+    `[gps-live] stream=NHz` the reader flips stream_ack_seen and we
+    exit early so we don't spam.
+
+    Reader thread is not blocked — this always runs in a daemon
+    worker.
     """
     def _run() -> None:
-        # Serial console only accepts commands after GPS init completes
-        # (~8 s cold boot from the capture we saw).  2 s is enough for
-        # the parser/state machine to be alive, and missing the window
-        # is harmless — we just resend.
-        time.sleep(2.0)
-        _send_runtime_bootstrap_commands()
-        _reboot_watch["bootstrap_in_flight"] = False
-        print("[live_map] reboot detected — re-armed gps stream "
-              f"{LIVE_GPS_STREAM_HZ} Hz")
+        # Small initial settle so the first retry has a chance to
+        # land if the boot is fast (fix already cached).  Longer
+        # waits happen via the per-retry sleep below.
+        time.sleep(1.0)
+        for attempt in range(1, _REBOOT_MAX_RETRIES + 1):
+            with _reboot_watch_lock:
+                if _reboot_watch["stream_ack_seen"]:
+                    break
+            _send_runtime_bootstrap_commands()
+            # Give the firmware a window to reply before deciding to
+            # retry.  If the board is still in GPS init, Serial2
+            # isn't being drained yet and our command sits in the
+            # OS tty buffer — the next retry overwrites nothing
+            # because the buffer is long enough for 3-5 queued
+            # commands.
+            for _ in range(int(_REBOOT_RETRY_INTERVAL_S * 10)):
+                with _reboot_watch_lock:
+                    if _reboot_watch["stream_ack_seen"]:
+                        break
+                time.sleep(0.1)
+            with _reboot_watch_lock:
+                if _reboot_watch["stream_ack_seen"]:
+                    break
+            # Keep the operator informed on slow boots so they
+            # understand why the trail looks choppy for 10-30 s.
+            print(f"[live_map] reboot bootstrap retry "
+                  f"{attempt}/{_REBOOT_MAX_RETRIES} (firmware has not "
+                  f"ACKed gps stream yet)")
+        with _reboot_watch_lock:
+            acked = _reboot_watch["stream_ack_seen"]
+            _reboot_watch["bootstrap_in_flight"] = False
+        if acked:
+            print("[live_map] reboot detected — re-armed gps stream "
+                  f"{LIVE_GPS_STREAM_HZ} Hz")
+        else:
+            print(f"[live_map] WARN: reboot bootstrap gave up after "
+                  f"{_REBOOT_MAX_RETRIES} retries — firmware never "
+                  f"ACKed; trail will update at 1 Hz fallback rate")
 
-    _reboot_watch["last_bootstrap_ts"] = time.time()
-    _reboot_watch["bootstrap_in_flight"] = True
+    with _reboot_watch_lock:
+        _reboot_watch["last_bootstrap_ts"] = time.time()
+        _reboot_watch["bootstrap_in_flight"] = True
+        _reboot_watch["stream_ack_seen"] = False
     threading.Thread(target=_run, daemon=True).start()
 
 
@@ -960,15 +1086,18 @@ def _maybe_handle_reboot(line: str) -> None:
     if it's not still inside the debounce window, kick a re-bootstrap.
     We match on `[BOOT-EARLY] SETUP_ENTRY` because it's the only token
     guaranteed to arrive exactly once per boot (before any subsystem
-    log noise).
+    log noise).  All _reboot_watch reads/writes go through the lock
+    so two banners racing through parse_line() from different threads
+    (reader + future admin hooks) cannot both pass the gate.
     """
     if "[BOOT-EARLY] SETUP_ENTRY" not in line:
         return
     now = time.time()
-    if _reboot_watch["bootstrap_in_flight"]:
-        return
-    if now - _reboot_watch["last_bootstrap_ts"] < _REBOOT_DEBOUNCE_S:
-        return
+    with _reboot_watch_lock:
+        if _reboot_watch["bootstrap_in_flight"]:
+            return
+        if now - _reboot_watch["last_bootstrap_ts"] < _REBOOT_DEBOUNCE_S:
+            return
     _kick_reboot_bootstrap()
 
 
@@ -1006,7 +1135,7 @@ def track_query_bootstrap() -> None:
               "until the board reboots and prints the [track] boot log.")
         return
 
-    send(f"cat tracks/{track_name}")
+    _bootstrap_send(f"cat tracks/{track_name}")
     _track_discovery["requested_cat"] = True
     print(f"[live_map] requested tracks/{track_name} over serial")
 
@@ -2064,13 +2193,13 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"error":"command not allowed"}')
             return
-        ser = _ser_ref[0]
-        if ser is None:
+        # Advisory fast-path: if the reader already knows the port is
+        # gone, skip the write attempt and return a direct 503.  The
+        # authoritative check lives inside _serial_write_command's
+        # lock — this one is just a nicer error for the common case.
+        if _ser_ref[0] is None:
             self.send_response(503)
             self.end_headers()
-            # Specific error so the UI can surface the disconnect
-            # instead of the generic "serial not open".  The operator
-            # knows exactly what to fix (plug the USB back in).
             self.wfile.write(
                 b'{"error":"USB disconnected - plug the board back in"}')
             return
@@ -2078,6 +2207,20 @@ class Handler(BaseHTTPRequestHandler):
             start_seq = state.get("event_seq", 0)
         try:
             _serial_write_command(cmd)
+        except RuntimeError as exc:
+            # Port was alive at the advisory check but dropped before
+            # the write lock — surface as 503 with the operator-facing
+            # message, not as a generic 500.
+            if "serial not open" in str(exc):
+                self.send_response(503)
+                self.end_headers()
+                self.wfile.write(
+                    b'{"error":"USB disconnected - plug the board back in"}')
+                return
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(f'{{"error":"{exc}"}}'.encode())
+            return
         except Exception as exc:
             self.send_response(500)
             self.end_headers()
