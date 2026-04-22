@@ -839,17 +839,23 @@ static void serial_console_handle_track_autodetect() {
 // mid-session append, so it can atomically replace a stale catalog
 // on each full listing instead of accumulating deleted entries.
 static void serial_console_handle_tracks_list() {
-    Serial.println("[tracks-list] begin");
     // Iterate via the thread-safe copy-out APIs so a concurrent
     // track_delete on the WiFi task can't shift s_tracks[] out from
-    // under us mid-iteration (codex review 2026-04-22 HIGH).  Each
-    // track_copy_at takes + releases track_store_mutex internally,
-    // so if a delete happens BETWEEN iterations we may see a
-    // shortened list — that's fine for a diagnostic dump.
-    // track_snapshot_count returns -1 on mutex timeout; the loop
-    // body is skipped cleanly in that case (UI sees an empty list
-    // this cycle and retries on the next reboot bootstrap).
+    // under us mid-iteration (codex review 2026-04-22 HIGH).
+    //
+    // track_snapshot_count returns -1 on mutex timeout.  Emit a
+    // distinct `[tracks-list] busy` marker instead of the begin/end
+    // pair in that case — live_map parses both and treats `busy`
+    // as "do NOT replace the catalog", so a concurrent slow
+    // track_save doesn't wipe the dropdown to empty on a laptop
+    // that happened to request `tracks list` at the same time.
+    // Codex review 2026-04-22 round 6 Medium.
     int count = track_snapshot_count();
+    if (count < 0) {
+        Serial.println("[tracks-list] busy");
+        return;
+    }
+    Serial.println("[tracks-list] begin");
     for (int i = 0; i < count; i++) {
         TrackDefinition t = {};
         TrackLookupResult lr = track_copy_at(i, &t);

@@ -26,8 +26,19 @@ void handle_api_tracks() {
     // track_save / track_delete on the main task (serial console
     // `track save` / `track select`) can't shift s_tracks[] out from
     // under us mid-iteration (codex review 2026-04-22 round 4 Low).
-    String json = "{\"tracks\":[";
+    //
+    // track_snapshot_count returns -1 on mutex timeout.  Distinguish
+    // "store busy, retry" (503) from "empty catalog" (200 with empty
+    // array) so the phone UI doesn't silently render an empty list
+    // while a slow save is in progress.  Codex review 2026-04-22
+    // round 6 Medium.
     int n = track_snapshot_count();
+    if (n < 0) {
+        server.send(503, "application/json",
+                    "{\"error\":\"track store busy — retry\"}");
+        return;
+    }
+    String json = "{\"tracks\":[";
     int emitted = 0;
     for (int i = 0; i < n; i++) {
         TrackDefinition t = {};
@@ -311,7 +322,12 @@ void handle_api_tracks_post() {
         char buf[160];
         snprintf(buf, sizeof(buf), "{\"error\":\"%s\"}",
                  track_creation_save_result_message(save_result));
-        server.send(500, "application/json", buf);
+        // Distinguish retryable contention (503) from real save
+        // failures (500) so clients can back off and retry on
+        // STORE_BUSY but surface permanent errors to the user.
+        // Codex review 2026-04-22 round 6 Low.
+        int status = (save_result == TRACK_SAVE_RESULT_STORE_BUSY) ? 503 : 500;
+        server.send(status, "application/json", buf);
     }
 }
 
@@ -421,18 +437,38 @@ void handle_api_tracks_delete() {
 
     extern TrackDefinition active_track;
 
-    // Snapshot the bits of SessionState and active_track we need to make
-    // the is-this-the-active-track decision, all under session_mutex.
-    // Reading active_track.id lock-free races with any concurrent writer
-    // (e.g. a back-to-back select+delete), and lap_timer_task would
-    // otherwise see the memset below tear.
-    bool is_rec = false;
-    char active_id_snapshot[sizeof(active_track.id)] = {0};
-    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        is_rec = session_state.is_recording;
-        memcpy(active_id_snapshot, active_track.id, sizeof(active_id_snapshot));
-        xSemaphoreGive(session_mutex);
+    // Hold session_mutex across the ENTIRE delete (recording-check +
+    // existence-check + track_delete + active-track-clear) so a
+    // concurrent `recording start` or `track select` can't race into
+    // the window between our old three-phase checks.  Codex review
+    // 2026-04-22 round 6 HIGH: the previous code snapshotted
+    // is_recording / active_id, released session_mutex, ran the
+    // (now slow) track_delete, then used stale `was_active` to
+    // decide whether to clear active state.  During the delete
+    // window, another task could start a recording on the about-to-
+    // be-deleted track, leaving the session pointing at a non-
+    // existent track file.
+    //
+    // Lock order: session_mutex (outer) → track_store_mutex (inner
+    // via track_copy_by_id / track_delete) → spi_mutex (inside
+    // track_delete's sd.remove).  All three are session-mutex
+    // timeout-bounded from the outside.
+    //
+    // Holding session_mutex for ~hundreds of ms does freeze the
+    // display task briefly, but:
+    //   - delete is a user-initiated action, not automatic
+    //   - recording_stop already holds session_mutex across SD I/O
+    //     (storage_end_session) so this follows the same pattern
+    //   - consistency beats a half-second LCD stutter
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(3000)) != pdTRUE) {
+        server.send(503, "application/json",
+                    "{\"error\":\"session busy — retry\"}");
+        return;
     }
+
+    bool is_rec = session_state.is_recording;
+    char active_id_snapshot[sizeof(active_track.id)] = {0};
+    memcpy(active_id_snapshot, active_track.id, sizeof(active_id_snapshot));
 
     TrackDefinition tmp_active_for_decision = {};
     strlcpy(tmp_active_for_decision.id, active_id_snapshot,
@@ -441,46 +477,59 @@ void handle_api_tracks_delete() {
         track_runtime_evaluate_delete(is_rec, &tmp_active_for_decision, id);
 
     if (delete_decision == TRACK_DELETE_BLOCK_ACTIVE_RECORDING) {
+        xSemaphoreGive(session_mutex);
         server.send(409, "application/json",
                     "{\"error\":\"cannot delete active track during recording\"}");
         return;
     }
 
-    // Existence check via copy-out so a concurrent save/delete
-    // from the serial console can't race us (codex review
-    // 2026-04-22 round 4 Low).  We don't actually need the copy
-    // — track_delete below does its own lookup — but checking
-    // first gives a precise 404 vs 500 distinction for the API.
+    // Existence check via copy-out so the caller gets a precise 404
+    // response if the id doesn't exist.  Takes track_store_mutex
+    // (nested inside session_mutex — the documented lock order).
     TrackDefinition existing_track = {};
     TrackLookupResult lr = track_copy_by_id(id, &existing_track);
     if (lr == TRACK_LOOKUP_BUSY) {
+        xSemaphoreGive(session_mutex);
         server.send(503, "application/json",
                     "{\"error\":\"track store busy — retry\"}");
         return;
     }
     if (lr != TRACK_LOOKUP_OK) {
+        xSemaphoreGive(session_mutex);
         server.send(404, "application/json", "{\"error\":\"track not found\"}");
         return;
     }
 
     bool was_active = (strcmp(active_id_snapshot, id) == 0);
 
-    if (track_delete(id)) {
-        if (was_active) {
-            // Clear active_track under session_mutex and bump the version
-            // so lap_timer_task refreshes its shadow before processing
-            // the next GPS fix.  memset alone is a 120-byte non-atomic
-            // write and was the canonical cross-task tear hazard.
-            if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-                memset(&active_track, 0, sizeof(TrackDefinition));
-                lap_timer_active_track_changed_locked();
-                strlcpy(session_state.track_name, "No Track",
-                        sizeof(session_state.track_name));
-                xSemaphoreGive(session_mutex);
-            }
-            lap_timer_reset();
-            track_runtime_note_track_cleared();
-        }
+    // track_delete also takes track_store_mutex (nested).  Same
+    // documented lock order.
+    bool ok = track_delete(id);
+    if (ok && was_active) {
+        // Clear active_track under the same session_mutex critical
+        // section so lap_timer_task doesn't see a transient state
+        // where the track file is gone but active_track still
+        // points to it.  Version bump via
+        // lap_timer_active_track_changed_locked() ensures the lap
+        // timer refreshes its shadow on the next GPS fix.
+        memset(&active_track, 0, sizeof(TrackDefinition));
+        lap_timer_active_track_changed_locked();
+        strlcpy(session_state.track_name, "No Track",
+                sizeof(session_state.track_name));
+    }
+
+    xSemaphoreGive(session_mutex);
+
+    // lap_timer_reset() and track_runtime_note_track_cleared() do
+    // NOT take session_mutex internally (verified 2026-04-22);
+    // safe to call after release.  Keeping them outside shortens
+    // the critical section by a few ms.
+    if (ok && was_active) {
+        lap_timer_reset();
+        track_runtime_note_track_cleared();
+    }
+
+    if (ok) {
         server.send(200, "application/json", "{\"ok\":true}");
     } else {
         server.send(500, "application/json", "{\"error\":\"delete failed\"}");

@@ -824,6 +824,13 @@ def parse_line(line: str) -> None:
     # verbatim; any prefix overlap is defensive hardening only.
     # Codex review 2026-04-22 third round, Low.
     stripped = line.strip()
+    if stripped == "[tracks-list] busy":
+        # Firmware's track_snapshot_count timed out.  Leave the
+        # existing tracks_catalog alone — a concurrent slow save
+        # is probably why, and the cached catalog from the last
+        # successful refresh is better than wiping to empty.
+        # Codex review 2026-04-22 round 6 Medium.
+        pass
     if stripped == "[tracks-list] begin":
         with state_lock:
             state["_tracks_catalog_pending"] = []
@@ -899,7 +906,8 @@ def parse_line(line: str) -> None:
             or line.startswith("[track] auto-detected:") \
             or line.startswith("[track] ERR:") \
             or line.strip() == "[tracks-list] begin" \
-            or line.strip() == "[tracks-list] end":
+            or line.strip() == "[tracks-list] end" \
+            or line.strip() == "[tracks-list] busy":
         # Only the begin/end MARKERS surface in the events feed —
         # not every catalog entry.  A 15-track catalog was producing
         # 17 events per `tracks list` (1 begin + 15 entries + 1 end),
@@ -1077,9 +1085,13 @@ def _match_command_ack(cmd: str, line: str) -> tuple[bool, str] | None:
         # the listing request — useful as a liveness probe during
         # bootstrap without blocking on a specific entry.  Exact
         # match so garbage like `[tracks-list] ending ...` can't
-        # false-ACK.
-        if line.strip() == "[tracks-list] end":
+        # false-ACK.  `busy` is a distinct terminal failure so the
+        # caller can retry instead of hitting the 5 s timeout silently.
+        stripped = line.strip()
+        if stripped == "[tracks-list] end":
             return (True, "catalog refreshed")
+        if stripped == "[tracks-list] busy":
+            return (False, "track store busy — retry")
         return None
 
     return None
@@ -1101,21 +1113,30 @@ def _command_timeout_s(cmd: str) -> float:
         # the trace lines pinpoint the step.
         return 15.0
     if cmd == "track save":
-        return 3.0
+        # Firmware holds track_store_mutex for the full save
+        # (recording-check + id-reservation + SD write + in-memory
+        # append) and waits up to 3000 ms for the mutex before
+        # returning STORE_BUSY.  A slow/fragmented SD can add
+        # another 1-2 s.  Give the client 8 s so the firmware's
+        # friendly "store busy, retry in a moment" message can
+        # actually reach the browser instead of a bare 504.
+        # Codex review 2026-04-22 round 6 Medium.
+        return 8.0
     if cmd.startswith("track select ") or cmd == "track autodetect":
         # Both paths load a track from in-memory cache, call
         # lap_timer_set_track (geometry copy, no I/O), and print the
-        # ACK line.  No SD work, so a tight window is fine.  Bumped
-        # above the 2.5 s default because lap_timer_task may be
-        # mid-fix-processing and the version-bump + ACK emit sit
-        # behind a mutex briefly.
-        return 3.0
+        # ACK line.  Session helper takes session_mutex (1000 ms
+        # timeout) and nested track_store_mutex (1000 ms timeout)
+        # so the worst-case legit wait is ~2 s.  5 s client-side
+        # leaves headroom for a simultaneous track save running on
+        # the WiFi task.
+        return 5.0
     if cmd == "tracks list":
-        # Catalog emission is a tight loop over the in-memory track
-        # array (max ~16 entries), each emitting one 50-100 byte
-        # line over 115200-baud UART.  Even 16 entries = <5 ms of
-        # wire time.  Generous 3 s covers contention.
-        return 3.0
+        # Catalog emission is normally a tight loop, but the new
+        # reader path takes track_store_mutex (1000 ms timeout) and
+        # can wait behind a concurrent save (3000 ms mutex hold).
+        # 5 s client-side is comfortable.
+        return 5.0
     return 2.5
 
 
