@@ -79,13 +79,28 @@ bool storage_end_session() {
     // new entries (gated on session_state.is_recording), so this loop sees
     // a strictly shrinking queue.  Give lap_timer a GPS interval first to
     // let any in-flight forward_vbo_entry() call complete.
+    Serial.printf("[stop-trace] end_session: pre_settle t=%lu\n",
+                  (unsigned long)millis());
     vTaskDelay(pdMS_TO_TICKS(50));
+    Serial.printf("[stop-trace] end_session: post_settle t=%lu\n",
+                  (unsigned long)millis());
 
     VboEntry pending;
     char drain_line_buf[VBO_LINE_BUF_LEN];
     int drained = 0;
+    bool first_drain_logged = false;
     uint32_t drain_start = millis();
     while (xQueueReceive(vbo_write_queue, &pending, 0) == pdTRUE) {
+        if (!first_drain_logged) {
+            // Fire exactly once so a hang on the very first drained
+            // entry's spi_mutex wait or write leaves a marker past
+            // the entry/settle lines.  Codex review 2026-04-22
+            // Medium: without this, a hang here leaves only the
+            // `entry` marker visible.
+            Serial.printf("[stop-trace] end_session: drain_first_entry "
+                          "t=%lu\n", (unsigned long)millis());
+            first_drain_logged = true;
+        }
         format_vbo_line(&pending, drain_line_buf, sizeof(drain_line_buf));
         xSemaphoreTake(spi_mutex, portMAX_DELAY);
         size_t n = s_vbo_file.write(drain_line_buf, strlen(drain_line_buf));
@@ -105,16 +120,23 @@ bool storage_end_session() {
 
     s_session_active = false;
 
-    uint32_t t0 = millis();
+    Serial.printf("[stop-trace] end_session: spi_mutex_pre t=%lu\n",
+                  (unsigned long)millis());
     xSemaphoreTake(spi_mutex, portMAX_DELAY);
     Serial.printf("[stop-trace] end_session: spi_mutex_acquired t=%lu\n",
                   (unsigned long)millis());
-    s_vbo_file.write("\r\n[laptiming]\r\n", 15);
 
+    // Timer bracket the actual write work, not the mutex wait +
+    // diagnostic prints.  Codex review 2026-04-22 Low: the previous
+    // `t0` was started BEFORE spi_mutex_pre, so the reported took_ms
+    // included mutex contention and a Serial.printf, which skewed
+    // the number for the very step we want to isolate.
+    uint32_t t_laptiming = millis();
+    s_vbo_file.write("\r\n[laptiming]\r\n", 15);
     write_laptiming_lines();
     Serial.printf("[stop-trace] end_session: laptiming_written "
                   "took_ms=%lu\n",
-                  (unsigned long)(millis() - t0));
+                  (unsigned long)(millis() - t_laptiming));
 
     uint32_t t_flush = millis();
     s_vbo_file.flush();
@@ -160,12 +182,20 @@ bool storage_end_session() {
     // from a concurrent fs access is avoided by draining writes above
     // and closing explicitly here.
     if (s_lap_sidecar_open) {
+        uint32_t t_side_close = millis();
         xSemaphoreTake(spi_mutex, portMAX_DELAY);
         s_lap_sidecar_file.flush();
         s_lap_sidecar_file.sync();
         s_lap_sidecar_file.close();
         xSemaphoreGive(spi_mutex);
         s_lap_sidecar_open = false;
+        // Sidecar close bracket.  Codex review 2026-04-22 Medium: if
+        // this step blocks (SD sync spike on the lap sidecar file),
+        // the previously-last trace marker would be `rename`, giving
+        // a misleading diagnosis.  This marker pins the blame.
+        Serial.printf("[stop-trace] end_session: sidecar_closed "
+                      "took_ms=%lu\n",
+                      (unsigned long)(millis() - t_side_close));
     }
 
     if (renamed) {
@@ -178,9 +208,14 @@ bool storage_end_session() {
             && flen - 4 + (int)strlen(".lap.jsonl") < (int)sizeof(sidecar_final)) {
             memcpy(sidecar_final, final_path, flen - 4);
             strcpy(sidecar_final + flen - 4, ".lap.jsonl");
+            uint32_t t_side_rename = millis();
             xSemaphoreTake(spi_mutex, portMAX_DELAY);
             bool side_ok = sd.rename(LAP_SIDECAR_TMP_FILENAME, sidecar_final);
             xSemaphoreGive(spi_mutex);
+            Serial.printf("[stop-trace] end_session: sidecar_renamed "
+                          "ok=%d took_ms=%lu\n",
+                          side_ok ? 1 : 0,
+                          (unsigned long)(millis() - t_side_rename));
             if (!side_ok) {
                 Serial.printf("[storage] WARN: lap sidecar rename failed "
                               "(%s -> %s), tmp preserved\n",

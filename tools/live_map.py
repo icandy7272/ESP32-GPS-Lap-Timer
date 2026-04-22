@@ -745,7 +745,15 @@ def parse_line(line: str) -> None:
             or ("[xing]" in line) or ("[xing-draft]" in line) \
             or line.startswith("[gps-live] stream") \
             or line.startswith("[gps-ubx]") \
-            or line.startswith("[gps-verify]"):
+            or line.startswith("[gps-verify]") \
+            or line.startswith("[stop-trace]"):
+        # [stop-trace] is the firmware's per-step diagnostic emitted
+        # during session_stop_recording / storage_end_session.  Must
+        # be in the event feed so the operator can see which
+        # milestone was the last-emitted one when a Save Recording
+        # hangs — without this filter hit, the markers are parsed
+        # but discarded, defeating the whole point of the commit
+        # (codex review 2026-04-22 High).
         _locked_append_event(line)
 
     # Any firmware acknowledgement of the gps-stream command lets the

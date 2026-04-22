@@ -539,6 +539,31 @@ def main() -> int:
         "track_042.json",
     )
 
+    # --- [stop-trace] must surface to the events feed ---------------
+    # Codex review 2026-04-22 High: before this filter hit,
+    # parse_line() dropped [stop-trace] on the floor, so the diagnostic
+    # markers added in the stop path were invisible in the tool the
+    # operator was actually using during the walking test.  Pinning
+    # here so a future refactor doesn't quietly remove the filter.
+    with live_map.state_lock:
+        live_map.state["events"] = []
+        live_map.state["event_seq"] = 0
+    live_map.parse_line(
+        "[stop-trace] session_stop: entry t=12345")
+    live_map.parse_line(
+        "[stop-trace] end_session: synced took_ms=47")
+    with live_map.state_lock:
+        evs = live_map.state["events"]
+        stop_evs = [
+            e for e in evs
+            if "[stop-trace]" in (e.get("text", "") if isinstance(e, dict) else str(e))
+        ]
+        check(
+            "stop-trace lines surface in events feed",
+            len(stop_evs),
+            2,
+        )
+
     if FAIL_COUNT == 0:
         print("test_live_map_parse: OK")
         return 0
