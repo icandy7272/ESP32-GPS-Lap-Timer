@@ -8,6 +8,7 @@
 #include "session.h"
 #include "storage.h"
 #include "lap_timer.h"
+#include "track.h"
 
 // --- Shared globals ---
 
@@ -378,4 +379,66 @@ static void handle_button_press(const ButtonEvent* ev)
     } else if (s_phase == SESSION_RECORDING) {
         (void)session_stop_recording();
     }
+}
+
+// --- Atomic track-switch claim (serial + HTTP shared helper) -------
+//
+// Semantics + rationale are in session.h.  Key points:
+//   - 1000 ms mutex timeout with fail-closed return so a contended
+//     session_mutex can't let a switch slip through DURING an
+//     active recording.
+//   - Recording check, track lookup/autodetect, and
+//     session_state.track_name update ALL happen inside the same
+//     critical section.  The previous HTTP and serial flows did
+//     these as separate lock takes, leaving a window where a
+//     concurrent recording_start could capture the stale name
+//     while lap_timer was about to take the new geometry.
+//   - Track lookup goes through track_copy_by_id /
+//     track_auto_detect_copy which each take track_store_mutex
+//     internally, so a concurrent track_delete shifting s_tracks[]
+//     cannot invalidate the pointer mid-copy.  Lock ordering:
+//     session_mutex (outer) → track_store_mutex (inner).  Never
+//     reversed.
+SessionTrackSwitchResult session_try_claim_track_switch(
+    bool is_auto, const char* id, TrackDefinition* out_copy) {
+    if (out_copy == nullptr) {
+        return SESSION_TRACK_SWITCH_NOT_FOUND;
+    }
+
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        return SESSION_TRACK_SWITCH_CONTENDED;
+    }
+
+    if (session_state.is_recording) {
+        xSemaphoreGive(session_mutex);
+        return SESSION_TRACK_SWITCH_RECORDING;
+    }
+
+    if (is_auto) {
+        if (!session_state.gps_fix_ok) {
+            xSemaphoreGive(session_mutex);
+            return SESSION_TRACK_SWITCH_NO_FIX;
+        }
+        double lat = session_state.gps_lat_deg;
+        double lon = session_state.gps_lon_deg;
+        if (!track_auto_detect_copy(lat, lon, out_copy)) {
+            xSemaphoreGive(session_mutex);
+            return SESSION_TRACK_SWITCH_NOT_FOUND;
+        }
+    } else {
+        if (id == nullptr || !track_copy_by_id(id, out_copy)) {
+            xSemaphoreGive(session_mutex);
+            return SESSION_TRACK_SWITCH_NOT_FOUND;
+        }
+    }
+
+    // Update session_state.track_name NOW, inside the same critical
+    // section that confirmed is_recording=false, so a concurrent
+    // recording_start can't capture the stale name while lap_timer
+    // is about to take the new geometry.
+    strlcpy(session_state.track_name, out_copy->name,
+            sizeof(session_state.track_name));
+
+    xSemaphoreGive(session_mutex);
+    return SESSION_TRACK_SWITCH_OK;
 }

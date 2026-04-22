@@ -13,6 +13,38 @@
 TrackDefinition s_tracks[MAX_TRACKS];
 int s_track_count = 0;
 
+// Track-store mutex: guards every read/write of s_tracks[] and
+// s_track_count.  Created in setup() before any task that might
+// touch the track store is spawned.  See track_internal.h for the
+// lock-ordering rules (session_mutex is OUTSIDE this one).
+SemaphoreHandle_t track_store_mutex = nullptr;
+
+namespace {
+
+// Take the track-store mutex with a long-but-bounded timeout.
+// Returns true if acquired, false on timeout.  We fail closed —
+// callers surface an error to the operator rather than silently
+// operating on unlocked state.
+bool take_track_store_mutex(uint32_t timeout_ms = 1000) {
+    if (track_store_mutex == nullptr) {
+        // Not yet created (boot-time before setup() ran).  Caller
+        // is single-threaded at this point, so unlocked access is
+        // safe.  Returning true here mirrors the pre-mutex semantics
+        // for init-time code (track_init, track_load_first).
+        return true;
+    }
+    return xSemaphoreTake(track_store_mutex,
+                          pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
+
+void give_track_store_mutex() {
+    if (track_store_mutex != nullptr) {
+        xSemaphoreGive(track_store_mutex);
+    }
+}
+
+}  // namespace
+
 static int find_max_track_number() {
     int max_num = 0;
     for (int i = 0; i < s_track_count; i++) {
@@ -111,15 +143,76 @@ bool track_load_first(TrackDefinition* out) {
     return true;
 }
 
+// --- Thread-safe copy-out APIs ---
+//
+// Each takes track_store_mutex, copies the result into the caller's
+// buffer, and releases.  Safe against concurrent track_save /
+// track_delete mutations on the WiFi task.
+
+bool track_copy_by_id(const char* id, TrackDefinition* out) {
+    if (!id || !out) {
+        return false;
+    }
+    if (!take_track_store_mutex()) {
+        return false;
+    }
+    bool found = false;
+    for (int i = 0; i < s_track_count; i++) {
+        if (strcmp(s_tracks[i].id, id) == 0) {
+            *out = s_tracks[i];
+            found = true;
+            break;
+        }
+    }
+    give_track_store_mutex();
+    return found;
+}
+
+bool track_copy_at(int index, TrackDefinition* out) {
+    if (!out) {
+        return false;
+    }
+    if (!take_track_store_mutex()) {
+        return false;
+    }
+    bool ok = false;
+    if (index >= 0 && index < s_track_count) {
+        *out = s_tracks[index];
+        ok = true;
+    }
+    give_track_store_mutex();
+    return ok;
+}
+
+int track_snapshot_count() {
+    if (!take_track_store_mutex()) {
+        return 0;
+    }
+    int n = s_track_count;
+    give_track_store_mutex();
+    return n;
+}
+
 TrackSaveResult track_save_detailed(const TrackDefinition* track) {
     if (!track) {
         return TRACK_SAVE_RESULT_INVALID_ARGUMENT;
     }
+
+    // Take track_store_mutex for the full save: capacity check, id
+    // generation (reads s_track_count), and the in-memory append at
+    // the end.  Released before the SD write so spi_mutex contention
+    // doesn't serialise all track readers for the entire file I/O,
+    // but re-acquired for the final array mutation.
+    if (!take_track_store_mutex(2000)) {
+        Serial.println("[track] save: store mutex contended");
+        return TRACK_SAVE_RESULT_INVALID_ARGUMENT;
+    }
     if (s_track_count >= MAX_TRACKS) {
+        give_track_store_mutex();
         return TRACK_SAVE_RESULT_CAPACITY_REACHED;
     }
-
     int next_num = find_max_track_number() + 1;
+    give_track_store_mutex();
 
     TrackDefinition new_track = *track;
     snprintf(new_track.id, sizeof(new_track.id), "track_%03d", next_num);
@@ -195,8 +288,21 @@ TrackSaveResult track_save_detailed(const TrackDefinition* track) {
         return TRACK_SAVE_RESULT_FILE_SYNC_FAILED;
     }
 
+    // Final array mutation under track_store_mutex so concurrent
+    // readers never see a half-appended s_tracks[].  The re-check of
+    // s_track_count < MAX_TRACKS defends against a save racing with
+    // another track-producing path; unlikely but cheap.
+    if (!take_track_store_mutex(2000)) {
+        Serial.println("[track] save: store mutex contended at commit");
+        return TRACK_SAVE_RESULT_FILE_WRITE_SHORT;
+    }
+    if (s_track_count >= MAX_TRACKS) {
+        give_track_store_mutex();
+        return TRACK_SAVE_RESULT_CAPACITY_REACHED;
+    }
     s_tracks[s_track_count] = new_track;
     s_track_count++;
+    give_track_store_mutex();
 
     Serial.printf("[track] saved: %s (%s)\n", new_track.id, new_track.name);
     return dir_recreated ? TRACK_SAVE_RESULT_SUCCESS_DIR_RECREATED
@@ -212,6 +318,13 @@ bool track_delete(const char* id) {
         return false;
     }
 
+    // Look up the index under track_store_mutex.  Release before
+    // the SD remove so spi_mutex contention doesn't block all
+    // track readers for the duration of the I/O.
+    if (!take_track_store_mutex(2000)) {
+        Serial.println("[track] delete: store mutex contended");
+        return false;
+    }
     int idx = -1;
     for (int i = 0; i < s_track_count; i++) {
         if (strcmp(s_tracks[i].id, id) == 0) {
@@ -219,6 +332,7 @@ bool track_delete(const char* id) {
             break;
         }
     }
+    give_track_store_mutex();
     if (idx < 0) {
         return false;
     }
@@ -235,10 +349,29 @@ bool track_delete(const char* id) {
         return false;
     }
 
-    for (int i = idx; i < s_track_count - 1; i++) {
-        s_tracks[i] = s_tracks[i + 1];
+    // Re-acquire track_store_mutex for the shift.  Re-resolve idx
+    // inside the critical section because a concurrent save between
+    // the initial lookup and here could have appended (never shifted
+    // something ahead of idx, so the old idx is still valid if the
+    // entry is present — but re-search for safety).
+    if (!take_track_store_mutex(2000)) {
+        Serial.println("[track] delete: store mutex contended at shift");
+        return false;
     }
-    s_track_count--;
+    idx = -1;
+    for (int i = 0; i < s_track_count; i++) {
+        if (strcmp(s_tracks[i].id, id) == 0) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx >= 0) {
+        for (int i = idx; i < s_track_count - 1; i++) {
+            s_tracks[i] = s_tracks[i + 1];
+        }
+        s_track_count--;
+    }
+    give_track_store_mutex();
 
     Serial.printf("[track] deleted: %s\n", id);
     return true;

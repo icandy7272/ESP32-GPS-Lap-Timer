@@ -81,10 +81,16 @@ void lap_timer_task(void* param) {
                 }
             }
 
-            const TrackDefinition* detected =
-                track_auto_detect(curr.lat_deg, curr.lon_deg);
+            // Copy-out variant: holds track_store_mutex internally
+            // while searching + copying so a concurrent track_delete
+            // on the WiFi task can't move the winning entry out from
+            // under us between detection and sync (codex review
+            // 2026-04-22 HIGH).
+            TrackDefinition detected_copy = {};
+            bool have_detected = track_auto_detect_copy(
+                curr.lat_deg, curr.lon_deg, &detected_copy);
 
-            if (detected != nullptr) {
+            if (have_detected) {
                 extern TrackDefinition active_track;
                 char detected_name[sizeof(session_state.track_name)] = {0};
                 // Mutate active_track, bump version, and self-refresh the
@@ -93,7 +99,7 @@ void lap_timer_task(void* param) {
                 bool synced = false;
                 if (xSemaphoreTake(s_session_mutex, portMAX_DELAY) == pdTRUE) {
                     synced = track_runtime_sync_detected_track(
-                        &active_track, detected,
+                        &active_track, &detected_copy,
                         detected_name, sizeof(detected_name));
                     if (synced) {
                         lap_timer_bump_active_track_version_locked();
@@ -116,7 +122,7 @@ void lap_timer_task(void* param) {
                     // entry visually but has no authoritative
                     // selection (codex review 2026-04-22 Medium).
                     Serial.printf("[track] auto-detected: %s (%s)\n",
-                                  detected->id, detected_name);
+                                  detected_copy.id, detected_name);
                 }
             } else if (xSemaphoreTake(s_session_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                 strlcpy(session_state.track_name, "No Track",

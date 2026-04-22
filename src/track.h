@@ -31,6 +31,19 @@ typedef struct {
 bool track_init();
 
 // --- Queries ---
+//
+// LEGACY POINTER-RETURNING APIS:
+// The functions below (track_count, track_get, track_get_by_id,
+// track_auto_detect, track_find_nearby) return raw pointers into the
+// global s_tracks[] array.  They are NOT safe against concurrent
+// track_save / track_delete on other tasks — the shifting/growing
+// backing array can invalidate the returned pointer.  Only call
+// these when you know no other task can mutate the track store
+// (e.g. boot-time single-task init).  Prefer the copy-out APIs
+// further down for any hot-path / multi-task caller.
+//
+// See track_copy_by_id / track_copy_at / track_snapshot_count /
+// track_auto_detect_copy for the thread-safe variants.
 
 // Number of tracks currently loaded in memory.
 int track_count();
@@ -57,6 +70,36 @@ double track_distance_to_center_m(const TrackDefinition* track,
 // Load the first available track into *out.
 // Returns true if at least one track exists.
 bool track_load_first(TrackDefinition* out);
+
+// --- Thread-safe copy-out APIs ---
+//
+// Each of these takes track_store_mutex internally, copies the
+// result into the caller's buffer, and releases.  Safe against
+// concurrent track_save / track_delete mutations.
+//
+// See src/track/track_internal.h for the lock-ordering rules
+// (session_mutex is OUTSIDE track_store_mutex).
+
+// Look up a track by id and copy it into `out`.  Returns true on
+// success, false if no track with that id exists or `out` is null.
+bool track_copy_by_id(const char* id, TrackDefinition* out);
+
+// Copy the track at position `index` into `out`.  Returns false if
+// the index is out of range AT THE MOMENT the mutex is held.
+bool track_copy_at(int index, TrackDefinition* out);
+
+// Snapshot the track count under the mutex.  Use paired with
+// track_copy_at for iteration — but note the count can change
+// between calls, so a loop `for (i=0; i<count; i++) track_copy_at(i)`
+// can see a shorter-than-count list if a delete races; callers must
+// handle the `false` return from track_copy_at gracefully.
+int track_snapshot_count();
+
+// Auto-detect the nearest track to (lat, lon) and copy it into
+// `out`.  Returns true if a track was found within
+// AUTO_DETECT_MAX_M, false otherwise.
+bool track_auto_detect_copy(double lat, double lon,
+                            TrackDefinition* out);
 
 // --- Mutation ---
 

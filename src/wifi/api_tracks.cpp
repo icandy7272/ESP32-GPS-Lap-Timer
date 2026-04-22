@@ -311,18 +311,6 @@ void handle_api_tracks_post() {
 // ============================================================
 
 void handle_api_tracks_select() {
-    // Block track switch during recording to prevent timing/export inconsistency
-    bool recording = false;
-    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        recording = session_state.is_recording;
-        xSemaphoreGive(session_mutex);
-    }
-    if (recording) {
-        server.send(409, "application/json",
-                    "{\"error\":\"cannot switch track during recording\"}");
-        return;
-    }
-
     if (!server.hasArg("plain")) {
         server.send(400, "application/json", "{\"error\":\"no body\"}");
         return;
@@ -340,45 +328,47 @@ void handle_api_tracks_select() {
     }
     bool use_auto = has_source && strcmp(source, "auto") == 0;
 
-    const TrackDefinition* track = nullptr;
-    if (use_auto) {
-        bool gps_fix = false;
-        double lat = 0.0;
-        double lon = 0.0;
-        if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            gps_fix = session_state.gps_fix_ok;
-            lat = session_state.gps_lat_deg;
-            lon = session_state.gps_lon_deg;
-            xSemaphoreGive(session_mutex);
-        }
-        if (!gps_fix) {
-            server.send(409, "application/json",
-                        "{\"error\":\"gps fix required for auto mode\"}");
-            return;
-        }
-        track = track_auto_detect(lat, lon);
-        if (!track) {
+    // Delegate recording check + track lookup + track_name update
+    // to session_try_claim_track_switch, the same helper the serial
+    // console path uses.  Replaces the previous fail-open pattern
+    // (pdMS_TO_TICKS(50) with recording defaulting to false on
+    // contention) and the split-phase lap_timer_set_track() +
+    // separate mutex take for track_name — codex review
+    // 2026-04-22 HIGH.
+    TrackDefinition snap = {};
+    SessionTrackSwitchResult result = session_try_claim_track_switch(
+        use_auto, has_id ? id : nullptr, &snap);
+
+    switch (result) {
+    case SESSION_TRACK_SWITCH_OK:
+        break;
+    case SESSION_TRACK_SWITCH_CONTENDED:
+        server.send(503, "application/json",
+                    "{\"error\":\"session busy — retry\"}");
+        return;
+    case SESSION_TRACK_SWITCH_RECORDING:
+        server.send(409, "application/json",
+                    "{\"error\":\"cannot switch track during recording\"}");
+        return;
+    case SESSION_TRACK_SWITCH_NO_FIX:
+        server.send(409, "application/json",
+                    "{\"error\":\"gps fix required for auto mode\"}");
+        return;
+    case SESSION_TRACK_SWITCH_NOT_FOUND:
+        if (use_auto) {
             server.send(404, "application/json",
                         "{\"error\":\"no nearby track for auto mode\"}");
-            return;
+        } else {
+            server.send(404, "application/json",
+                        "{\"error\":\"track not found\"}");
         }
-    } else {
-        track = track_get_by_id(id);
-        if (!track) {
-            server.send(404, "application/json", "{\"error\":\"track not found\"}");
-            return;
-        }
+        return;
     }
 
-    // Update lap timer with new track (copies data, resets state)
-    lap_timer_set_track(track);
-
-    // Update session state track name
-    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        strlcpy(session_state.track_name, track->name,
-                sizeof(session_state.track_name));
-        xSemaphoreGive(session_mutex);
-    }
+    // Helper released session_mutex; safe to call lap_timer_set_track
+    // now (it takes session_mutex internally).  snap is a caller-
+    // owned copy, so a concurrent track_delete won't invalidate it.
+    lap_timer_set_track(&snap);
 
     if (use_auto) {
         track_runtime_note_auto_detect();
@@ -387,8 +377,17 @@ void handle_api_tracks_select() {
             has_source && strcmp(source, "newly_created") == 0);
     }
 
+    // Emit the same [track] selected:/auto-detected: line the serial
+    // path emits so live_map's active-track state stays in sync with
+    // phone-app-initiated switches too.
+    if (use_auto) {
+        Serial.printf("[track] auto-detected: %s (%s)\n", snap.id, snap.name);
+    } else {
+        Serial.printf("[track] selected: %s (%s)\n", snap.id, snap.name);
+    }
+
     String resp = "{\"ok\":true,\"name\":\"";
-    resp += jsonEscapeString(track->name);
+    resp += jsonEscapeString(snap.name);
     resp += "\"}";
     server.send(200, "application/json", resp);
 }
