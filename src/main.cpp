@@ -633,37 +633,35 @@ static void serial_console_handle_track_save() {
     td.center_lon_deg = (s_draft_p1_lon + s_draft_p2_lon) * 0.5;
     td.sector_count = 1;  // start/finish only; no sector splits
 
-    TrackSaveResult save_result = track_save_detailed(&td);
+    // Collect the saved track into `saved` rather than peek at
+    // s_tracks[track_count()-1].  The old pattern was racy against
+    // a concurrent track save/delete that could have appended or
+    // shifted another entry into the last slot between our save and
+    // the peek; codex review 2026-04-22 round 4 Medium.
+    TrackDefinition saved = {};
+    TrackSaveResult save_result = track_save_detailed(&td, &saved);
     if (!track_creation_save_result_succeeded(save_result)) {
         Serial.printf("[draft] ERR: save failed: %s\n",
                       track_creation_save_result_message(save_result));
         return;
     }
 
-    // track_save_detailed assigns the id and appends to s_tracks.  Pick
-    // the last one and make it active via the normal lap_timer entry
-    // point so the shadow copy and version counter update correctly.
-    const TrackDefinition* saved = track_get(track_count() - 1);
-    if (saved) {
-        lap_timer_set_track(saved);
-        // Mirror everything the /api/tracks/select flow does, so the
-        // runtime does not end up in a split "lap_timer sees the new
-        // track but session_state / runtime ownership still point at
-        // the previous one" state.  Without these, /api/status can
-        // keep reporting blocked_no_track and the auto-detect task
-        // can stomp the just-created track on its next scan.
-        // Codex P1 from 2026-04-19 follow-up review.
-        if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            strlcpy(session_state.track_name, saved->name,
-                    sizeof(session_state.track_name));
-            xSemaphoreGive(session_mutex);
-        }
-        track_runtime_note_manual_selection(true /* newly_created */);
-        Serial.printf("[draft] saved: %s (%s) length=%.2fm heading=%.1f\n",
-                      saved->id, saved->name, line_len_m, s_draft_heading);
-    } else {
-        Serial.println("[draft] WARN: saved but could not re-read track");
+    lap_timer_set_track(&saved);
+    // Mirror everything the /api/tracks/select flow does, so the
+    // runtime does not end up in a split "lap_timer sees the new
+    // track but session_state / runtime ownership still point at
+    // the previous one" state.  Without these, /api/status can
+    // keep reporting blocked_no_track and the auto-detect task
+    // can stomp the just-created track on its next scan.
+    // Codex P1 from 2026-04-19 follow-up review.
+    if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        strlcpy(session_state.track_name, saved.name,
+                sizeof(session_state.track_name));
+        xSemaphoreGive(session_mutex);
     }
+    track_runtime_note_manual_selection(true /* newly_created */);
+    Serial.printf("[draft] saved: %s (%s) length=%.2fm heading=%.1f\n",
+                  saved.id, saved.name, line_len_m, s_draft_heading);
 
     draft_clear();
 }
@@ -842,12 +840,16 @@ static void serial_console_handle_tracks_list() {
     // track_copy_at takes + releases track_store_mutex internally,
     // so if a delete happens BETWEEN iterations we may see a
     // shortened list — that's fine for a diagnostic dump.
+    // track_snapshot_count returns -1 on mutex timeout; the loop
+    // body is skipped cleanly in that case (UI sees an empty list
+    // this cycle and retries on the next reboot bootstrap).
     int count = track_snapshot_count();
     for (int i = 0; i < count; i++) {
         TrackDefinition t = {};
-        if (!track_copy_at(i, &t)) {
-            // A concurrent delete shortened the array; stop rather
-            // than emit a stale entry.
+        TrackLookupResult lr = track_copy_at(i, &t);
+        if (lr != TRACK_LOOKUP_OK) {
+            // A concurrent delete shortened the array, or the store
+            // became contended.  Stop rather than emit a stale entry.
             break;
         }
         // Defensive sanitisation: drop control chars + quote/backslash

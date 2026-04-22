@@ -69,15 +69,26 @@ void lap_timer_task(void* param) {
                 continue;
             }
 
+            // Candidate counter — also migrated to copy-out APIs so
+            // a concurrent WiFi-task track_delete can't shift
+            // s_tracks[] out from under the iteration (codex review
+            // 2026-04-22 round 4 Low: previously used
+            // track_count() + track_get() raw pointers).  The count
+            // is purely diagnostic ("N candidate(s) within 5km" in
+            // the log line below), so a BUSY store or a mid-loop
+            // delete both safely degrade to a slightly lower count.
             int candidates = 0;
-            for (int ti = 0; ti < track_count(); ti++) {
-                const TrackDefinition* t = track_get(ti);
-                if (t) {
-                    double d = haversine_m(curr.lat_deg, curr.lon_deg,
-                                           t->center_lat_deg, t->center_lon_deg);
-                    if (d < 5000.0) {
-                        candidates++;
-                    }
+            int total = track_snapshot_count();
+            for (int ti = 0; ti < total; ti++) {
+                TrackDefinition cand = {};
+                if (track_copy_at(ti, &cand) != TRACK_LOOKUP_OK) {
+                    break;
+                }
+                double d = haversine_m(curr.lat_deg, curr.lon_deg,
+                                       cand.center_lat_deg,
+                                       cand.center_lon_deg);
+                if (d < 5000.0) {
+                    candidates++;
                 }
             }
 
@@ -87,8 +98,9 @@ void lap_timer_task(void* param) {
             // under us between detection and sync (codex review
             // 2026-04-22 HIGH).
             TrackDefinition detected_copy = {};
-            bool have_detected = track_auto_detect_copy(
-                curr.lat_deg, curr.lon_deg, &detected_copy);
+            bool have_detected = (track_auto_detect_copy(
+                curr.lat_deg, curr.lon_deg, &detected_copy)
+                == TRACK_LOOKUP_OK);
 
             if (have_detected) {
                 extern TrackDefinition active_track;

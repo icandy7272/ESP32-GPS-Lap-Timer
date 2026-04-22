@@ -421,14 +421,29 @@ SessionTrackSwitchResult session_try_claim_track_switch(
         }
         double lat = session_state.gps_lat_deg;
         double lon = session_state.gps_lon_deg;
-        if (!track_auto_detect_copy(lat, lon, out_copy)) {
+        TrackLookupResult r = track_auto_detect_copy(lat, lon, out_copy);
+        if (r != TRACK_LOOKUP_OK) {
+            xSemaphoreGive(session_mutex);
+            // BUSY: track_store_mutex timeout (distinct from a
+            // genuine no-track-nearby).  Map to CONTENDED so the
+            // HTTP handler returns 503 and the operator retries,
+            // not a misleading 404 "no nearby track" (codex review
+            // 2026-04-22 round 4 Medium).
+            return (r == TRACK_LOOKUP_BUSY)
+                       ? SESSION_TRACK_SWITCH_CONTENDED
+                       : SESSION_TRACK_SWITCH_NOT_FOUND;
+        }
+    } else {
+        if (id == nullptr) {
             xSemaphoreGive(session_mutex);
             return SESSION_TRACK_SWITCH_NOT_FOUND;
         }
-    } else {
-        if (id == nullptr || !track_copy_by_id(id, out_copy)) {
+        TrackLookupResult r = track_copy_by_id(id, out_copy);
+        if (r != TRACK_LOOKUP_OK) {
             xSemaphoreGive(session_mutex);
-            return SESSION_TRACK_SWITCH_NOT_FOUND;
+            return (r == TRACK_LOOKUP_BUSY)
+                       ? SESSION_TRACK_SWITCH_CONTENDED
+                       : SESSION_TRACK_SWITCH_NOT_FOUND;
         }
     }
 

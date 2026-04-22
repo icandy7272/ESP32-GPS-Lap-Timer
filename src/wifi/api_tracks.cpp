@@ -22,17 +22,25 @@ void handle_api_tracks() {
         return;
     }
 
+    // Iterate with the thread-safe copy-out APIs so a concurrent
+    // track_save / track_delete on the main task (serial console
+    // `track save` / `track select`) can't shift s_tracks[] out from
+    // under us mid-iteration (codex review 2026-04-22 round 4 Low).
     String json = "{\"tracks\":[";
-    int n = track_count();
+    int n = track_snapshot_count();
+    int emitted = 0;
     for (int i = 0; i < n; i++) {
-        const TrackDefinition* t = track_get(i);
-        if (!t) { continue; }
-        if (i > 0) { json += ","; }
+        TrackDefinition t = {};
+        if (track_copy_at(i, &t) != TRACK_LOOKUP_OK) {
+            break;  // store busy or mid-shift
+        }
+        if (emitted > 0) { json += ","; }
         json += "{\"id\":\"";
-        json += jsonEscapeString(t->id);
+        json += jsonEscapeString(t.id);
         json += "\",\"name\":\"";
-        json += jsonEscapeString(t->name);
+        json += jsonEscapeString(t.name);
         json += "\"}";
+        emitted++;
     }
     json += "]}";
     server.send(200, "application/json", json);
@@ -286,18 +294,19 @@ void handle_api_tracks_post() {
     track.sector_count = sector_lines + 1;  // split lines + start/finish
 
     // Save through track module (validates, generates ID, writes proper JSON)
-    TrackSaveResult save_result = track_save_detailed(&track);
+    // Use out_saved so we get the assigned id back directly; the
+    // previous `track_get(track_count()-1)` peek was racy against a
+    // concurrent save from the serial console path (codex review
+    // 2026-04-22 round 4 Medium).
+    TrackDefinition saved = {};
+    TrackSaveResult save_result = track_save_detailed(&track, &saved);
     if (track_creation_save_result_succeeded(save_result)) {
-        const TrackDefinition* saved = track_get(track_count() - 1);
-        if (saved) {
-            char buf[160];
-            snprintf(buf, sizeof(buf),
-                     "{\"ok\":true,\"id\":\"%s\",\"name\":\"%s\"}",
-                     saved->id, saved->name);
-            server.send(201, "application/json", buf);
-            return;
-        }
-        server.send(201, "application/json", "{\"ok\":true}");
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "{\"ok\":true,\"id\":\"%s\",\"name\":\"%s\"}",
+                 saved.id, saved.name);
+        server.send(201, "application/json", buf);
+        return;
     } else {
         char buf[160];
         snprintf(buf, sizeof(buf), "{\"error\":\"%s\"}",
@@ -437,8 +446,19 @@ void handle_api_tracks_delete() {
         return;
     }
 
-    const TrackDefinition* existing_track = track_get_by_id(id);
-    if (!existing_track) {
+    // Existence check via copy-out so a concurrent save/delete
+    // from the serial console can't race us (codex review
+    // 2026-04-22 round 4 Low).  We don't actually need the copy
+    // — track_delete below does its own lookup — but checking
+    // first gives a precise 404 vs 500 distinction for the API.
+    TrackDefinition existing_track = {};
+    TrackLookupResult lr = track_copy_by_id(id, &existing_track);
+    if (lr == TRACK_LOOKUP_BUSY) {
+        server.send(503, "application/json",
+                    "{\"error\":\"track store busy — retry\"}");
+        return;
+    }
+    if (lr != TRACK_LOOKUP_OK) {
         server.send(404, "application/json", "{\"error\":\"track not found\"}");
         return;
     }

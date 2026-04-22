@@ -77,29 +77,38 @@ bool track_load_first(TrackDefinition* out);
 // result into the caller's buffer, and releases.  Safe against
 // concurrent track_save / track_delete mutations.
 //
+// Tri-state return so callers can distinguish "the store was busy,
+// retry" from "the id doesn't exist".  session_try_claim_track_switch
+// maps BUSY → SESSION_TRACK_SWITCH_CONTENDED (HTTP 503) and NOT_FOUND
+// → SESSION_TRACK_SWITCH_NOT_FOUND (HTTP 404); conflating them (the
+// previous `bool` return) made 404 misattribute to real misses when
+// the store was just contended (codex review 2026-04-22 Medium).
+//
 // See src/track/track_internal.h for the lock-ordering rules
 // (session_mutex is OUTSIDE track_store_mutex).
+typedef enum {
+    TRACK_LOOKUP_OK = 0,
+    TRACK_LOOKUP_BUSY,       // track_store_mutex timeout
+    TRACK_LOOKUP_NOT_FOUND,  // id missing / index out of range / nothing near
+} TrackLookupResult;
 
-// Look up a track by id and copy it into `out`.  Returns true on
-// success, false if no track with that id exists or `out` is null.
-bool track_copy_by_id(const char* id, TrackDefinition* out);
+// Look up a track by id and copy it into `out`.  OK on success,
+// NOT_FOUND if the id doesn't exist or `out` is null, BUSY on
+// mutex timeout.
+TrackLookupResult track_copy_by_id(const char* id, TrackDefinition* out);
 
-// Copy the track at position `index` into `out`.  Returns false if
-// the index is out of range AT THE MOMENT the mutex is held.
-bool track_copy_at(int index, TrackDefinition* out);
+// Copy the track at position `index` into `out`.
+TrackLookupResult track_copy_at(int index, TrackDefinition* out);
 
-// Snapshot the track count under the mutex.  Use paired with
-// track_copy_at for iteration — but note the count can change
-// between calls, so a loop `for (i=0; i<count; i++) track_copy_at(i)`
-// can see a shorter-than-count list if a delete races; callers must
-// handle the `false` return from track_copy_at gracefully.
+// Snapshot the track count under the mutex.  Returns -1 on mutex
+// timeout so callers that use it as an iteration bound can bail
+// gracefully; a count of 0 just means the array is empty.
 int track_snapshot_count();
 
 // Auto-detect the nearest track to (lat, lon) and copy it into
-// `out`.  Returns true if a track was found within
-// AUTO_DETECT_MAX_M, false otherwise.
-bool track_auto_detect_copy(double lat, double lon,
-                            TrackDefinition* out);
+// `out`.  NOT_FOUND if no track is within AUTO_DETECT_MAX_M.
+TrackLookupResult track_auto_detect_copy(double lat, double lon,
+                                         TrackDefinition* out);
 
 // --- Mutation ---
 
@@ -107,7 +116,20 @@ bool track_auto_detect_copy(double lat, double lon,
 // The track ID is auto-generated (max existing NNN + 1).
 // Returns true on success.
 bool track_save(const TrackDefinition* track);
-TrackSaveResult track_save_detailed(const TrackDefinition* track);
+
+// Save a track + return the saved copy (including the generated id)
+// via `out_saved` so callers don't have to race on
+// `track_get(track_count()-1)` to find what they just saved.  The
+// previous "peek at last slot" pattern could pick the wrong track
+// if another task saved in between.  `out_saved` may be nullptr.
+//
+// track_store_mutex is held across the entire save — including the
+// SD write — so two concurrent saves can't assign the same id.  On
+// a busy card the write can take hundreds of ms; readers stall
+// during that window, but saves are rare (user creates tracks
+// occasionally, not per fix).
+TrackSaveResult track_save_detailed(const TrackDefinition* track,
+                                    TrackDefinition* out_saved);
 
 // Delete a track by ID from both SD card and memory.
 // Returns true if found and deleted.

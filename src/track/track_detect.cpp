@@ -54,25 +54,26 @@ const TrackDefinition* track_auto_detect(double lat, double lon) {
     return nullptr;
 }
 
-bool track_auto_detect_copy(double lat, double lon, TrackDefinition* out) {
+TrackLookupResult track_auto_detect_copy(double lat, double lon,
+                                         TrackDefinition* out) {
     if (!out) {
-        return false;
+        return TRACK_LOOKUP_NOT_FOUND;
     }
     // Hold track_store_mutex for the full find + copy so a concurrent
     // track_delete can't move the winning entry out from under us.
     if (track_store_mutex != nullptr) {
         if (xSemaphoreTake(track_store_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-            return false;
+            return TRACK_LOOKUP_BUSY;
         }
     }
     NearbyTrackCandidate nearby[1] = {};
-    bool found = false;
+    TrackLookupResult r = TRACK_LOOKUP_NOT_FOUND;
     if (track_find_nearby(lat, lon, nearby, 1) > 0 && nearby[0].track != nullptr) {
         *out = *nearby[0].track;
-        found = true;
+        r = TRACK_LOOKUP_OK;
     }
     if (track_store_mutex != nullptr) {
         xSemaphoreGive(track_store_mutex);
     }
-    return found;
+    return r;
 }

@@ -147,63 +147,76 @@ bool track_load_first(TrackDefinition* out) {
 //
 // Each takes track_store_mutex, copies the result into the caller's
 // buffer, and releases.  Safe against concurrent track_save /
-// track_delete mutations on the WiFi task.
+// track_delete mutations on the WiFi task.  Tri-state return so
+// callers can distinguish "mutex busy" from "not found".
 
-bool track_copy_by_id(const char* id, TrackDefinition* out) {
+TrackLookupResult track_copy_by_id(const char* id, TrackDefinition* out) {
     if (!id || !out) {
-        return false;
+        return TRACK_LOOKUP_NOT_FOUND;
     }
     if (!take_track_store_mutex()) {
-        return false;
+        return TRACK_LOOKUP_BUSY;
     }
-    bool found = false;
+    TrackLookupResult r = TRACK_LOOKUP_NOT_FOUND;
     for (int i = 0; i < s_track_count; i++) {
         if (strcmp(s_tracks[i].id, id) == 0) {
             *out = s_tracks[i];
-            found = true;
+            r = TRACK_LOOKUP_OK;
             break;
         }
     }
     give_track_store_mutex();
-    return found;
+    return r;
 }
 
-bool track_copy_at(int index, TrackDefinition* out) {
+TrackLookupResult track_copy_at(int index, TrackDefinition* out) {
     if (!out) {
-        return false;
+        return TRACK_LOOKUP_NOT_FOUND;
     }
     if (!take_track_store_mutex()) {
-        return false;
+        return TRACK_LOOKUP_BUSY;
     }
-    bool ok = false;
+    TrackLookupResult r = TRACK_LOOKUP_NOT_FOUND;
     if (index >= 0 && index < s_track_count) {
         *out = s_tracks[index];
-        ok = true;
+        r = TRACK_LOOKUP_OK;
     }
     give_track_store_mutex();
-    return ok;
+    return r;
 }
 
 int track_snapshot_count() {
     if (!take_track_store_mutex()) {
-        return 0;
+        // -1 sentinel lets callers distinguish "busy" from "empty".
+        // For iteration bounds a negative value is harmless (loop
+        // body skipped) and matches "try again later" semantics.
+        return -1;
     }
     int n = s_track_count;
     give_track_store_mutex();
     return n;
 }
 
-TrackSaveResult track_save_detailed(const TrackDefinition* track) {
+TrackSaveResult track_save_detailed(const TrackDefinition* track,
+                                    TrackDefinition* out_saved) {
     if (!track) {
         return TRACK_SAVE_RESULT_INVALID_ARGUMENT;
     }
 
-    // Take track_store_mutex for the full save: capacity check, id
-    // generation (reads s_track_count), and the in-memory append at
-    // the end.  Released before the SD write so spi_mutex contention
-    // doesn't serialise all track readers for the entire file I/O,
-    // but re-acquired for the final array mutation.
-    if (!take_track_store_mutex(2000)) {
+    // Hold track_store_mutex across the ENTIRE save.  Codex review
+    // 2026-04-22 round 4 caught an ID-reservation race: the previous
+    // version released the mutex between id generation and the SD
+    // write, so two concurrent saves could compute the same
+    // track_NNN and end up writing to the same file + appending
+    // duplicate in-memory entries.
+    //
+    // Holding across the SD I/O means readers (track_copy_by_id,
+    // `tracks list`, etc.) stall for 100-500 ms during a save.
+    // Saves are rare (operator creates tracks occasionally, not per
+    // fix) and the alternative — append-then-rollback — is more
+    // code for a narrow win.  Live_map's bootstrap tolerates this
+    // cleanly via the 1000 ms mutex timeout on reads.
+    if (!take_track_store_mutex(3000)) {
         Serial.println("[track] save: store mutex contended");
         return TRACK_SAVE_RESULT_INVALID_ARGUMENT;
     }
@@ -212,13 +225,13 @@ TrackSaveResult track_save_detailed(const TrackDefinition* track) {
         return TRACK_SAVE_RESULT_CAPACITY_REACHED;
     }
     int next_num = find_max_track_number() + 1;
-    give_track_store_mutex();
 
     TrackDefinition new_track = *track;
     snprintf(new_track.id, sizeof(new_track.id), "track_%03d", next_num);
 
     char json_buf[JSON_BUF_SIZE];
     if (!track_format_track_json(&new_track, json_buf, sizeof(json_buf))) {
+        give_track_store_mutex();
         return TRACK_SAVE_RESULT_FORMAT_FAILED;
     }
 
@@ -236,6 +249,7 @@ TrackSaveResult track_save_detailed(const TrackDefinition* track) {
     }
     if (!dir_ok) {
         xSemaphoreGive(spi_mutex);
+        give_track_store_mutex();
         Serial.printf("[track] failed to create directory: %s\n", TRACKS_DIR);
         return TRACK_SAVE_RESULT_DIRECTORY_CREATE_FAILED;
     }
@@ -243,6 +257,7 @@ TrackSaveResult track_save_detailed(const TrackDefinition* track) {
     FsFile file;
     if (!file.open(path, O_WRONLY | O_CREAT | O_TRUNC)) {
         xSemaphoreGive(spi_mutex);
+        give_track_store_mutex();
         Serial.printf("[track] failed to open: %s\n", path);
         return TRACK_SAVE_RESULT_FILE_OPEN_FAILED;
     }
@@ -253,6 +268,7 @@ TrackSaveResult track_save_detailed(const TrackDefinition* track) {
     if (written != len) {
         file.close();
         xSemaphoreGive(spi_mutex);
+        give_track_store_mutex();
         Serial.printf("[track] partial write: %u/%u bytes to %s\n",
                       (unsigned)written, (unsigned)len, path);
         return TRACK_SAVE_RESULT_FILE_WRITE_SHORT;
@@ -260,6 +276,7 @@ TrackSaveResult track_save_detailed(const TrackDefinition* track) {
     if (!file.sync()) {
         file.close();
         xSemaphoreGive(spi_mutex);
+        give_track_store_mutex();
         Serial.printf("[track] sync failed: %s\n", path);
         return TRACK_SAVE_RESULT_FILE_SYNC_FAILED;
     }
@@ -280,28 +297,25 @@ TrackSaveResult track_save_detailed(const TrackDefinition* track) {
     xSemaphoreGive(spi_mutex);
 
     if (!dir_synced) {
+        give_track_store_mutex();
         Serial.printf("[track] directory sync failed: %s\n", TRACKS_DIR);
         return TRACK_SAVE_RESULT_FILE_SYNC_FAILED;
     }
     if (!exists_after_write) {
+        give_track_store_mutex();
         Serial.printf("[track] file missing after save: %s\n", path);
         return TRACK_SAVE_RESULT_FILE_SYNC_FAILED;
     }
 
-    // Final array mutation under track_store_mutex so concurrent
-    // readers never see a half-appended s_tracks[].  The re-check of
-    // s_track_count < MAX_TRACKS defends against a save racing with
-    // another track-producing path; unlikely but cheap.
-    if (!take_track_store_mutex(2000)) {
-        Serial.println("[track] save: store mutex contended at commit");
-        return TRACK_SAVE_RESULT_FILE_WRITE_SHORT;
-    }
-    if (s_track_count >= MAX_TRACKS) {
-        give_track_store_mutex();
-        return TRACK_SAVE_RESULT_CAPACITY_REACHED;
-    }
+    // Final array mutation happens inside the SAME critical section
+    // that reserved next_num — no release window for another save to
+    // claim the same id.  The s_track_count bound check (repeated)
+    // is defensive but not strictly needed since we hold the mutex.
     s_tracks[s_track_count] = new_track;
     s_track_count++;
+    if (out_saved != nullptr) {
+        *out_saved = new_track;
+    }
     give_track_store_mutex();
 
     Serial.printf("[track] saved: %s (%s)\n", new_track.id, new_track.name);
@@ -310,7 +324,8 @@ TrackSaveResult track_save_detailed(const TrackDefinition* track) {
 }
 
 bool track_save(const TrackDefinition* track) {
-    return track_creation_save_result_succeeded(track_save_detailed(track));
+    return track_creation_save_result_succeeded(
+        track_save_detailed(track, /*out_saved=*/nullptr));
 }
 
 bool track_delete(const char* id) {

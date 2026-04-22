@@ -6,6 +6,7 @@
 
 #include "wifi_internal.h"
 #include "track.h"
+#include "track/track_internal.h"   // for track_store_mutex
 #include "track_runtime.h"
 #include "types.h"
 
@@ -31,7 +32,16 @@ void handle_api_status() {
     TrackRuntimeStatus runtime_status = {};
     extern TrackDefinition active_track;
     TrackDefinition active_track_snapshot = {};
-    NearbyTrackCandidate nearby_candidates[MAX_NEARBY_TRACKS + 1] = {};
+    // Local-copy nearby-track slots so we don't hold raw pointers
+    // into s_tracks[] past the track_store_mutex window (codex review
+    // 2026-04-22 round 4 Low: a concurrent track_delete could have
+    // shifted the backing array out from under these pointers).
+    struct NearbyTrackCopy {
+        char id[32];
+        char name[32];
+        double distance_m;
+    };
+    NearbyTrackCopy nearby_copies[MAX_NEARBY_TRACKS] = {};
     double current_track_distance_m = -1.0;
     int nearby_count = 0;
 
@@ -54,19 +64,43 @@ void handle_api_status() {
             current_track_distance_m =
                 track_distance_to_center_m(&active_track_snapshot, lat, lon);
         }
-        int raw_nearby_count = track_find_nearby(
-            lat, lon, nearby_candidates, MAX_NEARBY_TRACKS + 1);
-        for (int i = 0; i < raw_nearby_count && nearby_count < MAX_NEARBY_TRACKS; i++) {
-            if (!nearby_candidates[i].track) {
-                continue;
+        // Hold track_store_mutex while calling track_find_nearby AND
+        // copying the winning candidates into local buffers, so the
+        // raw pointers returned by find_nearby can't be invalidated
+        // by a concurrent track_delete on another task.
+        bool locked = (track_store_mutex != nullptr)
+            && (xSemaphoreTake(track_store_mutex, pdMS_TO_TICKS(100))
+                == pdTRUE);
+        if (locked || track_store_mutex == nullptr) {
+            NearbyTrackCandidate raw[MAX_NEARBY_TRACKS + 1] = {};
+            int raw_nearby_count = track_find_nearby(
+                lat, lon, raw, MAX_NEARBY_TRACKS + 1);
+            for (int i = 0; i < raw_nearby_count
+                         && nearby_count < MAX_NEARBY_TRACKS; i++) {
+                if (!raw[i].track) {
+                    continue;
+                }
+                if (runtime_status.track_id[0] != '\0'
+                    && strcmp(runtime_status.track_id,
+                              raw[i].track->id) == 0) {
+                    continue;
+                }
+                strlcpy(nearby_copies[nearby_count].id,
+                        raw[i].track->id,
+                        sizeof(nearby_copies[nearby_count].id));
+                strlcpy(nearby_copies[nearby_count].name,
+                        raw[i].track->name,
+                        sizeof(nearby_copies[nearby_count].name));
+                nearby_copies[nearby_count].distance_m = raw[i].distance_m;
+                nearby_count++;
             }
-            if (runtime_status.track_id[0] != '\0'
-                && strcmp(runtime_status.track_id,
-                          nearby_candidates[i].track->id) == 0) {
-                continue;
+            if (locked) {
+                xSemaphoreGive(track_store_mutex);
             }
-            nearby_candidates[nearby_count++] = nearby_candidates[i];
         }
+        // Mutex contention: nearby_count stays 0, and the JSON
+        // response will show "nearby_tracks":[] this cycle.  Next
+        // poll retries.
     }
 
     String json;
@@ -107,11 +141,11 @@ void handle_api_status() {
             json += ",";
         }
         json += "{\"id\":\"";
-        json += jsonEscapeString(nearby_candidates[i].track->id);
+        json += jsonEscapeString(nearby_copies[i].id);
         json += "\",\"name\":\"";
-        json += jsonEscapeString(nearby_candidates[i].track->name);
+        json += jsonEscapeString(nearby_copies[i].name);
         json += "\",\"distance_m\":";
-        json += String((long)(nearby_candidates[i].distance_m + 0.5));
+        json += String((long)(nearby_copies[i].distance_m + 0.5));
         json += "}";
     }
     json += "]}";
