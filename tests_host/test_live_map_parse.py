@@ -739,6 +739,33 @@ def main() -> int:
         check("re-emit draft saved doesn't duplicate catalog entry",
               count_007, 1)
 
+    # Codex review 2026-04-22 Medium: names with parens must parse
+    # correctly — firmware's is_track_name_valid accepts `(` and `)`,
+    # and the emit path just interpolates them literally, so a valid
+    # name like `Home (North)` produces
+    # `[draft] saved: track_013 (Home (North)) length=...`.
+    # Previous regex `([^)]+)` stopped at the first `)` and silently
+    # dropped the catalog update.  Pin the fix here.
+    with live_map.state_lock:
+        live_map.state["tracks_catalog"] = []
+        live_map.state["_tracks_catalog_pending"] = None
+        live_map.state["active_track_id"] = None
+        live_map.state["active_track_name"] = None
+    live_map.parse_line(
+        "[draft] saved: track_013 (Home (North)) length=8.33m heading=90.0")
+    with live_map.state_lock:
+        cat = live_map.state["tracks_catalog"]
+        check("draft saved with parens-in-name lands in catalog",
+              len(cat), 1)
+        if cat:
+            check("paren-in-name catalog id", cat[0]["id"], "track_013")
+            check("paren-in-name catalog name captured verbatim",
+                  cat[0]["name"], "Home (North)")
+        check("paren-in-name active id flipped",
+              live_map.state["active_track_id"], "track_013")
+        check("paren-in-name active name captured verbatim",
+              live_map.state["active_track_name"], "Home (North)")
+
     # --- Finding 3 narrowing: only begin/end in events, not entries ---
     # Previously the filter included every [tracks-list] entry, so a
     # 15-track catalog spammed 17 events per `tracks list`.  Now the
@@ -760,6 +787,16 @@ def main() -> int:
         # Expect exactly 2 (begin + end), not 4 (begin + 2 entries + end).
         check("only begin+end surface in events (not entries)",
               len(list_evs), 2)
+        # Codex review 2026-04-22 Low: pin the exact text too — a
+        # broken filter that emitted two entries and dropped `end`
+        # would pass the count-only assertion but cause
+        # _wait_for_command_ack("tracks list", ...) to time out
+        # because it explicitly scans for `[tracks-list] end`.
+        evs_texts = [e.get("text", "") for e in list_evs]
+        check("first surfaced event is [tracks-list] begin",
+              "[tracks-list] begin" in evs_texts[0], True)
+        check("last surfaced event is [tracks-list] end",
+              "[tracks-list] end" in evs_texts[-1], True)
         # And the entries are still parsed into the catalog.
         cat = live_map.state["tracks_catalog"]
         ids_after = [t["id"] for t in cat]

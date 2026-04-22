@@ -305,7 +305,13 @@ _DRAFT_P2_RE = re.compile(
     rf"\[draft\] p2\s*=\s*\(({_FLOAT}),\s*({_FLOAT})\)(?:\s+heading=({_FLOAT}))?"
 )
 _DRAFT_SAVED_RE = re.compile(
-    rf"\[draft\] saved: (\S+) \(([^)]+)\) length=({_FLOAT})m heading=({_FLOAT})"
+    # Name capture uses non-greedy `(.+?)` anchored on the literal
+    # `) length=` that always follows the closing paren on the
+    # firmware side.  The previous `([^)]+)` stopped at the FIRST
+    # `)`, which silently broke names like `Home (North)` — firmware
+    # accepts those (is_track_name_valid only rejects control chars
+    # + `"\\/:*?<>|`).  Codex review 2026-04-22 Medium.
+    rf"\[draft\] saved: (\S+) \((.+?)\) length=({_FLOAT})m heading=({_FLOAT})"
 )
 # Spread + confidence tier appended to `[draft] p1/p2` lines by the
 # 5-second sampling path.  Optional so old firmwares that do not emit
