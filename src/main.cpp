@@ -753,7 +753,13 @@ static void serial_console_emit_track_switch_error(
     SessionTrackSwitchResult result, const char* id_for_not_found) {
     switch (result) {
     case SESSION_TRACK_SWITCH_CONTENDED:
-        Serial.println("[track] ERR: session_mutex contended — retry");
+        // CONTENDED means EITHER session_mutex timed out OR
+        // track_store_mutex timed out (the helper collapses both
+        // into one result).  Saying "session_mutex contended"
+        // specifically was misleading — codex review 2026-04-22
+        // round 5 Low — so emit a generic busy message instead.
+        // The operator's action is the same either way: retry.
+        Serial.println("[track] ERR: busy — retry in a moment");
         break;
     case SESSION_TRACK_SWITCH_RECORDING:
         Serial.println("[track] ERR: cannot switch track during recording");

@@ -218,7 +218,7 @@ TrackSaveResult track_save_detailed(const TrackDefinition* track,
     // cleanly via the 1000 ms mutex timeout on reads.
     if (!take_track_store_mutex(3000)) {
         Serial.println("[track] save: store mutex contended");
-        return TRACK_SAVE_RESULT_INVALID_ARGUMENT;
+        return TRACK_SAVE_RESULT_STORE_BUSY;
     }
     if (s_track_count >= MAX_TRACKS) {
         give_track_store_mutex();
@@ -333,10 +333,18 @@ bool track_delete(const char* id) {
         return false;
     }
 
-    // Look up the index under track_store_mutex.  Release before
-    // the SD remove so spi_mutex contention doesn't block all
-    // track readers for the duration of the I/O.
-    if (!take_track_store_mutex(2000)) {
+    // Hold track_store_mutex across the ENTIRE delete: lookup, SD
+    // remove, and in-memory shift.  Codex review 2026-04-22 round 5
+    // caught a disk/memory split where the old two-phase version
+    // dropped the mutex between SD remove and the shift; if a
+    // concurrent save held the mutex longer than the 2000 ms shift-
+    // timeout (now more likely since save holds across full I/O),
+    // delete would leave the file gone from SD but the entry still
+    // in s_tracks[] until reboot.  Matching the save path's
+    // all-in-one pattern keeps disk + memory consistent.
+    //
+    // Lock order: track_store_mutex → spi_mutex, same as save.
+    if (!take_track_store_mutex(3000)) {
         Serial.println("[track] delete: store mutex contended");
         return false;
     }
@@ -347,8 +355,8 @@ bool track_delete(const char* id) {
             break;
         }
     }
-    give_track_store_mutex();
     if (idx < 0) {
+        give_track_store_mutex();
         return false;
     }
 
@@ -360,32 +368,18 @@ bool track_delete(const char* id) {
     xSemaphoreGive(spi_mutex);
 
     if (!track_runtime_should_commit_delete(removed)) {
+        give_track_store_mutex();
         Serial.printf("[track] failed to delete file: %s\n", path);
         return false;
     }
 
-    // Re-acquire track_store_mutex for the shift.  Re-resolve idx
-    // inside the critical section because a concurrent save between
-    // the initial lookup and here could have appended (never shifted
-    // something ahead of idx, so the old idx is still valid if the
-    // entry is present — but re-search for safety).
-    if (!take_track_store_mutex(2000)) {
-        Serial.println("[track] delete: store mutex contended at shift");
-        return false;
+    // Still inside the critical section we started with; `idx` is
+    // still valid because nothing else could have mutated
+    // s_tracks[] while we held the mutex.
+    for (int i = idx; i < s_track_count - 1; i++) {
+        s_tracks[i] = s_tracks[i + 1];
     }
-    idx = -1;
-    for (int i = 0; i < s_track_count; i++) {
-        if (strcmp(s_tracks[i].id, id) == 0) {
-            idx = i;
-            break;
-        }
-    }
-    if (idx >= 0) {
-        for (int i = idx; i < s_track_count - 1; i++) {
-            s_tracks[i] = s_tracks[i + 1];
-        }
-        s_track_count--;
-    }
+    s_track_count--;
     give_track_store_mutex();
 
     Serial.printf("[track] deleted: %s\n", id);

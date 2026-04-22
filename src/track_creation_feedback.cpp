@@ -26,6 +26,8 @@ const char* track_creation_save_result_message(TrackSaveResult result) {
             return "Track save failed: the SD write was incomplete.";
         case TRACK_SAVE_RESULT_FILE_SYNC_FAILED:
             return "Track save failed: the SD sync did not complete.";
+        case TRACK_SAVE_RESULT_STORE_BUSY:
+            return "Track save failed: track store busy, retry in a moment.";
         default:
             return "Track save failed.";
     }

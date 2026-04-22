@@ -12,6 +12,11 @@ enum TrackSaveResult {
     TRACK_SAVE_RESULT_FILE_OPEN_FAILED = 6,
     TRACK_SAVE_RESULT_FILE_WRITE_SHORT = 7,
     TRACK_SAVE_RESULT_FILE_SYNC_FAILED = 8,
+    // track_store_mutex was held by another task longer than the
+    // save's 3 s budget.  Caller should tell the operator to retry
+    // — not bubble this up as "invalid argument".  Codex review
+    // 2026-04-22 round 5 Medium.
+    TRACK_SAVE_RESULT_STORE_BUSY = 9,
 };
 
 bool track_creation_save_result_succeeded(TrackSaveResult result);
