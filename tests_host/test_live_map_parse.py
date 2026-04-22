@@ -704,6 +704,68 @@ def main() -> int:
     check("track autodetect allowed", is_allowed("track autodetect"), True)
     check("tracks list allowed", is_allowed("tracks list"), True)
 
+    # --- Draft-saved must update picker state (codex Finding 2) ---
+    # After the firmware emits `[draft] saved: track_NNN (Name) ...`,
+    # the new track is active on the firmware side.  live_map must
+    # immediately reflect this: catalog gets the entry (idempotent),
+    # active_track_id + active_track_name flip.  Previously the
+    # picker stayed stale until next reboot.
+    with live_map.state_lock:
+        live_map.state["tracks_catalog"] = [
+            {"id": "track_001", "name": "Existing"},
+        ]
+        live_map.state["_tracks_catalog_pending"] = None
+        live_map.state["active_track_id"] = "track_001"
+        live_map.state["active_track_name"] = "Existing"
+    live_map.parse_line(
+        "[draft] saved: track_007 (Home Loop) length=12.50m heading=181.0")
+    with live_map.state_lock:
+        cat = live_map.state["tracks_catalog"]
+        ids = [t["id"] for t in cat]
+        check("catalog gains track_007 after draft saved",
+              "track_007" in ids, True)
+        t7 = next(t for t in cat if t["id"] == "track_007")
+        check("catalog track_007 name captured", t7["name"], "Home Loop")
+        check("active id flips to newly saved",
+              live_map.state["active_track_id"], "track_007")
+        check("active name flips to newly saved",
+              live_map.state["active_track_name"], "Home Loop")
+    # Re-emitting the same [draft] saved line is idempotent — no duplicate.
+    live_map.parse_line(
+        "[draft] saved: track_007 (Home Loop) length=12.50m heading=181.0")
+    with live_map.state_lock:
+        cat = live_map.state["tracks_catalog"]
+        count_007 = sum(1 for t in cat if t["id"] == "track_007")
+        check("re-emit draft saved doesn't duplicate catalog entry",
+              count_007, 1)
+
+    # --- Finding 3 narrowing: only begin/end in events, not entries ---
+    # Previously the filter included every [tracks-list] entry, so a
+    # 15-track catalog spammed 17 events per `tracks list`.  Now the
+    # markers alone satisfy _wait_for_command_ack without noising up
+    # the UI.
+    with live_map.state_lock:
+        live_map.state["events"] = []
+        live_map.state["event_seq"] = 0
+    live_map.parse_line("[tracks-list] begin")
+    live_map.parse_line('[tracks-list] track_001 "Alpha"')
+    live_map.parse_line('[tracks-list] track_002 "Beta"')
+    live_map.parse_line("[tracks-list] end")
+    with live_map.state_lock:
+        evs = live_map.state["events"]
+        list_evs = [
+            e for e in evs
+            if "[tracks-list]" in (e.get("text", "") if isinstance(e, dict) else str(e))
+        ]
+        # Expect exactly 2 (begin + end), not 4 (begin + 2 entries + end).
+        check("only begin+end surface in events (not entries)",
+              len(list_evs), 2)
+        # And the entries are still parsed into the catalog.
+        cat = live_map.state["tracks_catalog"]
+        ids_after = [t["id"] for t in cat]
+        check("entries still populate catalog despite filter",
+              sorted(ids_after), ["track_001", "track_002"])
+
     if FAIL_COUNT == 0:
         print("test_live_map_parse: OK")
         return 0

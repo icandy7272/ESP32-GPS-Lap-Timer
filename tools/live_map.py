@@ -526,6 +526,7 @@ def _parse_draft_event(line: str) -> None:
     m = _DRAFT_SAVED_RE.search(line)
     if m:
         saved_id = m.group(1)
+        saved_name = m.group(2)
         with state_lock:
             state["draft"] = {
                 "active": False,
@@ -533,9 +534,25 @@ def _parse_draft_event(line: str) -> None:
                 "p1": None,
                 "p2": None,
                 "heading": None,
-                "status": (f"Saved {m.group(1)} ({m.group(2)}) — "
+                "status": (f"Saved {saved_id} ({saved_name}) — "
                            f"line {m.group(3)} m, heading {m.group(4)}°"),
             }
+            # Reflect the newly-saved track in the picker immediately.
+            # Firmware has already appended it to s_tracks[] and made
+            # it active, but without this update the Active Track
+            # panel stays stale until the next reboot / manual refresh
+            # (codex review 2026-04-22 Finding 2).  Catalog update is
+            # idempotent by id so a re-emit of the same save line
+            # doesn't duplicate.
+            cat = state["tracks_catalog"]
+            for entry in cat:
+                if entry.get("id") == saved_id:
+                    entry["name"] = saved_name
+                    break
+            else:
+                cat.append({"id": saved_id, "name": saved_name})
+            state["active_track_id"] = saved_id
+            state["active_track_name"] = saved_name
         # Re-read the just-saved file over serial so the red "active
         # track" overlay updates from the SD-backed JSON rather than
         # leaving the old track geometry on screen until reboot.
@@ -840,12 +857,14 @@ def parse_line(line: str) -> None:
             or line.startswith("[track] selected:") \
             or line.startswith("[track] auto-detected:") \
             or line.startswith("[track] ERR:") \
-            or line.startswith("[tracks-list]"):
-        # [tracks-list] entries + begin/end markers need to be in the
-        # events feed so _wait_for_command_ack can see the terminator
-        # (codex review 2026-04-22 Medium: previously `tracks list`
-        # POSTs returned 504 despite the firmware having emitted the
-        # `end` line, because the event filter dropped them).
+            or line.startswith("[tracks-list] begin") \
+            or line.startswith("[tracks-list] end"):
+        # Only the begin/end MARKERS surface in the events feed —
+        # not every catalog entry.  A 15-track catalog was producing
+        # 17 events per `tracks list` (1 begin + 15 entries + 1 end),
+        # noisily spamming the UI on every reboot bootstrap.  The
+        # markers alone satisfy _wait_for_command_ack's scan for
+        # [tracks-list] end (codex review 2026-04-22 Finding 3).
         # [stop-trace] is the firmware's per-step diagnostic emitted
         # during session_stop_recording / storage_end_session.  Must
         # be in the event feed so the operator can see which
