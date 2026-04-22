@@ -24,3 +24,6 @@ test_backups/
 # Python bytecode from tools/
 **/__pycache__/
 *.py[co]
+
+# Field test data — real walking-session captures, not regenerable
+walking_logs/
