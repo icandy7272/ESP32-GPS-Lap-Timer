@@ -72,3 +72,45 @@ verification steps lives in
       verify production thresholds engage (`HEADING_WINDOW` 180° → 60°,
       `ARM_DISTANCE_M` 3 → 10 m, lap-time floors 5 s → 15 s for both
       lap_timer and session).
+
+### Plan B — split SD off the shared SPI bus (contingency)
+
+**Trigger:** only pursue if, after Stage A (SD SPI at 25 MHz), walk test or
+track test shows visibly perceptible LCD frame drops coinciding with SdFat
+block flushes during recording sessions.  Do NOT pre-wire — shared SPI is the
+default and the `spi_mutex` serialization is fully debugged.
+
+**Software mitigations to try first before touching wiring:**
+1. Profile whether VBO flush stalls actually coincide with dropped LCD frames
+   (check `[lcd]` mirror cadence vs storage_task activity in boot_log.txt).
+2. Batch VBO writes — accumulate N entries in RAM, flush once per second
+   instead of per-fix.
+3. Add `taskYIELD()` between SdFat batch-flush chunks.
+4. Pin `storage_task` to core 1, keep `display_task` on core 0 (verify current
+   affinity in `src/main.cpp` task_create calls).
+
+**Hardware Plan B (perfboard rewire, ~30 min with flying wires):**
+
+ESP32-S3 SPI3 goes through the GPIO matrix, so pin choice is flexible.
+Move SD's MOSI and SCLK to a dedicated SPI3 bus; MISO (GPIO 13) stays put —
+it was already SD-only.
+
+| Signal | From (shared SPI2) | To (dedicated SPI3) |
+|---|---|---|
+| `PIN_SD_MOSI` | GPIO 11 | GPIO 38 |
+| `PIN_SD_SCLK` | GPIO 12 | GPIO 39 |
+| `PIN_SD_MISO` | GPIO 13 | GPIO 13 (unchanged) |
+| `PIN_SD_CS`   | GPIO 42 | GPIO 42 (unchanged) |
+
+Code changes:
+- `src/pins.h`: update `PIN_SD_MOSI` and `PIN_SD_SCLK` constants.
+- `src/storage/` (wherever `SD.begin(...)` is called): pass the SPI3 instance
+  instead of the default (`SPI.begin(PIN_SD_SCLK, PIN_SD_MISO, PIN_SD_MOSI)`
+  followed by `SD.begin(PIN_SD_CS, SPI, ...)` or use `SPIClass SPIhw(HSPI)`).
+- `src/main.cpp` / display path: remove the SD-related `spi_mutex` takes from
+  the storage side only; TFT stays on the same mutex (or the mutex can be
+  retired entirely if nothing else contends).
+
+Avoid: strapping pins (0, 3, 45, 46), USB D+/D- (19, 20), JTAG (21),
+already-used pins (4, 5, 8, 9, 10, 11, 12, 13, 17, 18, 42, 47).  GPIO 38/39
+are contiguous on the DevKitC-1 header and have no side duties.
