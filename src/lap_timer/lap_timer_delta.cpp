@@ -10,7 +10,6 @@ void update_session_delta(const GpsPoint* curr) {
     int32_t delta_ms = delta_calculate(curr);
     bool valid = delta_is_valid();
 
-    bool wrote = false;
     if (xSemaphoreTake(s_session_mutex, pdMS_TO_TICKS(2)) == pdTRUE) {
         session_state.delta_ms = delta_ms;
         session_state.delta_valid = valid;
@@ -28,21 +27,22 @@ void update_session_delta(const GpsPoint* curr) {
         session_state.current_lap_start_us =
             session_state.is_recording ? s_lap_start_us : 0;
         xSemaphoreGive(s_session_mutex);
-        wrote = true;
     }
 
-    // Kick the display task so the driver sees the new delta /
-    // position within ~30 ms instead of waiting up to 50 ms for
-    // the next render heartbeat.  display_task rate-limits kicks
-    // at 30 FPS (MIN_RENDER_INTERVAL_MS) so a 25 Hz GPS fix
-    // stream can't starve other core-1 tasks.  We only kick on a
-    // successful session_state write: if we skipped because the
-    // mutex was busy, the state display would read is stale
-    // anyway and the 50 ms heartbeat will pick up the next good
-    // write.
-    if (wrote) {
-        display_kick();
-    }
+    // Kick the display task unconditionally so the driver sees the
+    // fresh GPS position + delta digit within ~30 ms of the fix.
+    // Codex review 2026-04-23 Low: kick even when the session_mutex
+    // write above skipped, because display_task's GPS overlay reads
+    // from gps_filter_get_display_fix() (independent of session
+    // state) and the filter already has the updated fix at the
+    // point update_session_delta runs.  Falling back to the 50 ms
+    // heartbeat on every session-contention blip was defeating the
+    // fast path exactly when mutex contention was highest.
+    //
+    // display_task rate-limits kicks at 30 FPS
+    // (MIN_RENDER_INTERVAL_MS) so a 25 Hz GPS stream can't starve
+    // other core-1 tasks.
+    display_kick();
 }
 
 }  // namespace lap_timer_internal

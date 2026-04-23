@@ -48,7 +48,13 @@ except ImportError:
 PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/cu.usbserial-10"
 BAUD = int(sys.argv[2]) if len(sys.argv) > 2 else 115200
 LISTEN = ("127.0.0.1", 8080)
-TRAIL_MAX = 600
+# 60 seconds of trail history at the 25 Hz [gps-live] cadence.
+# Originally 600 (60 s at 10 Hz); when we bumped the stream rate to
+# 25 Hz in 1f922bb the visible breadcrumb history silently shrank
+# to ~24 s, useful as a lapdrawing tool only for very small loops.
+# Bumping proportionally keeps the laptop view's trail covering a
+# real cornering sequence (codex review 2026-04-23 Low).
+TRAIL_MAX = 1500
 EVENT_MAX = 60
 CANDIDATE_MAX = 40
 # Match the GPS fix rate (25 Hz) so the green-dot trail on the map

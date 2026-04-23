@@ -466,16 +466,23 @@ void display_task(void* param) {
         // (since_last >= FRAME_INTERVAL_MS) this vTaskDelay is a
         // no-op; on a kick landing ~10 ms after the previous
         // render, it adds ~23 ms to keep the floor at 33 ms.
+        //
+        // Codex review 2026-04-23 Medium: don't advance last_render
+        // HERE — only after a frame actually succeeds.  Otherwise
+        // a frame that skips (session_mutex busy) still costs the
+        // next fix a full 33 ms rate-limit wait, which is exactly
+        // the SD/TFT contention case this commit set out to fix.
         TickType_t now = xTaskGetTickCount();
         TickType_t since_last = now - last_render;
         TickType_t min_interval = pdMS_TO_TICKS(MIN_RENDER_INTERVAL_MS);
         if (since_last < min_interval) {
             vTaskDelay(min_interval - since_last);
         }
-        last_render = xTaskGetTickCount();
 
         crash_bc_core1 = 60;  // display: frame start
-        // 1. Snapshot session state (skip frame if mutex busy)
+        // 1. Snapshot session state (skip frame if mutex busy).
+        // Note: last_render is NOT advanced here, so a skipped
+        // frame lets the next kick render immediately.
         if (!snapshot_session_state()) {
             continue;
         }
@@ -511,17 +518,28 @@ void display_task(void* param) {
         first_frame = false;  // only clear after render succeeds
         crash_bc_core1 = 62;  // display: frame done
 
+        // Advance the rate-limiter checkpoint AFTER a successful
+        // render.  Codex 2026-04-23 Medium: if we put this up next
+        // to the ulTaskNotifyTake, a skipped frame (snapshot
+        // failure, button-handler mutex miss, etc.) still "uses up"
+        // the 33 ms rate budget and delays the next fix by another
+        // 33 ms — defeating the fast path exactly when it matters.
+        last_render = xTaskGetTickCount();
+
         // 6. Mirror the LCD state to serial for tools/live_map.py's
-        //    on-laptop mock LCD panel.  Emitted at ~5 Hz so live_map's
-        //    LCD mirror feels live without flooding the shared USB
-        //    serial.  After bumping FRAME_INTERVAL_MS to 50 ms (20
-        //    FPS), divide by 4 instead of 2 to keep the same 5 Hz
-        //    cadence; preserving 1 KB/s of [lcd] traffic so the
-        //    UART budget (115200 = 14 KB/s) still has room for the
-        //    25 Hz [gps-live] stream and 1 Hz [gps] diag without
-        //    contention.
-        static int mirror_skip = 0;
-        if ((mirror_skip++ & 3) == 0) {
+        //    on-laptop mock LCD panel.  Time-based (not frame-count
+        //    based) so a burst of display_kick() calls doesn't
+        //    over-emit and blow the UART budget.  Codex review
+        //    2026-04-23 Low: the old `mirror_skip & 3` divider
+        //    implicitly assumed fixed-cadence rendering; under the
+        //    kick path a 25 Hz fix stream would push [lcd] up to
+        //    ~6.25 Hz, slowly eating UART headroom.  Emitting on a
+        //    200 ms wall-clock interval keeps it pinned at 5 Hz
+        //    regardless of render cadence.
+        static uint32_t last_lcd_mirror_ms = 0;
+        uint32_t mirror_now_ms = millis();
+        if (mirror_now_ms - last_lcd_mirror_ms >= 200) {
+            last_lcd_mirror_ms = mirror_now_ms;
             const SessionState& st = s_cached_state;
             DrivingState dstate = get_driving_state(st);
             const char* state_str =

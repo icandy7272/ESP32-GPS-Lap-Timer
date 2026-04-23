@@ -1363,6 +1363,23 @@ void setup() {
     // --- Runtime display handoff ---
     display_init(btn_display_queue, spi_mutex, session_mutex);
 
+    // --- Display task FIRST so its task handle is published before
+    //     lap_timer_task starts producing display_kick() calls.
+    //     Codex review 2026-04-23 Low: if we created lap_timer
+    //     before display, the first few GPS fixes after boot hit
+    //     display_kick() while s_display_task_handle is still
+    //     nullptr, silently falling back to the 50 ms heartbeat for
+    //     those early frames.  Low impact (a few dozen ms at boot)
+    //     but easy to fix by reordering.
+    xTaskCreatePinnedToCore(display_task, "display", 8192,
+                            nullptr, 10, nullptr, 1);
+    // Small yield so display_task gets scheduled once and publishes
+    // s_display_task_handle before we create lap_timer_task.
+    // FreeRTOS round-robin on the same core gives display one tick
+    // to run its first few instructions (handle assignment is right
+    // at the top of the function body, before any blocking call).
+    vTaskDelay(pdMS_TO_TICKS(5));
+
     // --- NOW start lap_timer_task (after boot GPS wait is done) ---
     xTaskCreatePinnedToCore(lap_timer_task, "lap_timer", 8192,
                             nullptr, 20, nullptr, 0);
@@ -1374,10 +1391,6 @@ void setup() {
     // --- Session task (Core 1) ---
     xTaskCreatePinnedToCore(session_task, "session", 4096,
                             nullptr, 16, nullptr, 1);
-
-    // --- Display task (Core 1) — starts rendering loop ---
-    xTaskCreatePinnedToCore(display_task, "display", 8192,
-                            nullptr, 10, nullptr, 1);
 
     // --- Buttons (Core 1) ---
     button_init(btn_session_queue, btn_display_queue);
