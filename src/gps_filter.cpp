@@ -439,6 +439,20 @@ GpsFilterProcessResult gps_filter_process(const GpsPoint& raw_fix) {
         s_state.match_valid = false;
         s_state.consecutive_rejects = 0;
         s_state.diagnostics.filter_resets++;
+        // Codex 2026-04-23 review finding 1 (HIGH): the escape hatch
+        // originally only cleared display_valid / match_valid, which
+        // was sufficient when the display path was EMA-only.  Now
+        // that Kalman holds its own position + velocity state, and
+        // the low-speed median reads from raw_history, failing to
+        // clear those means the "first-after-reset" comment above is
+        // a lie — Kalman would keep predicting from the stale
+        // pre-jump velocity and the median would blend the new
+        // accepted sample with whatever survived from before.  Zero
+        // everything the accepted-sample path reads from so the next
+        // accepted sample is actually a fresh seed.
+        gps_kalman_reset(&s_state.kalman_display);
+        s_state.raw_history_count = 0;
+        s_state.raw_history_next = 0;
         GPS_FILTER_UNLOCK();
         // No baseline means nothing to reject against.
         reject_display = false;

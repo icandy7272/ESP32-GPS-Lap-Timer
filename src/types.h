@@ -86,8 +86,10 @@ typedef struct {
     bool     session_stopped;     // set by session_stop_recording(), cleared by session_start_recording(). Distinguishes "fresh boot never recorded" from "user manually stopped" so the lap-timer auto-start path can stay dormant after a stop even if it happened before the first start/finish crossing.
     bool     gps_fix_ok;
     int      gps_satellites;
-    double   gps_lat_deg;            // WGS-84 decimal degrees (for web UI coordinate readout)
-    double   gps_lon_deg;            // WGS-84 decimal degrees
+    double   gps_lat_deg;            // Filtered (display_fix) latitude — for web UI, auto-detect, nearby-track distance
+    double   gps_lon_deg;            // Filtered (display_fix) longitude
+    double   gps_raw_lat_deg;        // Unfiltered raw fix latitude — for honest noise measurement during new-track sampling (main.cpp draft_sample_gps_median)
+    double   gps_raw_lon_deg;        // Unfiltered raw fix longitude
     float    speed_kmh;              // current GPS speed (for screen auto-lock)
     int64_t  current_lap_start_us;   // esp_timer when current lap started (for elapsed display)
     LapRecord laps[MAX_LAPS_PER_SESSION];

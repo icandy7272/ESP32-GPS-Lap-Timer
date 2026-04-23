@@ -384,9 +384,20 @@ static const char* draft_confidence_tier(double spread_m) {
     return "Low";
 }
 
-// Sample `session_state.gps_lat_deg` / `.gps_lon_deg` every 100 ms for
-// 5.0 s (up to 50 points), reject samples without a 3D fix, and return
-// the per-axis median plus a point-spread estimate.
+// Sample `session_state.gps_raw_lat_deg` / `.gps_raw_lon_deg` every
+// 100 ms for 5.0 s (up to 50 points), reject samples without a 3D
+// fix, and return the per-axis median plus a point-spread estimate.
+//
+// IMPORTANT: this sampler deliberately reads the RAW coordinates,
+// not the filtered display coords, because the whole point is to
+// measure the receiver's own noise.  Feeding it the Kalman output
+// would make every new-track creation appear "High confidence" (the
+// filter's internal noise is ~25 cm vs. the receiver's ~3 m) —
+// masking real GPS quality problems at exactly the moment the user
+// is trying to mark a physical location on the ground.  The filtered
+// pair `gps_lat_deg / gps_lon_deg` is used by /api/status, the
+// auto-detect proximity check, and the phone dashboard.  Codex
+// 2026-04-23 review finding 2.
 //
 // The 5 s window (extended from the original 2 s) comes from the
 // roadmap: absolute GPS error accumulates over a longer window, so a
@@ -411,8 +422,8 @@ static bool draft_sample_gps_median(double* out_lat,
         double lon = 0.0;
         bool fix_ok = false;
         if (xSemaphoreTake(session_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            lat = session_state.gps_lat_deg;
-            lon = session_state.gps_lon_deg;
+            lat = session_state.gps_raw_lat_deg;
+            lon = session_state.gps_raw_lon_deg;
             fix_ok = session_state.gps_fix_ok;
             xSemaphoreGive(session_mutex);
         }

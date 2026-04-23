@@ -2,6 +2,7 @@
 
 #include "../delta.h"
 #include "../display.h"
+#include "../gps_filter.h"
 #include "../session.h"
 
 namespace lap_timer_internal {
@@ -10,14 +11,28 @@ void update_session_delta(const GpsPoint* curr) {
     int32_t delta_ms = delta_calculate(curr);
     bool valid = delta_is_valid();
 
+    // Fetch filtered coordinates for user-facing consumers.  Codex
+    // 2026-04-23 review finding 2: before this change, session_state
+    // carried only raw coords, so /api/status + the auto-detect
+    // proximity check both saw the full receiver jitter while the
+    // TFT and [gps-live] stream had been moved to filtered.  Now
+    // session_state exposes both: the "canonical" gps_lat_deg /
+    // gps_lon_deg pair is filtered (display-style), and a separate
+    // gps_raw_* pair preserves unfiltered data for the track-
+    // creation noise sampler.
+    GpsPoint filtered = {};
+    bool have_filtered = gps_filter_get_display_fix(&filtered);
+
     if (xSemaphoreTake(s_session_mutex, pdMS_TO_TICKS(2)) == pdTRUE) {
         session_state.delta_ms = delta_ms;
         session_state.delta_valid = valid;
         session_state.off_track = delta_is_off_track();
         session_state.gps_fix_ok = curr->fix_3d;
         session_state.gps_satellites = curr->satellites;
-        session_state.gps_lat_deg = curr->lat_deg;
-        session_state.gps_lon_deg = curr->lon_deg;
+        session_state.gps_lat_deg = have_filtered ? filtered.lat_deg : curr->lat_deg;
+        session_state.gps_lon_deg = have_filtered ? filtered.lon_deg : curr->lon_deg;
+        session_state.gps_raw_lat_deg = curr->lat_deg;
+        session_state.gps_raw_lon_deg = curr->lon_deg;
         session_state.speed_kmh = curr->speed_kmh;
         // Only echo the lap-start timestamp into session state while we
         // are actually recording.  Otherwise the READY / idle screen
