@@ -106,17 +106,36 @@ void gps_send_fix_if_ready() {
             live_period_ms = 1;
         }
         if (last_live_ms == 0 || now_ms - last_live_ms >= live_period_ms) {
+            // Emit the FILTERED position, not the raw one.
+            //
+            // Before 2026-04-23 this line read point.lat_deg / lon_deg
+            // directly — i.e. the raw assembled GGA/RMC.  That meant
+            // live_map.py was looking at the unfiltered receiver output
+            // the entire time, while the LCD got the Kalman-smoothed
+            // display_fix.  Result: the browser view wobbled by the
+            // full ±3 m noise envelope even after EMA/Kalman tuning.
+            //
+            // Fallback to the raw fix if the filter has no accepted
+            // sample yet (first-fix, post-reset, or many consecutive
+            // rejects) — losing some smoothing for one or two frames
+            // at startup beats emitting no position at all.
+            GpsPoint emit_point = point;
+            GpsPoint filtered = {};
+            if (gps_filter_get_display_fix(&filtered)) {
+                emit_point.lat_deg = filtered.lat_deg;
+                emit_point.lon_deg = filtered.lon_deg;
+            }
             Serial.printf("[gps-live] lat=%.7f lon=%.7f sats=%d fix_3d=%d "
                           "speed=%.2f head=%.1f hdop=%.1f q=%u tier=%u "
                           "t_us=%lld\n",
-                          point.lat_deg, point.lon_deg,
-                          point.satellites, point.fix_3d ? 1 : 0,
-                          (double)point.speed_kmh,
-                          (double)point.heading_deg,
-                          (double)point.hdop,
-                          point.quality_score,
-                          point.quality_tier,
-                          (long long)point.timestamp_us);
+                          emit_point.lat_deg, emit_point.lon_deg,
+                          emit_point.satellites, emit_point.fix_3d ? 1 : 0,
+                          (double)emit_point.speed_kmh,
+                          (double)emit_point.heading_deg,
+                          (double)emit_point.hdop,
+                          emit_point.quality_score,
+                          emit_point.quality_tier,
+                          (long long)emit_point.timestamp_us);
             last_live_ms = now_ms;
         }
     }

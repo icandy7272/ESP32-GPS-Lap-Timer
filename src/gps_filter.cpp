@@ -1,4 +1,5 @@
 #include "gps_filter.h"
+#include "gps_kalman.h"
 
 #if defined(ARDUINO)
 #include <freertos/FreeRTOS.h>
@@ -53,6 +54,16 @@ struct GpsFilterState {
     // accepted.  Exists purely so we can notice a stale baseline and
     // rebuild it without fully reinitialising the filter.
     uint8_t consecutive_rejects;
+    // Alpha-beta (constant-velocity) Kalman state for the display
+    // position path.  Replaced the speed-tiered EMA on 2026-04-23
+    // after walking tests showed the EMA output still visibly
+    // jittered on-screen with the board held stationary — EMA at
+    // alpha=0.24 lets 24% of raw noise through every sample, which
+    // at 25 Hz and ±3 m typical noise is a clearly visible wobble.
+    // Kalman-lite at alpha=0.08 cuts that to ~8% and, more
+    // importantly, tracks velocity so it catches up to real motion
+    // without lagging.  See src/gps_kalman.cpp for the math.
+    GpsKalmanState kalman_display;
 };
 
 static GpsFilterState s_state = {};
@@ -164,13 +175,12 @@ static void sort_values(double* values, int count) {
     }
 }
 
-static float display_alpha_for_speed(float speed_kmh) {
-    if (speed_kmh < 2.0f) return 0.18f;
-    if (speed_kmh < 5.0f) return 0.24f;
-    if (speed_kmh < 12.0f) return 0.34f;
-    if (speed_kmh < 25.0f) return 0.48f;
-    return 0.62f;
-}
+// display_alpha_for_speed removed 2026-04-23 — the display path now
+// uses gps_kalman_update (alpha-beta, constant-velocity) instead of
+// the speed-tiered EMA.  match_alpha_for_speed is kept because the
+// match path (fed to lap_timer's secondary smoothed stream) still
+// uses EMA; that path wants a faster response to track geometry
+// and doesn't share the stationary-jitter problem Kalman solves.
 
 static float match_alpha_for_speed(float speed_kmh) {
     if (speed_kmh < 2.0f) return 0.35f;
@@ -446,14 +456,43 @@ GpsFilterProcessResult gps_filter_process(const GpsPoint& raw_fix) {
         result.display_fix = s_state.display_fix;
         result.display_rejected = true;
         s_state.diagnostics.display_outlier_drops++;
-    } else if (s_state.display_valid) {
-        apply_stationary_hold(&display_fix, s_state.display_fix);
-        display_fix = apply_ema(s_state.display_fix,
-                                display_fix,
-                                display_alpha_for_speed(raw_fix.speed_kmh));
-        apply_heading_freeze(&display_fix, s_state.display_fix);
-        result.display_fix = display_fix;
     } else {
+        // Order matters here:
+        //   1. apply_display_median (already done above) — strips
+        //      isolated single-sample spikes below the reject
+        //      threshold.  Keeps Kalman from having to reject them.
+        //   2. apply_stationary_hold — if speed is near zero AND the
+        //      step from the previous filtered position is < 1 m,
+        //      snap to previous.  This produces a perfect residual
+        //      of zero going into Kalman, so the filter's position
+        //      state does not drift when the receiver is truly
+        //      stationary.  Only meaningful when we have a previous
+        //      filtered fix to compare against.
+        //   3. gps_kalman_update — the constant-velocity alpha-beta
+        //      filter.  Self-manages seed vs. update (first call
+        //      after reset passes through unchanged), so it works
+        //      on the display_valid=false path too.
+        //   4. apply_heading_freeze — heading isn't filtered by
+        //      Kalman (we only track position + position-velocity),
+        //      so the legacy heading hold stays in.
+        if (s_state.display_valid) {
+            apply_stationary_hold(&display_fix, s_state.display_fix);
+        }
+
+        GpsKalmanInput kin = {};
+        kin.lat_deg   = display_fix.lat_deg;
+        kin.lon_deg   = display_fix.lon_deg;
+        kin.t_us      = raw_fix.timestamp_us;
+        kin.speed_kmh = raw_fix.speed_kmh;
+        GpsKalmanOutput kout = {};
+        if (gps_kalman_update(&s_state.kalman_display, kin, &kout)) {
+            display_fix.lat_deg = kout.lat_deg;
+            display_fix.lon_deg = kout.lon_deg;
+        }
+
+        if (s_state.display_valid) {
+            apply_heading_freeze(&display_fix, s_state.display_fix);
+        }
         result.display_fix = display_fix;
     }
 

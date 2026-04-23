@@ -26,10 +26,30 @@ for test_src in tests_host/test_*.cpp; do
         continue
     fi
 
+    # Optional dependency manifest.  Some modules rightly depend on
+    # a second pure module (e.g. gps_filter uses gps_kalman).  A
+    # sidecar file tests_host/test_X.deps with one src-relative path
+    # per line (comments with # allowed) tells the runner what else
+    # to link.  Keeping it simple: no globbing, no recursion.
+    extra_sources=""
+    deps_file="tests_host/${name}.deps"
+    if [ -f "$deps_file" ]; then
+        while IFS= read -r dep; do
+            case "$dep" in
+                ''|\#*) continue ;;
+            esac
+            if [ ! -f "$dep" ]; then
+                echo "==> $name: SKIP (dep $dep listed in $deps_file not found)"
+                continue 2
+            fi
+            extra_sources="$extra_sources $dep"
+        done < "$deps_file"
+    fi
+
     bin="/tmp/host_test_${name}_$$"
 
     echo "==> $name"
-    if c++ -std=c++17 -Wall -Wextra -I src -o "$bin" "$test_src" "$target_src" 2>&1; then
+    if c++ -std=c++17 -Wall -Wextra -I src -o "$bin" "$test_src" "$target_src" $extra_sources 2>&1; then
         if "$bin"; then
             echo "    PASS"
             pass=$((pass + 1))

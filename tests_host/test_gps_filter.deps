@@ -1,0 +1,3 @@
+# Extra source files required to link test_gps_filter.
+# One src-relative path per line, # for comments.
+src/gps_kalman.cpp
