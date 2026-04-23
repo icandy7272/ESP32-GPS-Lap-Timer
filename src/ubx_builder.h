@@ -34,10 +34,18 @@ int ubx_build_frame(uint8_t cls, uint8_t id,
                     const uint8_t* payload, uint16_t payload_len,
                     uint8_t* out, size_t out_cap);
 
-// Build a UBX-CFG-NAV5 (0x06 0x24) frame that sets the u-blox
-// dynamic platform model to Automotive (dynModel=4).  Only the
-// `dynModel` bit of mask is set, so factory defaults for every
-// other CFG-NAV5 field are preserved.
+// Build a UBX-CFG-NAV5 (0x06 0x24) frame that sets three fields
+// tuned for kart/car track use:
+//
+//   dynModel          = 4   (Automotive motion model)
+//   minElev           = 10° (reject low-elevation sats — these are
+//                            mostly multipath off buildings/trees)
+//   staticHoldThresh  = 5 cm/s (snap position when nearly
+//                               stationary, eliminating "parked
+//                               but drifting" wobble)
+//
+// Mask bits 0 (dynModel), 1 (minEl), and 6 (staticHoldMask) are
+// set; every other CFG-NAV5 field keeps its factory default.
 //
 // Output size: 44 bytes (2 sync + 4 header + 36 payload + 2 checksum).
 //

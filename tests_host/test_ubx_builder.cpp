@@ -112,7 +112,7 @@ static void test_buffer_overflow_rejected() {
     assert_eq_int("null_payload_positive_len_neg1", n, -1);
 }
 
-// --- CFG-NAV5 Automotive ------------------------------------------
+// --- CFG-NAV5 Automotive + minElev + staticHold ---------------------
 static void test_cfg_nav5_automotive() {
     uint8_t frame[64] = {};
     int n = ubx_build_cfg_nav5_automotive(frame, sizeof(frame));
@@ -126,16 +126,34 @@ static void test_cfg_nav5_automotive() {
     assert_eq_byte("nav5_len_hi", 5, frame[5], 0x00);
 
     // Payload starts at frame[6].
-    // payload[0..1] = mask (little-endian u16).  We set only bit 0.
-    assert_eq_byte("nav5_mask_lo", 6, frame[6], 0x01);
+    // payload[0..1] = mask (little-endian u16).  We set three bits:
+    //   bit 0 (0x01) = dynModel
+    //   bit 1 (0x02) = minEl
+    //   bit 6 (0x40) = staticHoldMask
+    // Sum = 0x43.
+    assert_eq_byte("nav5_mask_lo", 6, frame[6], 0x43);
     assert_eq_byte("nav5_mask_hi", 7, frame[7], 0x00);
+
     // payload[2] = dynModel = 4 (Automotive)
     assert_eq_byte("nav5_dynModel", 8, frame[8], 0x04);
 
-    // All other NAV5 bytes should be zero — that is the "don't apply"
-    // sentinel the u-blox receiver reads via the mask bits.
+    // payload[12] = minElev = 10°.  Frame offset = 6 + 12 = 18.
+    assert_eq_byte("nav5_minElev", 18, frame[18], 0x0A);
+
+    // payload[22] = staticHoldThresh = 5 cm/s.  Frame offset = 6 + 22 = 28.
+    assert_eq_byte("nav5_staticHoldThresh", 28, frame[28], 0x05);
+
+    // All OTHER NAV5 bytes should be zero — that is the "don't apply"
+    // sentinel the u-blox receiver reads via the mask bits.  List the
+    // three indices we DO set so the sweep below skips them.
+    const int set_indices[] = {8, 18, 28};
+    const int num_set = sizeof(set_indices) / sizeof(set_indices[0]);
     for (int i = 9; i < 6 + 36; i++) {
-        if (frame[i] != 0x00) {
+        bool is_set = false;
+        for (int j = 0; j < num_set; j++) {
+            if (i == set_indices[j]) { is_set = true; break; }
+        }
+        if (!is_set && frame[i] != 0x00) {
             assert_eq_byte("nav5_trailing_zero", i, frame[i], 0x00);
         }
     }

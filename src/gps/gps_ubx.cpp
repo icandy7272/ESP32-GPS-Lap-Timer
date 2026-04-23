@@ -494,7 +494,7 @@ void gps_uart_init() {
     // bug that hit the 2026-04-21 walking test.
     gps_ubx_monitor_reset();
 
-    Serial.println("[gps] Setting Automotive dynamic model (CFG-NAV5)");
+    Serial.println("[gps] CFG-NAV5: Automotive + minElev=10° + staticHold=5cm/s");
     ubx_cfg_nav5_automotive();
     gps_ubx_monitor_drain_for_ack(0x06, 0x24, 500);
     need_save = true;

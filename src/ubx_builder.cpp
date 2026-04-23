@@ -62,12 +62,48 @@ int ubx_build_frame(uint8_t cls, uint8_t id,
 
 int ubx_build_cfg_nav5_automotive(uint8_t* out, size_t out_cap) {
     uint8_t payload[36] = {};
-    // mask bit 0 = apply dynModel; all other bits left zero so other
-    // NAV5 fields keep their factory defaults.
-    payload[0] = 0x01;
+    // Apply THREE fields in one frame (mask bits 0, 1, and 6):
+    //   bit 0 = dynModel       → Automotive motion model
+    //   bit 1 = minEl          → minimum elevation for sat acceptance
+    //   bit 6 = staticHoldMask → staticHoldThresh + staticHoldMaxDist
+    //
+    // 0x01 | 0x02 | 0x40 = 0x43.  All other NAV5 fields stay on
+    // factory defaults because their mask bits are zero.  The 2026-
+    // 04-23 walking-test report showed visible position jitter that
+    // the default 5° minimum elevation and disabled static-hold
+    // allowed through; these two knobs suppress it without touching
+    // the existing 6-constellation / SBAS / HDOP-gate setup.
+    payload[0] = 0x43;
     payload[1] = 0x00;
-    // dynModel = 4 (Automotive)
+
+    // dynModel = 4 (Automotive).  Unchanged.
     payload[2] = 0x04;
+
+    // minElev = 10°.  Default is 5°; satellites below 10° are
+    // dominated by multipath (reflections off buildings, trees,
+    // car bodies) which inject lateral noise into the fix.  Under
+    // a 6-constellation sky we have 30+ visible satellites at any
+    // moment, so cutting the low-elevation tail still leaves 15-20
+    // high-quality signals — HDOP typically improves rather than
+    // degrades.  Stored as int8_t at payload[12].
+    payload[12] = 0x0A;
+
+    // staticHoldThresh = 5 cm/s.  Default is 0 (disabled).  When
+    // the receiver's own speed estimate drops below this, it
+    // "holds" the position at the last confirmed fix instead of
+    // letting noise wobble it.  5 cm/s only activates when truly
+    // stationary (walking pace is 100 cm/s, stopped kart is still
+    // ~0-2 cm/s).  Eliminates the "parked car slowly wandering"
+    // class of drift without affecting any moving-vehicle path.
+    // Stored as uint8_t at payload[22].
+    payload[22] = 0x05;
+
+    // staticHoldMaxDist = 0 (speed-only release).  If we leave
+    // this disabled, static hold releases as soon as speed crosses
+    // back above staticHoldThresh — simplest semantics, no risk of
+    // a stale-snap that doesn't release when the vehicle moves.
+    // payload[28-29] stays zero.
+
     return ubx_build_frame(0x06, 0x24, payload, sizeof(payload), out, out_cap);
 }
 
