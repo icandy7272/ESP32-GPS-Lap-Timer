@@ -417,10 +417,36 @@ void display_init(QueueHandle_t     btn_display_q,
 // Display task (FreeRTOS)
 // ============================================================
 
+// Task handle captured at display_task entry so any task can
+// `xTaskNotifyGive` us to trigger an immediate render pass (see
+// display_kick()).  Nullptr before display_task runs (boot-time
+// callers get a safe no-op), or after the task exits (never).
+static TaskHandle_t s_display_task_handle = nullptr;
+
+// Minimum gap between consecutive renders, even under a flood of
+// kicks.  FreeRTOS will let us render on every 40 ms GPS fix kick
+// (25 Hz), which at ~20 ms TFT redraw ≈ 50% CPU for the display
+// path.  Cap at 30 FPS so the display can't starve lap_timer /
+// session_task on core 1.  Still 2x better than the 20 FPS
+// heartbeat floor and well under the 150 ms "feels real-time"
+// threshold for driver feedback.
+static constexpr int MIN_RENDER_INTERVAL_MS = 33;
+
+void display_kick() {
+    if (s_display_task_handle != nullptr) {
+        xTaskNotifyGive(s_display_task_handle);
+    }
+}
+
 void display_task(void* param) {
     (void)param;
 
-    TickType_t last_wake = xTaskGetTickCount();
+    // Capture our handle so lap_timer (and anyone else) can poke
+    // us with display_kick().  Nothing else uses this handle, so
+    // we assign it once and leave it.
+    s_display_task_handle = xTaskGetCurrentTaskHandle();
+
+    TickType_t last_render = xTaskGetTickCount();
 
     // Force full redraw on first frame
     bool first_frame = true;
@@ -428,7 +454,25 @@ void display_task(void* param) {
     extern int crash_bc_core1;
 
     for (;;) {
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(FRAME_INTERVAL_MS));
+        // Wait for either a display_kick notification (new GPS fix
+        // update to render) or a FRAME_INTERVAL_MS heartbeat (idle
+        // refresh so stale timers still advance).  Either way we
+        // fall through to the render loop below.
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(FRAME_INTERVAL_MS));
+
+        // Rate-limit kick-triggered renders so a flood of kicks
+        // (25 Hz GPS fixes) can't push the render rate higher than
+        // MIN_RENDER_INTERVAL_MS.  On a heartbeat timeout
+        // (since_last >= FRAME_INTERVAL_MS) this vTaskDelay is a
+        // no-op; on a kick landing ~10 ms after the previous
+        // render, it adds ~23 ms to keep the floor at 33 ms.
+        TickType_t now = xTaskGetTickCount();
+        TickType_t since_last = now - last_render;
+        TickType_t min_interval = pdMS_TO_TICKS(MIN_RENDER_INTERVAL_MS);
+        if (since_last < min_interval) {
+            vTaskDelay(min_interval - since_last);
+        }
+        last_render = xTaskGetTickCount();
 
         crash_bc_core1 = 60;  // display: frame start
         // 1. Snapshot session state (skip frame if mutex busy)

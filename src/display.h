@@ -27,6 +27,21 @@ void display_init(QueueHandle_t     btn_display_q,
 // param is unused — dependencies injected via display_init().
 void display_task(void* param);
 
+// Wake the display task RIGHT NOW for a render pass, skipping the
+// remaining heartbeat wait.  Called from lap_timer_delta when a
+// fresh GPS fix has updated session_state.delta_ms so the driver
+// sees the +/- delta digit change within 20-30 ms of the fix
+// arriving instead of waiting up to FRAME_INTERVAL_MS (50 ms) for
+// the next tick.
+//
+// Safe to call from any task.  A kick that arrives while the
+// display task is mid-render is coalesced into a single notification
+// count, so rapid consecutive kicks can't queue more than one
+// pending render.  Before display_init() has captured the task
+// handle (i.e. during boot before display_task starts), this is a
+// cheap no-op.
+void display_kick();
+
 // --- Boot sequence renderer (called from setup() before display_task starts) ---
 // These draw directly to the TFT. No mutex needed since display_task
 // hasn't started yet.
