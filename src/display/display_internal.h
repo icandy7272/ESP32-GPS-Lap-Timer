@@ -28,7 +28,22 @@ static constexpr int LAP_HEADER_H    = 30;   // header row height
 static constexpr int LAPS_PER_PAGE   = (SCREEN_H - LAP_HEADER_H) / LAP_ROW_H;
 
 // Timing
-static constexpr int FRAME_INTERVAL_MS = 100; // 10 FPS target
+//
+// 50 ms = 20 FPS render cadence.  Driver feedback latency budget:
+// human reaction-feel threshold is ~150 ms, so the LCD update path
+// (GPS fix → ESP32 parse → display read → TFT redraw) should stay
+// well under that.  At 100 ms (10 FPS) the LCD added 0-100 ms of
+// lag on top of the 50-100 ms GPS+parse time, putting the worst
+// case at the edge of "feels laggy" for a 60+ km/h driver.  20 FPS
+// halves the LCD contribution and brings the typical end-to-end
+// path to ~80-130 ms.  CPU load goes from ~12% to ~24%, well
+// within ESP32-S3 headroom.  TFT and SD share spi_mutex; on
+// breadboard with slow SD writes, recording sessions may show
+// brief LCD frame drops (display task waits for spi_mutex);
+// not a freeze, just an occasional skipped redraw.  If that proves
+// distracting in the field, drop to 67 ms (15 FPS) as a safer
+// breadboard ceiling.
+static constexpr int FRAME_INTERVAL_MS = 50;  // 20 FPS target
 static constexpr int SPI_TIMEOUT_MS    = 10;
 
 // ============================================================

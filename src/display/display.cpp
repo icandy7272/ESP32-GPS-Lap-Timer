@@ -468,11 +468,16 @@ void display_task(void* param) {
         crash_bc_core1 = 62;  // display: frame done
 
         // 6. Mirror the LCD state to serial for tools/live_map.py's
-        //    on-laptop mock LCD panel.  Emitted at ~5 Hz (every 2
-        //    frames at 10 FPS) — enough to feel live, bounded bandwidth
-        //    (200 B × 5 Hz = 1 KB/s over 115200 bps UART).
+        //    on-laptop mock LCD panel.  Emitted at ~5 Hz so live_map's
+        //    LCD mirror feels live without flooding the shared USB
+        //    serial.  After bumping FRAME_INTERVAL_MS to 50 ms (20
+        //    FPS), divide by 4 instead of 2 to keep the same 5 Hz
+        //    cadence; preserving 1 KB/s of [lcd] traffic so the
+        //    UART budget (115200 = 14 KB/s) still has room for the
+        //    25 Hz [gps-live] stream and 1 Hz [gps] diag without
+        //    contention.
         static int mirror_skip = 0;
-        if ((mirror_skip++ & 1) == 0) {
+        if ((mirror_skip++ & 3) == 0) {
             const SessionState& st = s_cached_state;
             DrivingState dstate = get_driving_state(st);
             const char* state_str =

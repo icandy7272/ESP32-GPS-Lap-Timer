@@ -51,7 +51,14 @@ LISTEN = ("127.0.0.1", 8080)
 TRAIL_MAX = 600
 EVENT_MAX = 60
 CANDIDATE_MAX = 40
-LIVE_GPS_STREAM_HZ = 10
+# Match the GPS fix rate (25 Hz) so the green-dot trail on the map
+# moves at the same cadence as the receiver actually produces fixes.
+# Each [gps-live] line is ~150 bytes; 25 Hz = ~3.7 KB/s of UART
+# traffic, well under 115200 baud's 14 KB/s capacity (combined with
+# 5 Hz [lcd] mirror at 1 KB/s and 1 Hz [gps] diag, total still
+# ~6 KB/s).  Cuts the laptop-side latency contribution from
+# 0-100 ms (10 Hz) to 0-40 ms (25 Hz).
+LIVE_GPS_STREAM_HZ = 25
 
 # Tolerance displayed on the map.  Keep in sync with the walking-test
 # value of CROSSING_END_TOLERANCE_M in lap_timer_internal.h so the
@@ -1704,7 +1711,12 @@ async function poll(){
     const state=await r.json();
     update(state);
   }catch(e){/*ignore*/}
-  setTimeout(poll,100);
+  // 33 ms = ~30 fps UI refresh.  Combined with the 25 Hz [gps-live]
+  // stream from firmware, the browser-side latency from "fix arrived
+  // at live_map" to "green dot moves" is now 0-33 ms instead of
+  // 0-100 ms.  /state is a cheap JSON snapshot (no SD touch, no
+  // serial I/O) so 30 polls/s is fine.
+  setTimeout(poll,33);
 }
 
 function renderLine(line){
