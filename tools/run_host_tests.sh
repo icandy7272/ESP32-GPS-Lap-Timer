@@ -39,7 +39,15 @@ for test_src in tests_host/test_*.cpp; do
                 ''|\#*) continue ;;
             esac
             if [ ! -f "$dep" ]; then
-                echo "==> $name: SKIP (dep $dep listed in $deps_file not found)"
+                # Codex 2026-04-23 follow-up review (LOW): treating
+                # a typo'd or stale .deps entry as SKIP let the
+                # runner exit 0 with a test silently dropped from
+                # coverage — the exact failure mode the sidecar
+                # mechanism was added to prevent.  Count it as a
+                # hard FAIL instead so CI / local runs notice.
+                echo "==> $name: FAIL (dep $dep listed in $deps_file not found)"
+                fail=$((fail + 1))
+                failed_tests+=("$name")
                 continue 2
             fi
             extra_sources="$extra_sources $dep"
