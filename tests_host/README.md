@@ -18,6 +18,9 @@ extracted from the firmware specifically to be testable.
 | `test_button_profile.cpp` | `src/button_profile.cpp` | Button event classification and profile lookup logic over plain enums/structs with no hardware dependencies |
 | `test_time_format.cpp` | `src/time_format.cpp` | Lap/delta time string formatting using pure integer and buffer logic |
 | `test_serial_console.cpp` | `src/serial_console.cpp` | USB serial debug command parsing and SD-path validation, kept pure so command grammar can be verified without Arduino/SdFat |
+| `test_gps_fix_bundle.cpp` | `src/gps_fix_bundle.cpp` | GPS queue payload construction for aligned raw/match fixes without FreeRTOS queues |
+| `test_crossing_time.cpp` | `src/crossing_time.cpp` | Crossing timestamp interpolation using signed-distance linear fallback and centered Catmull-Rom helper |
+| `test_delta_progress_guard.cpp` | `src/delta_progress_guard.cpp` | Delta progress plausibility guard for jump rejection, backward jitter, and lap wrap allowance |
 
 ## Running
 

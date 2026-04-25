@@ -27,6 +27,14 @@ typedef struct {
     bool     heading_reliable;// true when COG heading is usable for matching/display
 } GpsPoint;
 
+// --- GPS Queue Payload (task_gps -> task_lap_timer) ---
+
+typedef struct {
+    GpsPoint raw_fix;         // unfiltered fix for crossing detection and VBO
+    GpsPoint match_fix;       // aligned filtered fix for Delta projection
+    bool     match_valid;     // false when Delta should fall back to raw_fix
+} GpsFixBundle;
+
 // --- Detection Line (start/finish line or sector split) ---
 
 typedef struct {

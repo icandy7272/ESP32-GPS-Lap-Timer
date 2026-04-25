@@ -11,6 +11,7 @@
 
 #include "delta.h"
 #include "delta_continuity.h"
+#include "delta_progress_guard.h"
 #include "lap_timer.h"  // for math helpers
 
 #include <Arduino.h>
@@ -64,6 +65,7 @@ static int       s_last_seg_idx    = 0;
 // snapping to a distant segment just because the lateral distance is
 // marginally smaller (the classic crossover / near-return glitch).
 static double    s_last_progress   = -1.0;
+static int64_t   s_last_progress_timestamp_us = 0;
 
 // --- Internal: Pre-computation --------------------------------
 
@@ -284,6 +286,7 @@ void delta_init(void) {
     s_lap_start_us   = 0;
     s_last_seg_idx   = 0;
     s_last_progress  = -1.0;
+    s_last_progress_timestamp_us = 0;
 }
 
 void delta_free_reference(void) {
@@ -308,6 +311,7 @@ void delta_free_reference(void) {
     s_has_reference  = false;
     s_last_seg_idx   = 0;
     s_last_progress  = -1.0;
+    s_last_progress_timestamp_us = 0;
 }
 
 void delta_set_reference(const GpsPoint* points, int count) {
@@ -348,6 +352,7 @@ void delta_set_reference(const GpsPoint* points, int count) {
     s_off_track     = false;
     s_last_seg_idx  = 0;
     s_last_progress = -1.0;
+    s_last_progress_timestamp_us = 0;
 }
 
 int32_t delta_calculate(const GpsPoint* current) {
@@ -384,10 +389,24 @@ int32_t delta_calculate(const GpsPoint* current) {
         return 0;
     }
 
+    if (s_last_progress >= 0.0 && s_last_progress_timestamp_us > 0) {
+        double dt_s = static_cast<double>(
+            current->timestamp_us - s_last_progress_timestamp_us) / 1000000.0;
+        if (!delta_progress_guard::is_progress_plausible(
+                s_last_progress,
+                proj.progress,
+                s_ref_total_dist,
+                current->speed_kmh,
+                dt_s)) {
+            return s_frozen_delta_ms;
+        }
+    }
+
     // Accepted on-track sample: now safe to advance the continuity
     // anchor.  project_to_polyline() intentionally leaves this update
     // to the caller so every rejection path above freezes the anchor.
     s_last_progress = proj.progress;
+    s_last_progress_timestamp_us = current->timestamp_us;
 
     // Look up reference time at the same progress
     int64_t ref_elapsed_us = ref_time_at_progress(proj.progress);
@@ -419,6 +438,7 @@ void delta_reset_elapsed(void) {
     s_frozen_delta_ms = 0;
     s_last_seg_idx    = 0;
     s_last_progress   = -1.0;
+    s_last_progress_timestamp_us = 0;
 }
 
 void delta_set_lap_start(int64_t start_us) {

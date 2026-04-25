@@ -1016,10 +1016,11 @@ static void boot_wait_for_gps(uint32_t timeout_ms) {
     uint32_t last_publish_ms = 0;
     int best_sats = 0;
     int last_reported_sats = -1;
-    GpsPoint pt;
+    GpsFixBundle bundle;
 
     while ((millis() - start) < timeout_ms) {
-        if (xQueueReceive(gps_queue, &pt, pdMS_TO_TICKS(200)) == pdTRUE) {
+        if (xQueueReceive(gps_queue, &bundle, pdMS_TO_TICKS(200)) == pdTRUE) {
+            GpsPoint pt = bundle.raw_fix;
             if (pt.satellites > best_sats) {
                 best_sats = pt.satellites;
             }
@@ -1128,7 +1129,7 @@ void setup() {
     // the nullptr-safe helper shortcircuits to unlocked path).
     extern SemaphoreHandle_t track_store_mutex;
     track_store_mutex = xSemaphoreCreateMutex();
-    gps_queue        = xQueueCreate(4,   sizeof(GpsPoint));
+    gps_queue        = xQueueCreate(4,   sizeof(GpsFixBundle));
     vbo_write_queue  = xQueueCreate(256, sizeof(VboEntry));
     lap_event_queue  = xQueueCreate(16,  sizeof(LapEvent));
     btn_session_queue = xQueueCreate(8,  sizeof(ButtonEvent));

@@ -7,8 +7,10 @@
 
 namespace lap_timer_internal {
 
-void update_session_delta(const GpsPoint* curr) {
-    int32_t delta_ms = delta_calculate(curr);
+void update_session_delta(const GpsPoint* raw_curr,
+                          const GpsPoint* delta_curr) {
+    const GpsPoint* delta_input = delta_curr != nullptr ? delta_curr : raw_curr;
+    int32_t delta_ms = delta_calculate(delta_input);
     bool valid = delta_is_valid();
 
     // Fetch filtered coordinates for user-facing consumers.  Codex
@@ -27,13 +29,13 @@ void update_session_delta(const GpsPoint* curr) {
         session_state.delta_ms = delta_ms;
         session_state.delta_valid = valid;
         session_state.off_track = delta_is_off_track();
-        session_state.gps_fix_ok = curr->fix_3d;
-        session_state.gps_satellites = curr->satellites;
-        session_state.gps_lat_deg = have_filtered ? filtered.lat_deg : curr->lat_deg;
-        session_state.gps_lon_deg = have_filtered ? filtered.lon_deg : curr->lon_deg;
-        session_state.gps_raw_lat_deg = curr->lat_deg;
-        session_state.gps_raw_lon_deg = curr->lon_deg;
-        session_state.speed_kmh = curr->speed_kmh;
+        session_state.gps_fix_ok = raw_curr->fix_3d;
+        session_state.gps_satellites = raw_curr->satellites;
+        session_state.gps_lat_deg = have_filtered ? filtered.lat_deg : raw_curr->lat_deg;
+        session_state.gps_lon_deg = have_filtered ? filtered.lon_deg : raw_curr->lon_deg;
+        session_state.gps_raw_lat_deg = raw_curr->lat_deg;
+        session_state.gps_raw_lon_deg = raw_curr->lon_deg;
+        session_state.speed_kmh = raw_curr->speed_kmh;
         // Only echo the lap-start timestamp into session state while we
         // are actually recording.  Otherwise the READY / idle screen
         // would see a running timer (session_stop_recording() zeroes

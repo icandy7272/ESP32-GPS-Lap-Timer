@@ -28,11 +28,29 @@ flash attempt couldn't see the board on USB.
       vs stopwatch reference, (2) delta digit stability through corners, (3) VBO
       file path cleanness on the Race Studio replay, (4) phone live map view
       (now also filtered) is usable for the driver / coach during a session.
+- [ ] **Repeatable crossing scatter test.**  On a real start/finish line, record
+      at least 20 same-direction passes and compare the crossing timestamp
+      scatter before claiming any professional-grade timing improvement.
+- [ ] **Delta jump review.**  Record repeated laps and inspect Delta continuity
+      around corners, parallel track segments, and start/finish wrap.
 - [ ] **Decide if Open Gap finding 4 needs to ship in v1.0** — GSA is currently
       disabled at runtime, so the quality scoring runs on partial DOP metadata
       (HDOP-first).  Either turn GSA on at low cadence and accept the UART cost,
       or accept the limitation and document it in `docs/PRD.md` / quality-tier
       docs.  See `docs/CODEX_REVIEW_2026-04-23_gps-precision-followup.md` §4.
+- [x] **Bundle GPS queue payload + route Delta through aligned `match_fix`.**
+      Implemented 2026-04-25: `gps/gps_fix.cpp` now pushes a `GpsFixBundle`
+      containing `raw_fix`, aligned `match_fix`, and `match_valid`; lap timer
+      keeps raw fixes for crossing/VBO/reference capture and routes only Delta
+      through the matched path.
+- [ ] **Prototype UBX NAV-PVT receiver-time path.**  Separate spike branch:
+      configure NAV-PVT, parse `iTOW` plus `fixType` / `hAcc` / `sAcc` /
+      `headAcc` / `pDOP`, map receiver epoch to `esp_timer` with an offset
+      smoother, and evaluate whether GPS UART should move from 115200 to
+      230400 or 460800 baud.
+- [ ] **Promote quality gates beyond HDOP-first scoring.**  Once GSA or
+      NAV-PVT accuracy fields are available, feed them into crossing gates
+      and Delta match scoring instead of relying mainly on satellites + HDOP.
 
 ## Deferred to v1.1
 
@@ -44,18 +62,6 @@ flash attempt couldn't see the board on USB.
 - [ ] Add a dashboard/diagnostics workbench prototype for live status and historical metrics such as satellites, actual vs configured rate, drops, and NMEA tail
 - [ ] Follow the display refresh and storage roadmap in `docs/superpowers/plans/2026-04-18-display-refresh-and-storage-roadmap.md`, prioritizing software-only perceived-refresh work first, PSRAM-backed SD batching second, and soldering-time hardware reservations throughout
 - [ ] Follow the GPS algorithm optimization roadmap in `docs/superpowers/plans/2026-04-18-gps-algorithm-optimization-roadmap.md`, prioritizing fix-quality scoring and path separation before stronger filtering or fusion work
-- [ ] **Bundle GPS queue payload + route delta through `match_fix`** — Codex
-      2026-04-23 review finding 3, evaluated and intentionally deferred.  The
-      simple "call `gps_filter_get_match_fix()` from inside `update_session_delta`"
-      shortcut has a queue-race asymmetry: lap_timer reads raw `curr` from a
-      4-deep queue, but the filter has the `match_fix` for whatever fix the GPS
-      task most recently processed, so position and timestamp can come from
-      different fixes when the queue has any backlog.  The right fix is to make
-      the queue payload a `{raw, match_fix, match_valid}` bundle, push the
-      whole bundle from `gps/gps_fix.cpp`, and let lap_timer use the aligned
-      pair.  Expected payoff is small at track speed (`match_alpha=0.78`,
-      almost pass-through) but meaningful at low speed and removes a class of
-      bug.  Rationale fully captured in commit `088e71c` message.
 
 ## Hardware Migration TODOs
 

@@ -38,6 +38,12 @@ bool s_debounce_active[MAX_SECTORS];
 int64_t s_debounce_crossing_us[MAX_SECTORS];
 double s_debounce_expected_sign[MAX_SECTORS];
 
+bool s_crossing_candidate_active[MAX_SECTORS];
+GpsPoint s_crossing_candidate_p0[MAX_SECTORS];
+GpsPoint s_crossing_candidate_p1[MAX_SECTORS];
+GpsPoint s_crossing_candidate_p2[MAX_SECTORS];
+double s_crossing_candidate_expected_sign[MAX_SECTORS];
+
 int s_current_sector = 0;
 int64_t s_lap_start_us = 0;
 int64_t s_sector_start_us = 0;
@@ -166,6 +172,7 @@ void lap_timer_init(QueueHandle_t gps_q,
         s_debounce_active[i] = false;
         s_debounce_remaining[i] = 0;
         s_debounce_crossing_us[i] = 0;
+        s_crossing_candidate_active[i] = false;
     }
 }
 
@@ -186,6 +193,7 @@ void lap_timer_reset(void) {
         s_debounce_active[i] = false;
         s_debounce_remaining[i] = 0;
         s_debounce_crossing_us[i] = 0;
+        s_crossing_candidate_active[i] = false;
     }
 
     delta_free_reference();

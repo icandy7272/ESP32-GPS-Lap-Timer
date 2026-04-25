@@ -86,7 +86,6 @@ static constexpr float MAX_CROSSING_HDOP = 3.0f;
 static constexpr int DEBOUNCE_SAMPLES = 2;
 static constexpr float MAX_LAP_RATIO = 1.5f;
 static constexpr int SPLINE_HISTORY = 4;
-static constexpr int BINARY_SEARCH_ITS = 12;
 static constexpr int MAX_LAP_POINTS = 4096;
 
 extern QueueHandle_t s_gps_queue;
@@ -123,6 +122,12 @@ extern bool s_debounce_active[MAX_SECTORS];
 extern int64_t s_debounce_crossing_us[MAX_SECTORS];
 extern double s_debounce_expected_sign[MAX_SECTORS];
 
+extern bool s_crossing_candidate_active[MAX_SECTORS];
+extern GpsPoint s_crossing_candidate_p0[MAX_SECTORS];
+extern GpsPoint s_crossing_candidate_p1[MAX_SECTORS];
+extern GpsPoint s_crossing_candidate_p2[MAX_SECTORS];
+extern double s_crossing_candidate_expected_sign[MAX_SECTORS];
+
 extern int s_current_sector;
 extern int64_t s_lap_start_us;
 extern int64_t s_sector_start_us;
@@ -153,6 +158,7 @@ void handle_sector_crossing(int line_idx, int64_t crossing_us);
 
 void emit_lap_event(uint8_t event_type, int sector_index, int64_t crossing_us);
 bool is_lap_valid(int32_t lap_time_ms);
-void update_session_delta(const GpsPoint* curr);
+void update_session_delta(const GpsPoint* raw_curr,
+                          const GpsPoint* delta_curr);
 
 }  // namespace lap_timer_internal

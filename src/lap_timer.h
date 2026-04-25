@@ -3,7 +3,7 @@
 // ============================================================
 // Lap Timer Module — ESP32-S3 GPS Lap Timer
 //
-// Consumes GpsPoint from gps_queue, performs:
+// Consumes GpsFixBundle from gps_queue, performs:
 //   - Start/finish and sector line crossing detection
 //   - Catmull-Rom spline interpolation for sub-sample timing
 //   - Delta calculation vs reference lap
@@ -22,7 +22,7 @@
 
 /// Initialise lap timer module with required FreeRTOS handles.
 /// Must be called before creating the lap_timer_task.
-///   gps_q        - input queue of GpsPoint (depth 4)
+///   gps_q        - input queue of GpsFixBundle (depth 4)
 ///   vbo_q        - output queue of VboEntry (depth 256)
 ///   lap_event_q  - output queue of LapEvent (depth 16)
 ///   session_mtx  - mutex protecting SessionState

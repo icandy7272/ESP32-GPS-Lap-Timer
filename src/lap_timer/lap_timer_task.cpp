@@ -31,6 +31,7 @@ void lap_timer_task(void* param) {
 
     esp_task_wdt_add(NULL);
 
+    GpsFixBundle fix;
     GpsPoint curr;
     GpsPoint prev;
     bool has_prev = false;
@@ -38,10 +39,11 @@ void lap_timer_task(void* param) {
     uint32_t shadow_version_seen = 0;
 
     for (;;) {
-        if (xQueueReceive(s_gps_queue, &curr, pdMS_TO_TICKS(200)) != pdTRUE) {
+        if (xQueueReceive(s_gps_queue, &fix, pdMS_TO_TICKS(200)) != pdTRUE) {
             esp_task_wdt_reset();
             continue;
         }
+        curr = fix.raw_fix;
 
         // Refresh the track shadow if a writer has bumped the version
         // since our last copy.  The volatile read + version-counter
@@ -164,7 +166,8 @@ void lap_timer_task(void* param) {
             // from cold-start works.
             process_draft_validation_line(&prev, &curr);
 
-            update_session_delta(&curr);
+            const GpsPoint* delta_curr = fix.match_valid ? &fix.match_fix : &curr;
+            update_session_delta(&curr, delta_curr);
         }
 
         if (s_lap_points != nullptr && s_lap_point_count < MAX_LAP_POINTS

@@ -94,27 +94,31 @@ GPS 硬件
   │   gps_parse_nmea()
   │   → 解析 GGA + RMC → 组装 GpsPoint (lat/lon/speed/heading)
   │   → GpsPoint.timestamp_us = esp_timer_get_time()（UART 到达时间）
+  │   → gps_filter_process() 生成 display_fix / match_fix
   │       │
-  │       ▼ xQueueSend(gps_queue, &point, 0)
+  │       ▼ xQueueSend(gps_queue, &bundle, 0)
   │
-  └─ gps_queue (depth=4, sizeof GpsPoint)
+  └─ gps_queue (depth=4, sizeof GpsFixBundle)
               │
               ▼
       [LapTimer Task - Core 0, 优先级 20]
               │
               ├─ 过线检测
+              │  使用 raw_fix
               │  has_crossed_line() → 有符号叉积判断线段交叉
               │  → 航向窗口检查 (±60°)
               │  → Arming 状态检查 (>50m 后重新激活)
-              │  → Catmull-Rom 样条插值回溯精确穿越时刻
+              │  → 保存 crossing candidate，下一 fix 用居中插值回填穿越时刻
               │  → 去抖验证 (连续 2 个 fix 确认方向)
               │  → xQueueSend(lap_event_queue, &event, 0)
               │
               ├─ Delta 计算
-              │  project_to_polyline(current_point, ref_polyline)
+              │  使用同一队列载荷内的 match_fix（无效时 fallback raw_fix）
+              │  project_to_polyline(delta_point, ref_polyline)
               │  → 计算进度 progress (0.0~1.0)
               │  → 航向差 > 90° → 不更新
               │  → 横向距离 > 30m → 冻结 Delta，标记 OFF_TRACK
+              │  → 物理进度约束过滤不可能的跳段
               │  → 查参考圈时间戳 → 计算 delta_ms
               │  → xSemaphoreTake(session_mutex)
               │     session_state.delta_ms = delta_ms
@@ -196,6 +200,13 @@ typedef struct {
     bool     pps_synced;     // 保留字段，恒为 false（BK-880 不提供 PPS）
     bool     fix_3d;         // 是否获得 3D Fix（卫星 ≥ 6）
 } GpsPoint;
+
+// GPS 队列载荷（由 task_gps 生成，task_lap_timer 消费）
+typedef struct {
+    GpsPoint raw_fix;         // 未滤波点：过线检测、VBO、参考圈采集
+    GpsPoint match_fix;       // 同帧匹配点：Delta 投影
+    bool     match_valid;     // false 时 Delta fallback 到 raw_fix
+} GpsFixBundle;
 
 // 检测线定义（起终线 / 扇区分割线）
 typedef struct {

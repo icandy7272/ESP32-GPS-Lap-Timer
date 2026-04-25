@@ -1,30 +1,12 @@
 #include "lap_timer_internal.h"
 
+#include "../crossing_time.h"
 #include "../line_geometry.h"
 
 #include <Arduino.h>
 #include <math.h>
 
 namespace lap_timer_internal {
-
-static double catmull_rom_eval(double p0, double p1,
-                               double p2, double p3, double u) {
-    double u2 = u * u;
-    double u3 = u2 * u;
-    return 0.5 * ((2.0 * p1)
-                 + (-p0 + p2) * u
-                 + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * u2
-                 + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * u3);
-}
-
-static void spline_position(const GpsPoint* p0, const GpsPoint* p1,
-                            const GpsPoint* p2, const GpsPoint* p3,
-                            double u, double* out_lat, double* out_lon) {
-    *out_lat = catmull_rom_eval(p0->lat_deg, p1->lat_deg,
-                                p2->lat_deg, p3->lat_deg, u);
-    *out_lon = catmull_rom_eval(p0->lon_deg, p1->lon_deg,
-                                p2->lon_deg, p3->lon_deg, u);
-}
 
 static double side_of_line(double plat, double plon,
                            const DetectionLine* line) {
@@ -33,37 +15,6 @@ static double side_of_line(double plat, double plon,
     double px = plat - line->lat1_deg;
     double py = plon - line->lon1_deg;
     return cross_product_2d(lx, ly, px, py);
-}
-
-static double spline_find_crossing(const GpsPoint* p0, const GpsPoint* p1,
-                                   const GpsPoint* p2, const GpsPoint* p3,
-                                   const DetectionLine* line) {
-    double lo = 0.0;
-    double hi = 1.0;
-    double sign_lo;
-    {
-        double lat;
-        double lon;
-        spline_position(p0, p1, p2, p3, lo, &lat, &lon);
-        sign_lo = side_of_line(lat, lon, line);
-    }
-
-    for (int i = 0; i < BINARY_SEARCH_ITS; i++) {
-        double mid = (lo + hi) * 0.5;
-        double lat;
-        double lon;
-        spline_position(p0, p1, p2, p3, mid, &lat, &lon);
-        double sign_mid = side_of_line(lat, lon, line);
-
-        if ((sign_lo > 0.0) == (sign_mid > 0.0)) {
-            lo = mid;
-            sign_lo = sign_mid;
-        } else {
-            hi = mid;
-        }
-    }
-
-    return (lo + hi) * 0.5;
 }
 
 static double linear_crossing_t(const GpsPoint* prev, const GpsPoint* curr,
@@ -79,24 +30,6 @@ static double linear_crossing_t(const GpsPoint* prev, const GpsPoint* curr,
     if (t < 0.0) t = 0.0;
     if (t > 1.0) t = 1.0;
     return t;
-}
-
-static int64_t compute_crossing_time(const DetectionLine* line) {
-    if (s_history_count >= SPLINE_HISTORY) {
-        const GpsPoint* p0 = history_get(1);
-        const GpsPoint* p1 = history_get(2);
-        const GpsPoint* p2 = history_get(3);
-        const GpsPoint* p3 = history_get(3);
-        double t = spline_find_crossing(p0, p1, p2, p3, line);
-        int64_t dt = p2->timestamp_us - p1->timestamp_us;
-        return p1->timestamp_us + (int64_t)(t * (double)dt);
-    }
-
-    const GpsPoint* prev = history_get(s_history_count - 2);
-    const GpsPoint* curr = history_get(s_history_count - 1);
-    double t = linear_crossing_t(prev, curr, line);
-    int64_t dt = curr->timestamp_us - prev->timestamp_us;
-    return prev->timestamp_us + (int64_t)(t * (double)dt);
 }
 
 static bool has_crossed_line(const GpsPoint* prev, const GpsPoint* curr,
@@ -260,9 +193,14 @@ static void reset_arm(int line_idx) {
 }
 
 static void debounce_start(int line_idx, int64_t crossing_us,
-                           double crossed_side_sign) {
+                           double crossed_side_sign,
+                           int confirmed_samples = 0) {
     s_debounce_active[line_idx] = true;
-    s_debounce_remaining[line_idx] = DEBOUNCE_SAMPLES;
+    int remaining = DEBOUNCE_SAMPLES - confirmed_samples;
+    if (remaining < 1) {
+        remaining = 1;
+    }
+    s_debounce_remaining[line_idx] = remaining;
     s_debounce_crossing_us[line_idx] = crossing_us;
     s_debounce_expected_sign[line_idx] = crossed_side_sign;
 }
@@ -290,6 +228,56 @@ static bool debounce_feed(int line_idx,
     return false;
 }
 
+static const GpsPoint* previous_history_point_or_current_prev(
+        const GpsPoint* prev) {
+    if (s_history_count >= 3) {
+        return history_get(s_history_count - 3);
+    }
+    return prev;
+}
+
+static void crossing_candidate_start(int line_idx,
+                                     const DetectionLine* line,
+                                     const GpsPoint* prev,
+                                     const GpsPoint* curr) {
+    const GpsPoint* p0 = previous_history_point_or_current_prev(prev);
+    s_crossing_candidate_active[line_idx] = true;
+    s_crossing_candidate_p0[line_idx] = *p0;
+    s_crossing_candidate_p1[line_idx] = *prev;
+    s_crossing_candidate_p2[line_idx] = *curr;
+    s_crossing_candidate_expected_sign[line_idx] =
+        side_of_line(curr->lat_deg, curr->lon_deg, line);
+}
+
+static bool crossing_candidate_feed(int line_idx,
+                                    const GpsPoint* curr,
+                                    const DetectionLine* line) {
+    if (!s_crossing_candidate_active[line_idx]) {
+        return false;
+    }
+
+    double current_sign = side_of_line(curr->lat_deg, curr->lon_deg, line);
+    double expected = s_crossing_candidate_expected_sign[line_idx];
+    bool same_side = (current_sign * expected) > 0;
+
+    s_crossing_candidate_active[line_idx] = false;
+    if (!same_side) {
+        return true;
+    }
+
+    int64_t crossing_us = crossing_time_centered_us(
+        &s_crossing_candidate_p0[line_idx],
+        &s_crossing_candidate_p1[line_idx],
+        &s_crossing_candidate_p2[line_idx],
+        curr,
+        line);
+
+    Serial.printf("[xing] L%d debounce_start side=%.2e\n",
+                  line_idx, expected);
+    debounce_start(line_idx, crossing_us, expected, 1);
+    return true;
+}
+
 void process_line(int line_idx,
                   const DetectionLine* line,
                   const GpsPoint* prev,
@@ -311,6 +299,14 @@ void process_line(int line_idx,
                 handle_sector_crossing(line_idx, crossing_us);
             }
         }
+        return;
+    }
+
+    // 1b) A crossing candidate detected on the previous fix now has
+    //     the future sample needed for centered interpolation.  This
+    //     still backdates crossing_us to the original prev->curr
+    //     segment; the extra sample only improves the geometric fit.
+    if (crossing_candidate_feed(line_idx, curr, line)) {
         return;
     }
 
@@ -365,11 +361,7 @@ void process_line(int line_idx,
         return;
     }
 
-    int64_t crossing_us = compute_crossing_time(line);
-    double crossed_side = side_of_line(curr->lat_deg, curr->lon_deg, line);
-    Serial.printf("[xing] L%d debounce_start side=%.2e\n",
-                  line_idx, crossed_side);
-    debounce_start(line_idx, crossing_us, crossed_side);
+    crossing_candidate_start(line_idx, line, prev, curr);
 }
 
 }  // namespace lap_timer_internal

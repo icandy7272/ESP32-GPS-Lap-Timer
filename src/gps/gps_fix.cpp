@@ -1,5 +1,6 @@
 #include "gps/gps_internal.h"
 #include "gps/gps_constellation.h"
+#include "gps_fix_bundle.h"
 #include "gps_filter.h"
 
 #include <esp_timer.h>
@@ -87,14 +88,15 @@ void gps_send_fix_if_ready() {
     }
 
     GpsPoint point = assemble_point(&s_gga, &s_rmc);
-    gps_filter_process(point);
+    GpsFilterProcessResult filter_result = gps_filter_process(point);
+    GpsFixBundle bundle = gps_fix_bundle_from_filter_result(filter_result);
 
     bool queue_was_full = false;
-    if (xQueueSend(s_gps_queue, &point, 0) == errQUEUE_FULL) {
+    if (xQueueSend(s_gps_queue, &bundle, 0) == errQUEUE_FULL) {
         queue_was_full = true;
-        GpsPoint discard;
+        GpsFixBundle discard;
         xQueueReceive(s_gps_queue, &discard, 0);
-        xQueueSend(s_gps_queue, &point, 0);
+        xQueueSend(s_gps_queue, &bundle, 0);
     }
 
     uint32_t now_ms = millis();

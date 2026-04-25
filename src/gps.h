@@ -22,7 +22,7 @@ int64_t pps_read();
 
 // Initialise UART2, attach a (dormant) PPS interrupt on GPIO16,
 // create and start gps_task. Caller must create gps_queue
-// (depth 4, sizeof GpsPoint) before calling.
+// (depth 4, sizeof GpsFixBundle) before calling.
 void gps_init(QueueHandle_t gps_queue);
 
 // FreeRTOS task function — pinned to Core 0, priority 22, 4096 stack.
