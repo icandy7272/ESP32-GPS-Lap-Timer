@@ -67,9 +67,22 @@ static void test_centered_crossing_falls_back_when_time_not_monotonic() {
     assert(crossing_us == crossing_time_linear_us(&p1, &p2, &line));
 }
 
+static void test_centered_crossing_falls_back_when_p0_or_p3_null() {
+    DetectionLine line = north_south_line();
+    GpsPoint p1 = make_point(0.0, -0.10, 1000000);
+    GpsPoint p2 = make_point(0.0, 0.30, 1040000);
+    int64_t baseline = crossing_time_linear_us(&p1, &p2, &line);
+
+    assert(crossing_time_centered_us(nullptr, &p1, &p2, &p2, &line)
+           == baseline);
+    assert(crossing_time_centered_us(&p1, &p1, &p2, nullptr, &line)
+           == baseline);
+}
+
 int main() {
     test_linear_crossing_uses_signed_distance_fraction();
     test_centered_crossing_uses_future_point();
     test_centered_crossing_falls_back_when_time_not_monotonic();
+    test_centered_crossing_falls_back_when_p0_or_p3_null();
     return 0;
 }

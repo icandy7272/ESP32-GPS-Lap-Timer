@@ -233,6 +233,9 @@ static const GpsPoint* previous_history_point_or_current_prev(
     if (s_history_count >= 3) {
         return history_get(s_history_count - 3);
     }
+    // On a cold-start crossing candidate, there may be no older p0 sample yet.
+    // Using prev gives Catmull-Rom p0 == p1: bounded, slightly degenerate,
+    // and limited to the first candidate after init/reset.
     return prev;
 }
 

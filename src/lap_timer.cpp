@@ -173,6 +173,10 @@ void lap_timer_init(QueueHandle_t gps_q,
         s_debounce_remaining[i] = 0;
         s_debounce_crossing_us[i] = 0;
         s_crossing_candidate_active[i] = false;
+        s_crossing_candidate_p0[i] = {};
+        s_crossing_candidate_p1[i] = {};
+        s_crossing_candidate_p2[i] = {};
+        s_crossing_candidate_expected_sign[i] = 0.0;
     }
 }
 
@@ -194,6 +198,10 @@ void lap_timer_reset(void) {
         s_debounce_remaining[i] = 0;
         s_debounce_crossing_us[i] = 0;
         s_crossing_candidate_active[i] = false;
+        s_crossing_candidate_p0[i] = {};
+        s_crossing_candidate_p1[i] = {};
+        s_crossing_candidate_p2[i] = {};
+        s_crossing_candidate_expected_sign[i] = 0.0;
     }
 
     delta_free_reference();

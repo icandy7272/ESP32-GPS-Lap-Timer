@@ -166,8 +166,11 @@ void lap_timer_task(void* param) {
             // from cold-start works.
             process_draft_validation_line(&prev, &curr);
 
-            const GpsPoint* delta_curr = fix.match_valid ? &fix.match_fix : &curr;
-            update_session_delta(&curr, delta_curr);
+            // gps_fix_bundle_from_filter_result() pre-fills match_fix with
+            // raw_fix when no aligned match fix is valid, so Delta can consume
+            // this field unconditionally while raw curr remains authoritative
+            // for timing state and reference-lap capture.
+            update_session_delta(&curr, &fix.match_fix);
         }
 
         if (s_lap_points != nullptr && s_lap_point_count < MAX_LAP_POINTS
