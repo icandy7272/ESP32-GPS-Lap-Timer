@@ -69,13 +69,21 @@ These are post-PCB-soldering revert tasks; full procedure with file paths and
 verification steps lives in
 `~/.claude/projects/-Users-wenchaodu-Documents-Claude-code-projects-ESP32-track-GPS/memory/project_pcb_migration.md`.
 
-- [ ] **Stage A (right after soldering, still walking-test mode):** restore SD
-      SPI clock from 4 MHz → 25 MHz in `src/storage/storage_internal.h`, restore
-      CPU `f_cpu` from 160 MHz → 240 MHz in `platformio.ini`.  Reflash and
-      confirm no BROWNOUT entries appear in SD `boot_log.txt`.
-- [ ] **Stage B (before going to a real track):** comment out
-      `-DWALKING_TEST_MODE=1` in `platformio.ini` build_flags.  Reflash and
-      verify production thresholds engage (`HEADING_WINDOW` 180° → 60°,
+- [ ] **Stage A (right after soldering, still walking-test mode):** restore the
+      three breadboard SPI/CPU overrides:
+      - SD SPI clock from 4 MHz → 25 MHz in `src/storage/storage_internal.h`.
+      - CPU `f_cpu` from 160 MHz → 240 MHz in `platformio.ini`.
+      - TFT SPI from `SPI_FREQUENCY=4000000` → `27000000` and
+        `SPI_READ_FREQUENCY=6000000` → `20000000` in `platformio.ini`
+        build_flags (both lines marked `BREADBOARD_OVERRIDE`).
+
+      Reflash and confirm no BROWNOUT entries appear in SD `boot_log.txt`.
+- [ ] **Stage B (before going to a real track):** stop using the walking-test
+      env. Default `pio run` already builds production thresholds — walking
+      mode is now isolated in `[env:esp32-s3-devkitc-1-walking-test]`
+      (commit `faf2963`), so just don't pass
+      `-e esp32-s3-devkitc-1-walking-test` on the upload command.  Verify
+      production thresholds engage (`HEADING_WINDOW` 180° → 60°,
       `ARM_DISTANCE_M` 3 → 10 m, lap-time floors 5 s → 15 s for both
       lap_timer and session).
 
