@@ -430,6 +430,42 @@
     };
   }
 
+  function normalizeValidation(source) {
+    var normalized = source || {};
+    var events = Array.isArray(normalized.events)
+      ? normalized.events.map(function (event) {
+          return {
+            accepted: Boolean(event && event.accepted),
+            reason: String((event && event.reason) || ""),
+            u: toFiniteNumber(event && event.u, null),
+            overshoot_m: toFiniteNumber(event && event.overshoot_m, null),
+            hdiff_deg: toFiniteNumber(event && event.hdiff_deg, null),
+          };
+        })
+      : [];
+
+    return {
+      active: Boolean(normalized.active),
+      installing: Boolean(normalized.installing),
+      accepted: toFiniteNumber(normalized.accepted, 0),
+      rejected: toFiniteNumber(normalized.rejected, 0),
+      minAccepted: toFiniteNumber(
+        hasOwn(normalized, "minAccepted") ? normalized.minAccepted : normalized.min_accepted,
+        2,
+      ),
+      lastError: String(normalized.lastError || normalized.last_error || ""),
+      events: events,
+    };
+  }
+
+  function normalizeRepeatability(source) {
+    var normalized = source || {};
+    return {
+      active: Boolean(normalized.active),
+      status: String(normalized.status || ""),
+    };
+  }
+
   function normalizeTrackCreationState(data) {
     var status = data.status || {};
     var source = data.track_creation || data.trackCreation || {};
@@ -471,6 +507,8 @@
         : (hasOwn(source, "sectors_expanded")
             ? Boolean(source.sectors_expanded)
             : sectors.length > 0),
+      validation: normalizeValidation(source.validation),
+      repeatability: normalizeRepeatability(source.repeatability),
       message: normalizeMessage(source.message),
       submitPending: hasOwn(source, "submitPending")
         ? Boolean(source.submitPending)
@@ -623,6 +661,8 @@
     return Boolean(
       isReviewReady(draft) &&
       lineConfidenceInfo(draft.startFinish).ready &&
+      draft.validation.accepted >= draft.validation.minAccepted &&
+      !draft.repeatability.active &&
       !draft.submitPending
     );
   }
@@ -662,6 +702,107 @@
       '<div class="web-console__helper">Current position: ' +
       escapeHtml(coords) +
       "</div>" +
+      "</div>"
+    );
+  }
+
+  function gpsMarkingBlockMessage(draft) {
+    var gpsStatus = getGpsStatusInfo(draft);
+    if (gpsStatus.state === "no_fix") {
+      return "Wait for a valid GPS fix before marking points.";
+    }
+    if (gpsStatus.state === "low_sats") {
+      return "Wait for at least 4 satellites before marking points.";
+    }
+    return "Hold still until GPS stabilizes before marking points.";
+  }
+
+  function setupCoachContent(draft) {
+    var sf = draft.startFinish;
+    var validation = draft.validation;
+
+    if (!draft.name.trim()) {
+      return {
+        title: "Step 1 - Name",
+        body: "Enter a track name so this phone setup flow can save the draft correctly.",
+      };
+    }
+    if (!sf.p1) {
+      if (canMarkWithCurrentGps(draft)) {
+        return {
+          title: "Step 2 - Mark P1",
+          body: "Mark P1 at one end of the start/finish line.",
+        };
+      }
+      return {
+        title: "Step 2 - Wait for GPS",
+        body: gpsMarkingBlockMessage(draft),
+      };
+    }
+    if (!sf.p2) {
+      if (canMarkWithCurrentGps(draft)) {
+        return {
+          title: "Step 2 - Mark P2",
+          body: "Walk to the other end of the line, then mark P2.",
+        };
+      }
+      return {
+        title: "Step 2 - Move to P2",
+        body: "Walk to the other end of the line. " + gpsMarkingBlockMessage(draft),
+      };
+    }
+
+    var lineInfo = lineConfidenceInfo(sf);
+    if (!lineInfo.ready) {
+      return {
+        title: "Step 3 - Recheck Line",
+        body: lineInfo.label + ". Re-mark with a longer line or steadier GPS.",
+      };
+    }
+    if (hasIncompleteSectors(draft)) {
+      return {
+        title: "Step 3 - Complete Sectors",
+        body: "Complete or delete every sector split before saving.",
+      };
+    }
+    if (draft.repeatability.active) {
+      return {
+        title: "Step 3 - Finish Repeatability",
+        body: "Finish the repeatability check before saving.",
+      };
+    }
+    if (isCreateReady(draft)) {
+      return {
+        title: "Ready to Save",
+        body: "Ready to save. Tap Create Track when the name and direction still look right.",
+      };
+    }
+    if (validation.installing) {
+      return {
+        title: "Step 3 - Starting Validation",
+        body: "Installing the draft line. Keep the phone page open.",
+      };
+    }
+    if (validation.active) {
+      var need = Math.max(0, validation.minAccepted - validation.accepted);
+      return {
+        title: "Step 3 - Validate Direction",
+        body: "Walk across in the shown direction until PASS reaches " +
+          validation.minAccepted + ". " + need + " more needed.",
+      };
+    }
+    return {
+      title: "Step 3 - Validate Direction",
+      body: "Review the direction arrow, then validate by walking across the line.",
+    };
+  }
+
+  function renderSetupCoach(draft) {
+    var coach = setupCoachContent(draft);
+    return (
+      '<div class="web-console__setup-coach">' +
+      '<div class="web-console__setup-coach-title">' + escapeHtml(coach.title) + "</div>" +
+      '<div class="web-console__setup-coach-body">' + escapeHtml(coach.body) + "</div>" +
       "</div>"
     );
   }
@@ -710,6 +851,188 @@
       (showHeading ? renderHeadingBar(startFinish.heading) : "") +
       "</div>"
     );
+  }
+
+  // MUST stay in sync with setupMapProjection in src/wifi/web_ui_script_track_creation.cpp.
+  function setupMapProjection(points, width, height, padding) {
+    if (!points.length) {
+      return null;
+    }
+    var origin = localOriginPoint(points);
+    var bounds = {
+      minX: Infinity,
+      maxX: -Infinity,
+      minY: Infinity,
+      maxY: -Infinity,
+    };
+
+    points.forEach(function (point) {
+      var projected = projectPointMeters(point, origin);
+      bounds.minX = Math.min(bounds.minX, projected.x);
+      bounds.maxX = Math.max(bounds.maxX, projected.x);
+      bounds.minY = Math.min(bounds.minY, projected.y);
+      bounds.maxY = Math.max(bounds.maxY, projected.y);
+    });
+
+    var minSpanM = 4;
+    if (bounds.maxX - bounds.minX < minSpanM) {
+      var cx = (bounds.minX + bounds.maxX) / 2;
+      bounds.minX = cx - minSpanM / 2;
+      bounds.maxX = cx + minSpanM / 2;
+    }
+    if (bounds.maxY - bounds.minY < minSpanM) {
+      var cy = (bounds.minY + bounds.maxY) / 2;
+      bounds.minY = cy - minSpanM / 2;
+      bounds.maxY = cy + minSpanM / 2;
+    }
+
+    var innerW = width - padding * 2;
+    var innerH = height - padding * 2;
+    var spanX = bounds.maxX - bounds.minX;
+    var spanY = bounds.maxY - bounds.minY;
+    var scale = Math.min(innerW / spanX, innerH / spanY);
+    if (!Number.isFinite(scale) || scale <= 0) {
+      scale = 1;
+    }
+
+    var usedW = spanX * scale;
+    var usedH = spanY * scale;
+    return {
+      origin: origin,
+      bounds: bounds,
+      width: width,
+      height: height,
+      padding: padding,
+      scale: scale,
+      ox: padding + (innerW - usedW) / 2,
+      oy: padding + (innerH - usedH) / 2,
+    };
+  }
+
+  // MUST stay in sync with projectSetupMapPoint in src/wifi/web_ui_script_track_creation.cpp.
+  function projectSetupMapPoint(point, projection) {
+    var local = projectPointMeters(point, projection.origin);
+    return {
+      x: projection.ox + (local.x - projection.bounds.minX) * projection.scale,
+      y: projection.height - projection.oy - (local.y - projection.bounds.minY) * projection.scale,
+    };
+  }
+
+  // MUST stay in sync with setupMapUncertaintySvg in src/wifi/web_ui_script_track_creation.cpp.
+  function setupMapUncertaintyMarkup(point, projection, color) {
+    var p = projectSetupMapPoint(point, projection);
+    var radius = Math.min(24, Math.max(5, pointSpreadMeters(point) * projection.scale));
+    return '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) +
+      '" r="' + radius.toFixed(1) + '" fill="' + color +
+      '" fill-opacity="0.14" stroke="' + color + '" stroke-opacity="0.35"></circle>';
+  }
+
+  // MUST stay in sync with setupMapMarkerSvg in src/wifi/web_ui_script_track_creation.cpp.
+  function setupMapMarkerMarkup(point, projection, label, color, attrs) {
+    var p = projectSetupMapPoint(point, projection);
+    return '<circle ' + (attrs || "") + ' cx="' + p.x.toFixed(1) +
+      '" cy="' + p.y.toFixed(1) + '" r="5" fill="' + color + '"></circle>' +
+      '<text x="' + p.x.toFixed(1) + '" y="' + (p.y - 9).toFixed(1) +
+      '" fill="#dbeafe" font-size="10" text-anchor="middle">' +
+      escapeHtml(label) + "</text>";
+  }
+
+  // MUST stay in sync with renderSetupLocalMap in src/wifi/web_ui_script_track_creation.cpp.
+  function renderSetupLocalMap(draft) {
+    if (!draft.name.trim()) {
+      return '<div class="web-console__setup-map"><div class="web-console__helper">Enter a track name to unlock the local setup map.</div></div>';
+    }
+
+    var sf = draft.startFinish;
+    var current = hasValidFix(draft)
+      ? { lat: draft.gps.lat, lon: draft.gps.lon }
+      : null;
+    var points = [];
+    if (current) {
+      points.push(current);
+    }
+    if (sf.p1) {
+      points.push(sf.p1);
+    }
+    if (sf.p2) {
+      points.push(sf.p2);
+    }
+    if (!points.length) {
+      return '<div class="web-console__setup-map"><div class="web-console__helper">Waiting for GPS or marked points.</div></div>';
+    }
+
+    var width = 260;
+    var height = 170;
+    var padding = 18;
+    var projection = setupMapProjection(points, width, height, padding);
+    if (!projection) {
+      return '<div class="web-console__setup-map"><div class="web-console__helper">Waiting for GPS or marked points.</div></div>';
+    }
+    var svg = '<svg viewBox="0 0 ' + width + " " + height + '" aria-label="Local setup map">';
+    svg += '<defs><marker id="preview-setup-arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"></path></marker></defs>';
+    svg += '<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="8" fill="#0b1827" stroke="#2a3c52"></rect>';
+    svg += '<line x1="' + padding + '" y1="' + (height - padding) + '" x2="' + (width - padding) + '" y2="' + (height - padding) + '" stroke="#1f3550" stroke-width="1"></line>';
+    svg += '<line x1="' + padding + '" y1="' + padding + '" x2="' + padding + '" y2="' + (height - padding) + '" stroke="#1f3550" stroke-width="1"></line>';
+
+    if (sf.p1) {
+      svg += setupMapUncertaintyMarkup(sf.p1, projection, "#38bdf8");
+    }
+    if (sf.p2) {
+      svg += setupMapUncertaintyMarkup(sf.p2, projection, "#a78bfa");
+    }
+    if (sf.p1 && sf.p2) {
+      var p1 = projectSetupMapPoint(sf.p1, projection);
+      var p2 = projectSetupMapPoint(sf.p2, projection);
+      svg += '<line data-setup-line="start-finish" x1="' + p1.x.toFixed(1) +
+        '" y1="' + p1.y.toFixed(1) + '" x2="' + p2.x.toFixed(1) +
+        '" y2="' + p2.y.toFixed(1) +
+        '" stroke="#38bdf8" stroke-width="4" stroke-linecap="round"></line>';
+      if (sf.heading != null) {
+        var midX = (p1.x + p2.x) / 2;
+        var midY = (p1.y + p2.y) / 2;
+        var rad = normalizeHeading(sf.heading) * Math.PI / 180;
+        var arrowLen = 32;
+        var dx = Math.sin(rad) * arrowLen / 2;
+        var dy = -Math.cos(rad) * arrowLen / 2;
+        svg += '<line data-setup-direction x1="' + (midX - dx).toFixed(1) +
+          '" y1="' + (midY - dy).toFixed(1) +
+          '" x2="' + (midX + dx).toFixed(1) +
+          '" y2="' + (midY + dy).toFixed(1) +
+          '" stroke="#fbbf24" stroke-width="3" stroke-linecap="round" marker-end="url(#preview-setup-arrowhead)"></line>';
+      }
+    }
+    if (sf.p1) {
+      svg += setupMapMarkerMarkup(sf.p1, projection, "P1", "#38bdf8", "");
+    }
+    if (sf.p2) {
+      svg += setupMapMarkerMarkup(sf.p2, projection, "P2", "#a78bfa", "");
+    }
+    if (current) {
+      svg += setupMapMarkerMarkup(current, projection, "GPS", "#fbbf24", "data-setup-current");
+    }
+    svg += "</svg>";
+
+    var summary = '<div class="web-console__setup-map-summary">';
+    if (sf.p1 && sf.p2) {
+      summary += '<span class="web-console__setup-map-pill">Line ' +
+        escapeHtml(reviewLineLengthMeters(sf).toFixed(1)) + " m</span>";
+      if (sf.heading != null) {
+        summary += '<span class="web-console__setup-map-pill">Direction ' +
+          escapeHtml(headingArrow(sf.heading) + " " + Math.round(sf.heading) + " deg " + compassLabel(sf.heading)) +
+          "</span>";
+      }
+    } else if (sf.p1) {
+      summary += '<span class="web-console__setup-map-pill">P1 marked</span>';
+    } else {
+      summary += '<span class="web-console__setup-map-pill">GPS preview</span>';
+    }
+    if (current) {
+      summary += '<span class="web-console__setup-map-pill">GPS ' +
+        escapeHtml(formatCoord(current, "--")) + "</span>";
+    }
+    summary += "</div>";
+
+    return '<div class="web-console__setup-map">' + svg + summary + "</div>";
   }
 
   function renderSectorCard(sector, index, draft) {
@@ -992,6 +1315,98 @@
     return svg;
   }
 
+  function renderValidationMarkup(draft) {
+    if (!isReviewReady(draft)) {
+      return "";
+    }
+
+    var validation = draft.validation;
+    var summary = "";
+    if (validation.lastError) {
+      summary = '<span class="web-console__track-msg--error">' +
+        escapeHtml(validation.lastError) +
+        "</span>";
+    } else if (validation.active) {
+      var need = Math.max(0, validation.minAccepted - validation.accepted);
+      var needText = need > 0
+        ? String(need) + " more accepted crossing" + (need === 1 ? "" : "s") + " needed"
+        : (draft.repeatability.active
+            ? "finish the repeatability check before saving"
+            : (isCreateReady(draft) ? "ready to Save" : "complete the remaining setup blockers before saving"));
+      summary =
+        '<div class="web-console__validation-summary">' +
+        '<span class="web-console__validation-chip web-console__validation-chip--pass">PASS ' +
+        escapeHtml(String(validation.accepted)) + "/" +
+        escapeHtml(String(validation.minAccepted)) +
+        "</span>" +
+        '<span class="web-console__validation-chip web-console__validation-chip--reject">REJECT ' +
+        escapeHtml(String(validation.rejected)) +
+        "</span>" +
+        "</div>" +
+        '<div class="web-console__helper">Walk across the line - ' +
+        escapeHtml(needText) +
+        ".</div>";
+    } else if (isCreateReady(draft)) {
+      summary = '<span class="web-console__track-msg--success">Validated: PASS ' +
+        escapeHtml(String(validation.accepted)) + "/" +
+        escapeHtml(String(validation.minAccepted)) +
+        ", REJECT " +
+        escapeHtml(String(validation.rejected)) +
+        ". Ready to Save.</span>";
+    } else if (validation.accepted >= validation.minAccepted && draft.repeatability.active) {
+      summary = '<div class="web-console__helper">Finish the repeatability check before saving.</div>';
+    } else if (validation.accepted >= validation.minAccepted && hasIncompleteSectors(draft)) {
+      summary = '<div class="web-console__helper">Complete or delete every sector split before saving.</div>';
+    } else if (validation.accepted >= validation.minAccepted) {
+      summary = '<div class="web-console__helper">Complete the remaining setup blockers before saving.</div>';
+    } else {
+      summary = '<div class="web-console__helper">Optional but recommended: walk across the line a few times and confirm it fires.</div>';
+    }
+
+    var events = validation.events.slice(0, 5).map(function (event) {
+      var verdict = event.accepted ? "PASS" : "REJECT";
+      var cls = event.accepted ? "pass" : "reject";
+      var u = event.u == null ? "?" : event.u.toFixed(2);
+      var over = event.overshoot_m == null ? "0" : event.overshoot_m.toFixed(2);
+      var hd = event.hdiff_deg == null
+        ? "?"
+        : (event.hdiff_deg >= 0 ? "+" : "") + event.hdiff_deg.toFixed(1);
+      return (
+        '<div class="web-console__validation-event web-console__validation-event--' +
+        cls +
+        '">' +
+        escapeHtml(verdict) +
+        ' <span class="web-console__validation-reason">u=' +
+        escapeHtml(u) +
+        " over=" +
+        escapeHtml(over) +
+        "m hd=" +
+        escapeHtml(hd) +
+        "deg " +
+        escapeHtml(event.reason) +
+        "</span></div>"
+      );
+    }).join("");
+
+    return (
+      '<div class="web-console__validation-panel">' +
+      '<button type="button" class="web-console__mark-button' +
+      (validation.active || validation.installing ? " web-console__mark-button--disabled" : "") +
+      '"' +
+      (validation.active || validation.installing ? " disabled" : "") +
+      ">" +
+      escapeHtml(validation.active ? "Validating... walk across the line" : "Validate By Walking Across") +
+      "</button>" +
+      '<div class="web-console__validation-copy">' +
+      summary +
+      "</div>" +
+      '<div class="web-console__validation-events">' +
+      events +
+      "</div>" +
+      "</div>"
+    );
+  }
+
   function renderTrackCreationMarkup(data) {
     var draft = normalizeTrackCreationState(data || {});
     var stage = currentTrackCreationStage(draft);
@@ -1003,6 +1418,7 @@
       '<div class="web-console__track-creation">' +
       '<h3 class="web-console__subheading">Track Creation</h3>' +
       renderTrackCreationSteps(stage) +
+      renderSetupCoach(draft) +
       '<div class="web-console__creation-stage">' +
       '<p class="web-console__helper web-console__helper--section">Name</p>' +
       '<input class="web-console__input" placeholder="Track name" value="' +
@@ -1015,6 +1431,7 @@
           '<p class="web-console__helper web-console__helper--section">Start/Finish</p>' +
           '<div class="web-console__helper">Name the track, then mark start/finish only when GPS is stable.</div>' +
           renderGpsBar(draft) +
+          renderSetupLocalMap(draft) +
           renderStartFinishSection(draft) +
           '<button type="button" class="web-console__collapse-toggle">' +
           escapeHtml(draft.sectorsExpanded ? "Hide Sector Splits (optional)" : "Show Sector Splits (optional)") +
@@ -1038,6 +1455,7 @@
           renderGeometryReviewMarkup(draft) +
           "</div>" +
           '<div class="web-console__helper">A new track becomes current immediately after creation. Do not close or refresh this page during track creation.</div>' +
+          renderValidationMarkup(draft) +
           '<button type="button" class="web-console__primary-button' +
           (canCreate ? "" : " web-console__primary-button--disabled") +
           '"' +

@@ -223,6 +223,251 @@ function renderGpsBar(){
     samplingHtml;
 }
 
+function setupCoachContent(){
+  var sf=_trackDraft.startFinish;
+  var validation=_trackDraft.validation||makeValidationState();
+  if(!isNameReady()){
+    return {
+      title:'Step 1 - Name',
+      body:'Enter a track name so this phone setup flow can save the draft correctly.'
+    };
+  }
+  if(isPointSamplingActive()){
+    return {
+      title:'Hold Still',
+      body:samplingProgressMessage()
+    };
+  }
+  if(!sf.p1){
+    if(canMarkWithCurrentGps()){
+      return {
+        title:'Step 2 - Mark P1',
+        body:'Mark P1 at one end of the start/finish line.'
+      };
+    }
+    return {
+      title:'Step 2 - Wait for GPS',
+      body:gpsMarkingBlockMessage()
+    };
+  }
+  if(!sf.p2){
+    if(canMarkWithCurrentGps()){
+      return {
+        title:'Step 2 - Mark P2',
+        body:'Walk to the other end of the line, then mark P2.'
+      };
+    }
+    return {
+      title:'Step 2 - Move to P2',
+      body:'Walk to the other end of the line. '+gpsMarkingBlockMessage()
+    };
+  }
+
+  var lineInfo=lineConfidenceInfo(sf);
+  if(!lineInfo.ready){
+    return {
+      title:'Step 3 - Recheck Line',
+      body:lineInfo.label+'. Re-mark with a longer line or steadier GPS.'
+    };
+  }
+  if(hasIncompleteSectors()){
+    return {
+      title:'Step 3 - Complete Sectors',
+      body:'Complete or delete every sector split before saving.'
+    };
+  }
+  if(_trackDraft.repeatability.active){
+    return {
+      title:'Step 3 - Finish Repeatability',
+      body:'Finish the repeatability check before saving.'
+    };
+  }
+  if(isCreateReady()){
+    return {
+      title:'Ready to Save',
+      body:'Ready to save. Tap Create Track when the name and direction still look right.'
+    };
+  }
+  if(validation.installing){
+    return {
+      title:'Step 3 - Starting Validation',
+      body:'Installing the draft line. Keep the phone page open.'
+    };
+  }
+  if(validation.active){
+    var need=Math.max(0,MIN_ACCEPTED_CROSSINGS-(validation.accepted||0));
+    return {
+      title:'Step 3 - Validate Direction',
+      body:'Walk across in the shown direction until PASS reaches '
+        +MIN_ACCEPTED_CROSSINGS+'. '+need+' more needed.'
+    };
+  }
+  return {
+    title:'Step 3 - Validate Direction',
+    body:'Review the direction arrow, then validate by walking across the line.'
+  };
+}
+
+function renderSetupCoach(){
+  var panel=$('setup-coach');
+  if(!panel){return;}
+  var coach=setupCoachContent();
+  panel.innerHTML='<div class="setup-coach-title">'+escapeHtml(coach.title)+'</div>'+
+    '<div class="setup-coach-body">'+escapeHtml(coach.body)+'</div>';
+}
+
+// MUST stay in sync with setupMapProjection in tools/ui_preview/web_console.js.
+function setupMapProjection(points,width,height,padding){
+  if(!points.length){return null;}
+  var origin=localOriginPoint(points);
+  var bounds={
+    minX:Infinity,
+    maxX:-Infinity,
+    minY:Infinity,
+    maxY:-Infinity
+  };
+  points.forEach(function(point){
+    var projected=projectPointMeters(point,origin);
+    bounds.minX=Math.min(bounds.minX,projected.x);
+    bounds.maxX=Math.max(bounds.maxX,projected.x);
+    bounds.minY=Math.min(bounds.minY,projected.y);
+    bounds.maxY=Math.max(bounds.maxY,projected.y);
+  });
+  var minSpanM=4;
+  if(bounds.maxX-bounds.minX<minSpanM){
+    var cx=(bounds.minX+bounds.maxX)/2;
+    bounds.minX=cx-minSpanM/2;
+    bounds.maxX=cx+minSpanM/2;
+  }
+  if(bounds.maxY-bounds.minY<minSpanM){
+    var cy=(bounds.minY+bounds.maxY)/2;
+    bounds.minY=cy-minSpanM/2;
+    bounds.maxY=cy+minSpanM/2;
+  }
+  var innerW=width-padding*2;
+  var innerH=height-padding*2;
+  var spanX=bounds.maxX-bounds.minX;
+  var spanY=bounds.maxY-bounds.minY;
+  var scale=Math.min(innerW/spanX,innerH/spanY);
+  if(!isFinite(scale)||scale<=0){scale=1;}
+  var usedW=spanX*scale;
+  var usedH=spanY*scale;
+  return {
+    origin:origin,
+    bounds:bounds,
+    width:width,
+    height:height,
+    padding:padding,
+    scale:scale,
+    ox:padding+(innerW-usedW)/2,
+    oy:padding+(innerH-usedH)/2
+  };
+}
+
+// MUST stay in sync with projectSetupMapPoint in tools/ui_preview/web_console.js.
+function projectSetupMapPoint(point,projection){
+  var local=projectPointMeters(point,projection.origin);
+  return {
+    x: projection.ox+(local.x-projection.bounds.minX)*projection.scale,
+    y: projection.height-projection.oy-(local.y-projection.bounds.minY)*projection.scale
+  };
+}
+
+// MUST stay in sync with setupMapUncertaintyMarkup in tools/ui_preview/web_console.js.
+function setupMapUncertaintySvg(point,projection,color){
+  var p=projectSetupMapPoint(point,projection);
+  var radius=Math.min(24,Math.max(5,pointSpreadMeters(point)*projection.scale));
+  return '<circle cx="'+p.x.toFixed(1)+'" cy="'+p.y.toFixed(1)+'" r="'+radius.toFixed(1)+
+    '" fill="'+color+'" fill-opacity="0.14" stroke="'+color+'" stroke-opacity="0.35"></circle>';
+}
+
+// MUST stay in sync with setupMapMarkerMarkup in tools/ui_preview/web_console.js.
+function setupMapMarkerSvg(point,projection,label,color,attrs){
+  var p=projectSetupMapPoint(point,projection);
+  return '<circle '+(attrs||'')+' cx="'+p.x.toFixed(1)+'" cy="'+p.y.toFixed(1)+
+    '" r="5" fill="'+color+'"></circle>'+
+    '<text x="'+p.x.toFixed(1)+'" y="'+(p.y-9).toFixed(1)+
+    '" fill="#dbeafe" font-size="10" text-anchor="middle">'+label+'</text>';
+}
+
+// MUST stay in sync with renderSetupLocalMap in tools/ui_preview/web_console.js.
+function renderSetupLocalMap(){
+  var panel=$('setup-local-map');
+  if(!panel){return;}
+  if(!isNameReady()){
+    panel.innerHTML='<div class="helper-text">Enter a track name to unlock the local setup map.</div>';
+    return;
+  }
+
+  var sf=_trackDraft.startFinish;
+  var current=hasValidFix()?currentGpsPoint():null;
+  var points=[];
+  if(current){points.push(current);}
+  if(sf.p1){points.push(sf.p1);}
+  if(sf.p2){points.push(sf.p2);}
+  if(!points.length){
+    panel.innerHTML='<div class="helper-text">Waiting for GPS or marked points.</div>';
+    return;
+  }
+
+  var width=260;
+  var height=170;
+  var padding=18;
+  var projection=setupMapProjection(points,width,height,padding);
+  var svg='<svg viewBox="0 0 '+width+' '+height+'" aria-label="Local setup map">';
+  svg+='<defs><marker id="setup-arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"></path></marker></defs>';
+  svg+='<rect x="0" y="0" width="'+width+'" height="'+height+'" rx="8" fill="#0b1827" stroke="#2a3c52"></rect>';
+  svg+='<line x1="'+padding+'" y1="'+(height-padding)+'" x2="'+(width-padding)+
+    '" y2="'+(height-padding)+'" stroke="#1f3550" stroke-width="1"></line>';
+  svg+='<line x1="'+padding+'" y1="'+padding+'" x2="'+padding+
+    '" y2="'+(height-padding)+'" stroke="#1f3550" stroke-width="1"></line>';
+
+  if(sf.p1){svg+=setupMapUncertaintySvg(sf.p1,projection,'#38bdf8');}
+  if(sf.p2){svg+=setupMapUncertaintySvg(sf.p2,projection,'#a78bfa');}
+  if(sf.p1&&sf.p2){
+    var p1=projectSetupMapPoint(sf.p1,projection);
+    var p2=projectSetupMapPoint(sf.p2,projection);
+    svg+='<line data-setup-line="start-finish" x1="'+p1.x.toFixed(1)+
+      '" y1="'+p1.y.toFixed(1)+'" x2="'+p2.x.toFixed(1)+'" y2="'+p2.y.toFixed(1)+
+      '" stroke="#38bdf8" stroke-width="4" stroke-linecap="round"></line>';
+    if(typeof sf.heading==='number'){
+      var midX=(p1.x+p2.x)/2;
+      var midY=(p1.y+p2.y)/2;
+      var rad=normalizeHeading(sf.heading)*Math.PI/180;
+      var arrowLen=32;
+      var dx=Math.sin(rad)*arrowLen/2;
+      var dy=-Math.cos(rad)*arrowLen/2;
+      svg+='<line data-setup-direction x1="'+(midX-dx).toFixed(1)+
+        '" y1="'+(midY-dy).toFixed(1)+'" x2="'+(midX+dx).toFixed(1)+
+        '" y2="'+(midY+dy).toFixed(1)+'" stroke="#fbbf24" stroke-width="3" stroke-linecap="round" marker-end="url(#setup-arrowhead)"></line>';
+    }
+  }
+  if(sf.p1){svg+=setupMapMarkerSvg(sf.p1,projection,'P1','#38bdf8','');}
+  if(sf.p2){svg+=setupMapMarkerSvg(sf.p2,projection,'P2','#a78bfa','');}
+  if(current){
+    svg+=setupMapMarkerSvg(current,projection,'GPS','#fbbf24','data-setup-current');
+  }
+  svg+='</svg>';
+
+  var summary='<div class="setup-map-summary">';
+  if(sf.p1&&sf.p2){
+    summary+='<span class="setup-map-pill">Line '+reviewLineLengthMeters(sf).toFixed(1)+' m</span>';
+    if(typeof sf.heading==='number'){
+      summary+='<span class="setup-map-pill">Direction '+headingArrow(sf.heading)+' '+
+        Math.round(sf.heading)+' deg '+compassLabel(sf.heading)+'</span>';
+    }
+  }else if(sf.p1){
+    summary+='<span class="setup-map-pill">P1 marked</span>';
+  }else{
+    summary+='<span class="setup-map-pill">GPS preview</span>';
+  }
+  if(current){
+    summary+='<span class="setup-map-pill">GPS '+formatCoord(current)+'</span>';
+  }
+  summary+='</div>';
+  panel.innerHTML=svg+summary;
+}
+
 function renderStartFinishSection(){
   var p1Btn=$('sf-p1-btn');
   var p2Btn=$('sf-p2-btn');
@@ -358,6 +603,8 @@ function renderCreateButton(){
 function renderTrackDraft(){
   renderCreationStages();
   renderGpsBar();
+  renderSetupCoach();
+  renderSetupLocalMap();
   renderStartFinishSection();
   renderSectorRows();
   renderGeometryReview();
@@ -414,16 +661,25 @@ function renderValidationSection(){
     }else if(v.active){
       var need=Math.max(0,MIN_ACCEPTED_CROSSINGS-v.accepted);
       var needTxt=need>0
-        ? (' — '+need+' more accepted crossing'+(need===1?'':'s')+' needed')
-        : ' — ready to Save';
+        ? (need+' more accepted crossing'+(need===1?'':'s')+' needed')
+        : (_trackDraft.repeatability.active
+            ? 'finish the repeatability check before saving'
+            : (isCreateReady()?'ready to Save':'complete the remaining setup blockers before saving'));
       summary.innerHTML='<div class="validate-summary-box">'+
-        '<span class="validate-summary-pass">✓ '+v.accepted+' accepted</span>'+
-        '<span class="validate-summary-reject">✗ '+v.rejected+' rejected</span>'+
+        '<span class="validate-summary-chip validate-summary-pass">PASS '+v.accepted+'/'+MIN_ACCEPTED_CROSSINGS+'</span>'+
+        '<span class="validate-summary-chip validate-summary-reject">REJECT '+v.rejected+'</span>'+
         '</div>'+
-        '<div>Walk across the line'+needTxt+'.</div>';
-    }else if(v.accepted>=MIN_ACCEPTED_CROSSINGS){
-      summary.innerHTML='<span class="track-msg-ok">Validated: '+
-        v.accepted+' accepted, '+v.rejected+' rejected. You can Save.</span>';
+        '<div>Walk across the line - '+needTxt+'.</div>';
+    }else if(isCreateReady()){
+      summary.innerHTML='<span class="track-msg-ok">Validated: PASS '+
+        v.accepted+'/'+MIN_ACCEPTED_CROSSINGS+', REJECT '+v.rejected+
+        '. Ready to Save.</span>';
+    }else if((v.accepted||0)>=MIN_ACCEPTED_CROSSINGS&&_trackDraft.repeatability.active){
+      summary.textContent='Validation passed. Finish the repeatability check before saving.';
+    }else if((v.accepted||0)>=MIN_ACCEPTED_CROSSINGS&&hasIncompleteSectors()){
+      summary.textContent='Validation passed. Complete or delete every sector split before saving.';
+    }else if((v.accepted||0)>=MIN_ACCEPTED_CROSSINGS){
+      summary.textContent='Validation passed. Complete the remaining setup blockers before saving.';
     }else{
       summary.textContent='Optional but recommended: walk across the line a few times and confirm it fires.';
     }

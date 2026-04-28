@@ -64,8 +64,13 @@ assert.match(
 );
 assert.match(
   webUiEntrySource,
-  /build_web_ui_script_section\(\)/,
-  "src/wifi/web_ui.cpp should delegate script assembly",
+  /send_web_ui_script_section_streamed\(\)/,
+  "src/wifi/web_ui.cpp should stream script assembly",
+);
+assert.match(
+  webUiEntrySource,
+  /setContentLength\(CONTENT_LENGTH_UNKNOWN\)/,
+  "src/wifi/web_ui.cpp should avoid buffering the whole dashboard HTML in RAM",
 );
 assert.doesNotMatch(
   webUiEntrySource,
@@ -168,16 +173,139 @@ assert.doesNotMatch(
   "src/wifi/web_ui_script_track_creation.cpp should stay focused on the track-creation flow",
 );
 
+function findFunctionEnd(source, openBraceIndex, fileLabel) {
+  let depth = 0;
+  for (let cursor = openBraceIndex; cursor < source.length; cursor++) {
+    if (source.startsWith('R"JS(', cursor)) {
+      const closeIndex = source.indexOf(')JS"', cursor + 5);
+      assert.ok(closeIndex >= 0, "Unclosed raw JS string in " + fileLabel);
+      cursor = closeIndex + ')JS"'.length - 1;
+      continue;
+    }
+
+    if (source.startsWith("//", cursor)) {
+      const newlineIndex = source.indexOf("\n", cursor + 2);
+      cursor = newlineIndex >= 0 ? newlineIndex : source.length;
+      continue;
+    }
+
+    if (source.startsWith("/*", cursor)) {
+      const closeIndex = source.indexOf("*/", cursor + 2);
+      assert.ok(closeIndex >= 0, "Unclosed block comment in " + fileLabel);
+      cursor = closeIndex + 1;
+      continue;
+    }
+
+    if (source[cursor] === '"' || source[cursor] === "'") {
+      const quote = source[cursor];
+      cursor++;
+      while (cursor < source.length) {
+        if (source[cursor] === "\\") {
+          cursor++;
+        } else if (source[cursor] === quote) {
+          break;
+        }
+        cursor++;
+      }
+      continue;
+    }
+
+    if (source[cursor] === "{") {
+      depth++;
+    } else if (source[cursor] === "}") {
+      depth--;
+      if (depth === 0) {
+        return cursor;
+      }
+    }
+  }
+
+  assert.fail("Failed to find matching function brace in " + fileLabel);
+}
+
 function extractJsFragment(source, functionName, fileLabel) {
   const escapedFunctionName = functionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const fragmentMatch = source.match(
-    new RegExp(
-      escapedFunctionName + String.raw`\s*\([^)]*\)\s*\{\s*return R"JS\(([\s\S]*?)\)JS";`,
-    ),
+  const functionMatch = source.match(
+    new RegExp(escapedFunctionName + String.raw`\s*\([^)]*\)\s*\{`),
   );
-  assert.ok(fragmentMatch, "Failed to extract " + functionName + " from " + fileLabel);
-  return fragmentMatch[1];
+  assert.ok(functionMatch, "Failed to find " + functionName + " in " + fileLabel);
+
+  const openBraceIndex = functionMatch.index + functionMatch[0].length - 1;
+  const functionEnd = findFunctionEnd(source, openBraceIndex, fileLabel);
+  const returnIndex = source.indexOf("return", functionMatch.index);
+  assert.ok(
+    returnIndex >= 0 && returnIndex < functionEnd,
+    "Failed to find return statement for " + functionName,
+  );
+
+  const finalRawCloseIndex = source.lastIndexOf(')JS";', functionEnd);
+  assert.ok(
+    finalRawCloseIndex > returnIndex && finalRawCloseIndex < functionEnd,
+    "Failed to find raw string terminator for " + functionName,
+  );
+
+  const expression = source
+    .slice(returnIndex + "return".length, finalRawCloseIndex + ')JS"'.length)
+    .replace(/WEB_UI_SHORT_LINE_MIN_LENGTH_M_LIT/g, '"5"')
+    .replace(/WEB_UI_MIN_ACCEPTED_CROSSINGS_LIT/g, '"2"');
+
+  let fragment = "";
+  let cursor = 0;
+  while (cursor < expression.length) {
+    if (expression.startsWith('R"JS(', cursor)) {
+      const closeIndex = expression.indexOf(')JS"', cursor + 5);
+      assert.ok(closeIndex >= 0, "Unclosed raw JS string in " + functionName);
+      fragment += expression.slice(cursor + 5, closeIndex);
+      cursor = closeIndex + ')JS"'.length;
+      continue;
+    }
+
+    if (expression[cursor] === '"') {
+      let literal = '"';
+      cursor++;
+      while (cursor < expression.length) {
+        literal += expression[cursor];
+        if (expression[cursor] === "\\") {
+          cursor++;
+          if (cursor < expression.length) {
+            literal += expression[cursor];
+          }
+        } else if (expression[cursor] === '"') {
+          break;
+        }
+        cursor++;
+      }
+      fragment += JSON.parse(literal);
+    }
+    cursor++;
+  }
+
+  assert.ok(fragment.length > 0, "Extracted empty JS fragment for " + functionName);
+  return fragment;
 }
+
+function testExtractJsFragmentStopsAtRequestedFunction() {
+  const source = `
+const char* build_first_fragment() {
+  return R"JS(
+function first(){return {ok:true};}
+)JS";
+}
+
+const char* build_second_fragment() {
+  return R"JS(
+function second(){return {leaked:true};}
+)JS";
+}
+`;
+  assert.equal(
+    extractJsFragment(source, "build_first_fragment", "synthetic.cpp").trim(),
+    "function first(){return {ok:true};}",
+    "JS extraction should stop at the requested C++ function",
+  );
+}
+
+testExtractJsFragmentStopsAtRequestedFunction();
 
 const embeddedScript =
   extractJsFragment(
@@ -1130,10 +1258,12 @@ async function testRepeatabilityCheckCanUpgradeShortLineConfidence() {
   await harness.tick(2400);
 
   assert.equal(harness.context._trackDraft.repeatability.status, "passed");
+  harness.context._trackDraft.validation.accepted = harness.context.MIN_ACCEPTED_CROSSINGS;
+  harness.context.renderTrackDraft();
   assert.equal(
     harness.getElement("create-track-btn").disabled,
     false,
-    "close repeatability agreement should allow the short line to be created",
+    "close repeatability agreement plus validation should allow the short line to be created",
   );
   assert.match(
     harness.getElement("repeatability-summary").textContent,
@@ -1227,11 +1357,12 @@ async function testRepeatabilityStateResetsAfterLineChangesAndInheritsFlip() {
     midpointDeltaM: 0.4,
     headingDeltaDeg: 3.0,
   };
+  harness.context._trackDraft.validation.accepted = harness.context.MIN_ACCEPTED_CROSSINGS;
   harness.context.renderTrackDraft();
   assert.equal(
     harness.getElement("create-track-btn").disabled,
     false,
-    "a passed repeatability check should unlock creation for a short line",
+    "a passed repeatability check plus validation should unlock creation for a short line",
   );
 
   harness.context.flipStartFinishHeading();
@@ -1540,6 +1671,298 @@ async function testStatusRendersCurrentTrackAndBlockedRecordingReason() {
     /Select a track before recording\./i,
     "recording CTA should include a concrete blocked reason",
   );
+}
+
+function highConfidencePoint(lat, lon) {
+  return {
+    lat,
+    lon,
+    sampleCount: 6,
+    spreadM: 0.5,
+    confidence: "high",
+  };
+}
+
+function elementTextAndHtml(element) {
+  return (element.textContent || "") + " " + (element.innerHTML || "");
+}
+
+async function testSetupCoachEscapesGeneratedContent() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.context.setupCoachContent = function () {
+    return {
+      title: '<img src=x onerror="alert(1)">',
+      body: "<b>Unsafe coach body</b>",
+    };
+  };
+  harness.context.renderSetupCoach();
+
+  const coachHtml = harness.getElement("setup-coach").innerHTML;
+  assert.doesNotMatch(
+    coachHtml,
+    /<img|<b>/i,
+    "setup coach should escape generated title and body before assigning innerHTML",
+  );
+  assert.match(
+    coachHtml,
+    /&lt;img|&lt;b&gt;/i,
+    "setup coach should preserve escaped text content",
+  );
+}
+
+async function testMobileSetupCoachGuidesStartFinishFlow() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.context.renderTrackDraft();
+  assert.match(
+    elementTextAndHtml(harness.getElement("setup-coach")),
+    /enter a track name/i,
+    "setup coach should start by asking for a track name",
+  );
+
+  harness.getElement("track-name").value = "Phone Setup";
+  seedStableGps(harness, [
+    sampledResponse(31.2304160, 121.4737004),
+    sampledResponse(31.2304163, 121.4737007),
+    sampledResponse(31.2304166, 121.4737010),
+  ]);
+  harness.context.renderTrackDraft();
+  assert.match(
+    elementTextAndHtml(harness.getElement("setup-coach")),
+    /mark p1/i,
+    "setup coach should guide the user to mark P1 once GPS is stable",
+  );
+
+  harness.context._trackDraft.startFinish.p1 = highConfidencePoint(
+    31.2304160,
+    121.4737004,
+  );
+  harness.context.renderTrackDraft();
+  assert.match(
+    elementTextAndHtml(harness.getElement("setup-coach")),
+    /walk to the other end|mark p2/i,
+    "setup coach should tell the user to walk to the other end after P1",
+  );
+
+  harness.context._trackDraft.startFinish.p2 = highConfidencePoint(
+    31.2304160,
+    121.4737904,
+  );
+  harness.context.updateStartFinishHeading();
+  harness.context.renderTrackDraft();
+  assert.match(
+    elementTextAndHtml(harness.getElement("setup-coach")),
+    /validate|direction/i,
+    "setup coach should move to direction review and validation after P2",
+  );
+
+  harness.context._trackDraft.validation.accepted = harness.context.MIN_ACCEPTED_CROSSINGS;
+  harness.context.renderTrackDraft();
+  assert.match(
+    elementTextAndHtml(harness.getElement("setup-coach")),
+    /ready to save|create track/i,
+    "setup coach should clearly say when the line is ready to save",
+  );
+}
+
+async function testMobileSetupCoachExplainsIncompleteSectorBeforeReady() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.getElement("track-name").value = "Incomplete Sector";
+  harness.context._trackDraft.startFinish = {
+    p1: highConfidencePoint(31.2304160, 121.4737004),
+    p2: highConfidencePoint(31.2304160, 121.4737904),
+    heading: 180,
+    flipped: false,
+  };
+  harness.context._trackDraft.validation.accepted =
+    harness.context.MIN_ACCEPTED_CROSSINGS;
+  harness.context._trackDraft.sectors = [
+    {
+      id: 1,
+      p1: highConfidencePoint(31.2305160, 121.4738004),
+      p2: null,
+      heading: null,
+      flipped: false,
+    },
+  ];
+
+  harness.context.renderTrackDraft();
+
+  const coachText = elementTextAndHtml(harness.getElement("setup-coach"));
+  assert.doesNotMatch(
+    coachText,
+    /ready to save|create track/i,
+    "setup coach should not claim the track is ready while an optional sector is incomplete",
+  );
+  assert.match(
+    coachText,
+    /complete or delete.*sector/i,
+    "setup coach should explain the incomplete sector blocker before saving",
+  );
+  assert.equal(
+    harness.getElement("create-track-btn").disabled,
+    true,
+    "create button should stay blocked while an optional sector is incomplete",
+  );
+}
+
+async function testMobileSetupCoachExplainsActiveRepeatabilityBeforeReady() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.getElement("track-name").value = "Repeatability Active";
+  harness.context._trackDraft.startFinish = {
+    p1: highConfidencePoint(31.2304160, 121.4737004),
+    p2: highConfidencePoint(31.2304160, 121.4737904),
+    heading: 180,
+    flipped: false,
+  };
+  harness.context._trackDraft.validation.accepted =
+    harness.context.MIN_ACCEPTED_CROSSINGS;
+  harness.context._trackDraft.repeatability.active = true;
+
+  harness.context.renderTrackDraft();
+
+  const coachText = elementTextAndHtml(harness.getElement("setup-coach"));
+  assert.doesNotMatch(
+    coachText,
+    /ready to save|create track/i,
+    "setup coach should not claim the track is ready while repeatability capture is active",
+  );
+  assert.match(
+    coachText,
+    /finish.*repeatability|repeatability.*before saving/i,
+    "setup coach should explain the active repeatability blocker before saving",
+  );
+  assert.equal(
+    harness.getElement("create-track-btn").disabled,
+    true,
+    "create button should stay blocked while repeatability capture is active",
+  );
+}
+
+async function testValidationSummaryExplainsActiveRepeatabilityBeforeReady() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.getElement("track-name").value = "Repeatability Validation Copy";
+  harness.context._trackDraft.startFinish = {
+    p1: highConfidencePoint(31.2304160, 121.4737004),
+    p2: highConfidencePoint(31.2304160, 121.4737904),
+    heading: 180,
+    flipped: false,
+  };
+  harness.context._trackDraft.validation.accepted =
+    harness.context.MIN_ACCEPTED_CROSSINGS;
+  harness.context._trackDraft.validation.rejected = 0;
+  harness.context._trackDraft.repeatability.active = true;
+
+  harness.context.renderTrackDraft();
+
+  const summaryText = elementTextAndHtml(harness.getElement("validate-summary"));
+  assert.doesNotMatch(
+    summaryText,
+    /ready to save|create track/i,
+    "validation summary should not claim the track is ready while repeatability capture is active",
+  );
+  assert.match(
+    summaryText,
+    /finish.*repeatability|repeatability.*before saving/i,
+    "validation summary should explain the active repeatability blocker before saving",
+  );
+  assert.equal(
+    harness.getElement("create-track-btn").disabled,
+    true,
+    "create button should stay blocked while repeatability capture is active",
+  );
+}
+
+async function testMobileSetupLocalMapRendersCurrentPointLineAndDirection() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.getElement("track-name").value = "Local Map";
+  seedStableGps(harness, [
+    sampledResponse(31.2304160, 121.4737004),
+    sampledResponse(31.2304163, 121.4737007),
+    sampledResponse(31.2304166, 121.4737010),
+  ]);
+  harness.context._trackDraft.startFinish.p1 = highConfidencePoint(
+    31.2304160,
+    121.4737004,
+  );
+  harness.context._trackDraft.startFinish.p2 = highConfidencePoint(
+    31.2304160,
+    121.4737904,
+  );
+  harness.context.updateStartFinishHeading();
+  harness.context.renderTrackDraft();
+
+  const mapHtml = harness.getElement("setup-local-map").innerHTML;
+  assert.match(
+    mapHtml,
+    /data-setup-current/,
+    "local setup map should render the current GPS point",
+  );
+  assert.match(
+    mapHtml,
+    /data-setup-line="start-finish"/,
+    "local setup map should render the start/finish line",
+  );
+  assert.match(
+    mapHtml,
+    /data-setup-direction/,
+    "local setup map should render the crossing direction arrow",
+  );
+  assert.match(
+    mapHtml,
+    /Line [0-9.]+ m/,
+    "local setup map should show the measured line length",
+  );
+}
+
+async function testValidationSummaryUsesPassRejectLanguage() {
+  const harness = createHarness();
+  await harness.settle();
+
+  harness.getElement("track-name").value = "Validation Copy";
+  harness.context._trackDraft.startFinish = {
+    p1: highConfidencePoint(31.2304160, 121.4737004),
+    p2: highConfidencePoint(31.2304160, 121.4737904),
+    heading: 180,
+    flipped: false,
+  };
+  harness.context._trackDraft.validation = {
+    active: true,
+    installing: false,
+    accepted: 1,
+    rejected: 2,
+    events: [
+      {
+        accepted: false,
+        reason: "wrong_direction",
+        u: 0.45,
+        overshoot_m: 0.2,
+        hdiff_deg: 170,
+      },
+    ],
+    pollTimer: null,
+    lastError: null,
+    sessionId: 7,
+  };
+  harness.context.renderTrackDraft();
+
+  const summaryHtml = harness.getElement("validate-summary").innerHTML;
+  const eventsHtml = harness.getElement("validate-events").innerHTML;
+  assert.match(summaryHtml, /PASS 1\/2/, "validation summary should show PASS progress");
+  assert.match(summaryHtml, /REJECT 2/, "validation summary should show rejected count");
+  assert.match(summaryHtml, /1 more/, "validation summary should show remaining accepted crossings");
+  assert.match(eventsHtml, /wrong_direction/, "validation events should expose reject reasons");
 }
 
 async function testNearbyTracksRenderSortedAndSupportSwitching() {
@@ -2063,6 +2486,13 @@ async function testSessionCardsRenderMetadataAndEncodedDownloads() {
   await testCreateTrackAutoSelectsNewTrack();
   await testCreateTrackSurfacesAutoSelectFailure();
   await testStatusRendersCurrentTrackAndBlockedRecordingReason();
+  await testSetupCoachEscapesGeneratedContent();
+  await testMobileSetupCoachGuidesStartFinishFlow();
+  await testMobileSetupCoachExplainsIncompleteSectorBeforeReady();
+  await testMobileSetupCoachExplainsActiveRepeatabilityBeforeReady();
+  await testValidationSummaryExplainsActiveRepeatabilityBeforeReady();
+  await testMobileSetupLocalMapRendersCurrentPointLineAndDirection();
+  await testValidationSummaryUsesPassRejectLanguage();
   await testNearbyTracksRenderSortedAndSupportSwitching();
   await testGuidedTrackReviewStageSupportsRemarkingSinglePoints();
   await testAdvancedSettingsStartCollapsed();

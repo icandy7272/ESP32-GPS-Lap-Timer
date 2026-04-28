@@ -43,6 +43,33 @@ function extractReviewLine(markup, label) {
   };
 }
 
+function extractSetupCoachMarkup(markup) {
+  const match = markup.match(
+    /<div class="web-console__setup-coach">[\s\S]*?<\/div>\s*<\/div>/,
+  );
+  assert.ok(match, "Expected setup coach markup");
+  return match[0];
+}
+
+function extractValidationPanelMarkup(markup) {
+  const start = markup.indexOf('<div class="web-console__validation-panel">');
+  assert.ok(start >= 0, "Expected validation panel markup");
+  const end = markup.indexOf(
+    '<button type="button" class="web-console__primary-button',
+    start,
+  );
+  assert.ok(end > start, "Expected create button after validation panel");
+  return markup.slice(start, end);
+}
+
+function extractCreateTrackButtonMarkup(markup) {
+  const match = markup.match(
+    /<button type="button" class="web-console__primary-button[^"]*"[^>]*>Create Track<\/button>/,
+  );
+  assert.ok(match, "Expected Create Track button markup");
+  return match[0];
+}
+
 function projectedAspectRatio(line) {
   return Math.abs((line.x2 - line.x1) / (line.y2 - line.y1));
 }
@@ -60,8 +87,16 @@ assert.match(indexHtml, /id="scenario-controls-root"/);
 assert.match(stylesSource, /\.web-console__gps-bar\s*\{/);
 assert.match(stylesSource, /\.web-console__gps-bar--ok\s*\{/);
 assert.match(stylesSource, /\.web-console__gps-bar--warn\s*\{/);
+assert.match(stylesSource, /\.web-console__setup-coach\s*\{/);
+assert.match(stylesSource, /\.web-console__setup-map\s*\{/);
+assert.match(stylesSource, /\.web-console__validation-chip\s*\{/);
 assert.match(stylesSource, /\.web-console__mark-button--marked\s*\{/);
 assert.match(stylesSource, /\.web-console__sector-card\s*\{/);
+assert.match(
+  webConsoleSource,
+  /function setupMapProjection\(points, width, height, padding\)\s*\{\s*if \(!points\.length\) \{\s*return null;\s*\}/,
+  "preview setup map projection should defensively reject empty point sets",
+);
 assert.match(stylesSource, /\.device-panel__description\s*\{[\s\S]*font-size: 0\.78rem;/);
 assert.match(stylesSource, /\.device-preview--polished \.device-status\s*\{[\s\S]*font-size: 0\.88rem;/);
 assert.match(stylesSource, /\.device-preview--polished \.device-driving__delta\s*\{[\s\S]*font-size: clamp\(3\.1rem, 11vw, 4\.1rem\);/);
@@ -218,6 +253,33 @@ assert.ok(
 const markup = webConsoleModule.renderWebConsoleMarkup(recordingScenario);
 const manualTrackMarkup = webConsoleModule.renderWebConsoleMarkup(manualTrackSelectedScenario);
 const guidedReviewMarkup = webConsoleModule.renderWebConsoleMarkup(guidedTrackReviewScenario);
+const incompleteSectorReviewScenario = JSON.parse(JSON.stringify(guidedTrackReviewScenario));
+incompleteSectorReviewScenario.track_creation.validation.active = false;
+incompleteSectorReviewScenario.track_creation.validation.accepted =
+  incompleteSectorReviewScenario.track_creation.validation.minAccepted;
+incompleteSectorReviewScenario.track_creation.validation.rejected = 0;
+incompleteSectorReviewScenario.track_creation.sectors[0].p2 = null;
+const incompleteSectorReviewMarkup =
+  webConsoleModule.renderWebConsoleMarkup(incompleteSectorReviewScenario);
+const incompleteSectorCoachMarkup =
+  extractSetupCoachMarkup(incompleteSectorReviewMarkup);
+const repeatabilityActiveReviewScenario = JSON.parse(JSON.stringify(guidedTrackReviewScenario));
+repeatabilityActiveReviewScenario.track_creation.validation.active = false;
+repeatabilityActiveReviewScenario.track_creation.validation.accepted =
+  repeatabilityActiveReviewScenario.track_creation.validation.minAccepted;
+repeatabilityActiveReviewScenario.track_creation.validation.rejected = 0;
+repeatabilityActiveReviewScenario.track_creation.repeatability = {
+  active: true,
+  status: "measuring",
+};
+const repeatabilityActiveReviewMarkup =
+  webConsoleModule.renderWebConsoleMarkup(repeatabilityActiveReviewScenario);
+const repeatabilityActiveCoachMarkup =
+  extractSetupCoachMarkup(repeatabilityActiveReviewMarkup);
+const repeatabilityActiveValidationMarkup =
+  extractValidationPanelMarkup(repeatabilityActiveReviewMarkup);
+const repeatabilityActiveCreateButtonMarkup =
+  extractCreateTrackButtonMarkup(repeatabilityActiveReviewMarkup);
 const browserGlobalMarkup = browserGlobalSandbox.UiPreviewWebConsole.renderWebConsoleMarkup(recordingScenario);
 const heavyTrackLibraryMarkup = webConsoleModule.renderWebConsoleMarkup(heavyTrackLibraryScenario);
 const stabilizingMarkup = webConsoleModule.renderWebConsoleMarkup(trackCreationStabilizingScenario);
@@ -262,6 +324,16 @@ assert.match(guidedReviewMarkup, /Start\/Finish/);
 assert.match(guidedReviewMarkup, /Review/);
 assert.match(guidedReviewMarkup, /Re-mark P1/);
 assert.match(guidedReviewMarkup, /Re-mark P2/);
+assert.match(guidedReviewMarkup, /web-console__setup-coach/);
+assert.match(guidedReviewMarkup, /Validate Direction|Ready to Save/);
+assert.match(guidedReviewMarkup, /web-console__setup-map/);
+assert.match(guidedReviewMarkup, /data-setup-current/);
+assert.match(guidedReviewMarkup, /data-setup-line="start-finish"/);
+assert.match(guidedReviewMarkup, /data-setup-direction/);
+assert.match(guidedReviewMarkup, /Line [0-9.]+ m/);
+assert.match(guidedReviewMarkup, /PASS 1\/2/);
+assert.match(guidedReviewMarkup, /REJECT 1/);
+assert.match(guidedReviewMarkup, /wrong_direction/);
 assert.match(guidedReviewMarkup, /becomes current/i);
 assert.match(guidedReviewMarkup, /<svg/i);
 assert.match(guidedReviewMarkup, /Good - ready to save|Acceptable - short lines may drift|Noisy - try again/);
@@ -271,6 +343,41 @@ assert.match(guidedReviewMarkup, /Scale/i);
 assert.match(guidedReviewMarkup, /Do not close or refresh this page during track creation/i);
 assert.match(guidedReviewMarkup, /review-uncertainty/i);
 assert.match(guidedReviewMarkup, /review-north/i);
+assert.doesNotMatch(
+  incompleteSectorCoachMarkup,
+  /Ready to Save|Create Track/i,
+  "setup coach should not claim the track is ready while an optional sector is incomplete",
+);
+assert.match(
+  incompleteSectorCoachMarkup,
+  /Complete or delete every sector split before saving/i,
+  "setup coach should explain incomplete sector blockers before saving",
+);
+assert.doesNotMatch(
+  repeatabilityActiveCoachMarkup,
+  /Ready to Save|Create Track/i,
+  "setup coach should not claim the track is ready while repeatability capture is active",
+);
+assert.match(
+  repeatabilityActiveCoachMarkup,
+  /Finish Repeatability|repeatability check before saving/i,
+  "setup coach should explain active repeatability blockers before saving",
+);
+assert.doesNotMatch(
+  repeatabilityActiveValidationMarkup,
+  /Ready to Save|Create Track/i,
+  "validation summary should not claim the track is ready while repeatability capture is active",
+);
+assert.match(
+  repeatabilityActiveValidationMarkup,
+  /Finish the repeatability check before saving/i,
+  "validation summary should explain active repeatability blockers before saving",
+);
+assert.match(
+  repeatabilityActiveCreateButtonMarkup,
+  /disabled/,
+  "Create Track should stay disabled while repeatability capture is active",
+);
 {
   const renderedLine = extractReviewLine(guidedReviewMarkup, "Start/Finish");
   const expectedRatio = localMeterAspectRatio(

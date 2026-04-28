@@ -470,9 +470,24 @@
           stability: "stable",
         },
         startFinish: {
-          p1: { lat: 29.8245801, lon: 121.5590284 },
-          p2: { lat: 29.8246489, lon: 121.5592411 },
+          p1: { lat: 29.8245801, lon: 121.5590284, sampleCount: 6, spreadM: 0.5, confidence: "high" },
+          p2: { lat: 29.8246489, lon: 121.5592411, sampleCount: 6, spreadM: 0.6, confidence: "high" },
           flipped: false,
+        },
+        validation: {
+          active: true,
+          accepted: 1,
+          rejected: 1,
+          minAccepted: 2,
+          events: [
+            {
+              accepted: false,
+              reason: "wrong_direction",
+              u: 0.42,
+              overshoot_m: 0.1,
+              hdiff_deg: 168.0,
+            },
+          ],
         },
         sectorsExpanded: true,
         sectors: [
