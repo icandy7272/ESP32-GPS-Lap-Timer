@@ -75,15 +75,16 @@ verification steps lives in
       `CPU  : 240 MHz`, `boot splash ready`, no BROWNOUT / Guru / PANIC /
       watchdog. SD/GPS were on battery rail so SD-25-MHz path still
       unverified.
-- [ ] **Stage A.2 (battery boot validation):** with battery connected so SD
-      and GPS rails are powered, capture boot log and confirm:
-      - SD initializes cleanly at 25 MHz (no `[storage] SD card init failed`).
-      - GPS comes up on configured baud and emits NMEA.
-      - Run a short walk session and verify SD `boot_log.txt` has no
-        BROWNOUT entries and no SDFat write errors.
-      If SD still fails, drop `SD_SPI_MHZ` incrementally (20 → 16 → 12 → 8)
-      until clean, and update `src/storage/storage_internal.h` comment with
-      the validated ceiling.
+- [x] **Stage A.2 (battery boot validation, 2026-04-29):** verified on
+      battery boot via SD `boot_log.txt`:
+      `[STORAGE][ok] sd mounted, defaults in use` at ~5060 ms across two
+      separate boots, no BROWNOUT, no Guru/PANIC/watchdog, no SDFat write
+      errors, runtime heap=209748 / psram=8003567. SD 25 MHz on the
+      hand-soldered PCB is confirmed.
+- [ ] **Stage A.2b (open-sky GPS validation):** today's battery boot showed
+      `[GPS][warn] gps timeout after 30000 ms` — expected indoors. Take the
+      board outside, confirm GPS reaches fix and emits NMEA on the
+      configured baud, and that the live map shows movement.
 - [ ] **Stage A.3 (TFT clock sweep — 2026-04-29 deferred):** TFT
       `-DSPI_FREQUENCY=27000000` / `-DSPI_READ_FREQUENCY=20000000` produced
       a white screen on the hand-soldered PCB. Currently held at the
