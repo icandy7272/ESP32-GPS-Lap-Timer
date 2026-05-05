@@ -69,15 +69,31 @@ These are post-PCB-soldering revert tasks; full procedure with file paths and
 verification steps lives in
 `~/.claude/projects/-Users-wenchaodu-Documents-Claude-code-projects-ESP32-track-GPS/memory/project_pcb_migration.md`.
 
-- [ ] **Stage A (right after soldering, still walking-test mode):** restore the
-      three breadboard SPI/CPU overrides:
-      - SD SPI clock from 4 MHz → 25 MHz in `src/storage/storage_internal.h`.
-      - CPU `f_cpu` from 160 MHz → 240 MHz in `platformio.ini`.
-      - TFT SPI from `SPI_FREQUENCY=4000000` → `27000000` and
-        `SPI_READ_FREQUENCY=6000000` → `20000000` in `platformio.ini`
-        build_flags (both lines marked `BREADBOARD_OVERRIDE`).
-
-      Reflash and confirm no BROWNOUT entries appear in SD `boot_log.txt`.
+- [x] **Stage A.1 (2026-04-29, USB-verified):** CPU `f_cpu` 160 → 240 MHz in
+      `platformio.ini` and SD `SD_SPI_MHZ` 4 → 25 in
+      `src/storage/storage_internal.h`. Boot log on USB power confirmed
+      `CPU  : 240 MHz`, `boot splash ready`, no BROWNOUT / Guru / PANIC /
+      watchdog. SD/GPS were on battery rail so SD-25-MHz path still
+      unverified.
+- [ ] **Stage A.2 (battery boot validation):** with battery connected so SD
+      and GPS rails are powered, capture boot log and confirm:
+      - SD initializes cleanly at 25 MHz (no `[storage] SD card init failed`).
+      - GPS comes up on configured baud and emits NMEA.
+      - Run a short walk session and verify SD `boot_log.txt` has no
+        BROWNOUT entries and no SDFat write errors.
+      If SD still fails, drop `SD_SPI_MHZ` incrementally (20 → 16 → 12 → 8)
+      until clean, and update `src/storage/storage_internal.h` comment with
+      the validated ceiling.
+- [ ] **Stage A.3 (TFT clock sweep — 2026-04-29 deferred):** TFT
+      `-DSPI_FREQUENCY=27000000` / `-DSPI_READ_FREQUENCY=20000000` produced
+      a white screen on the hand-soldered PCB. Currently held at the
+      breadboard `4000000` / `6000000` values, which are confirmed working.
+      Sweep upward in steps (10 / 15 / 20 / 27 MHz), reflash + visually
+      check that the boot splash, recording UI, and sector view all draw
+      cleanly at each step. Stop at the highest pair that still draws
+      cleanly and update `platformio.ini` plus the comment near the
+      `BREADBOARD_OVERRIDE` line. The matching `SPI_READ_FREQUENCY` should
+      stay roughly 1.4× lower than `SPI_FREQUENCY`.
 - [ ] **Stage B (before going to a real track):** stop using the walking-test
       env. Default `pio run` already builds production thresholds — walking
       mode is now isolated in `[env:esp32-s3-devkitc-1-walking-test]`
