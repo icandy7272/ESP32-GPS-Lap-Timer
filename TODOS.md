@@ -24,6 +24,14 @@ flash attempt couldn't see the board on USB.
       tracking with no perceptible lag.  Stopping: position should snap and lock
       instantly (stationary_hold + Kalman together).  This is the validation that
       decides whether the Kalman tuning is right or needs another pass.
+
+      *Battery-friendly setup (added 2026-05-06):* board powered by battery,
+      laptop joins the `KartGPS` AP (password `kartgps123`), then run
+      `python3 tools/live_map.py --source udp --offline-map` and open
+      `http://127.0.0.1:8080`.  Firmware broadcasts `[gps-live]` on
+      UDP 5555.  No USB tether needed; canvas-only renderer skips the
+      Leaflet/OSM tiles that won't load without internet.  See
+      `docs/superpowers/plans/2026-05-06-wifi-live-map.md`.
 - [ ] **Kart-track test at 30–80 km/h.**  Real use case.  Verify (1) lap times
       vs stopwatch reference, (2) delta digit stability through corners, (3) VBO
       file path cleanness on the Race Studio replay, (4) phone live map view

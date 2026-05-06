@@ -913,6 +913,44 @@ def main() -> int:
         check("entries still populate catalog despite filter",
               sorted(ids_after), ["track_001", "track_002"])
 
+    # --- Offline canvas-only template has no CDN / online-tile refs ----
+    # 2026-05-06: --offline-map renders HTML_OFFLINE instead of HTML.
+    # That branch must never reach out to unpkg.com or any tile provider
+    # because the laptop loses internet the moment it joins the KartGPS
+    # AP.  This test pins that contract: any future edit that re-introduces
+    # an online dependency in the offline view will trip here.
+    html_offline = live_map.HTML_OFFLINE
+    check(
+        "HTML_OFFLINE has no unpkg.com reference",
+        "unpkg.com" in html_offline,
+        False,
+    )
+    check(
+        "HTML_OFFLINE has no openstreetmap tile reference",
+        "tile.openstreetmap.org" in html_offline,
+        False,
+    )
+    check(
+        "HTML_OFFLINE has no arcgis tile reference",
+        "arcgisonline.com" in html_offline,
+        False,
+    )
+    check(
+        "HTML_OFFLINE has the canvas element",
+        '<canvas id="canvas"' in html_offline,
+        True,
+    )
+
+    # --- CLI parses both new flags and the legacy positional form ------
+    ns = live_map._parse_args(["--source", "udp", "--udp-port", "5566"])
+    check("argparse honours --source", ns.source, "udp")
+    check("argparse honours --udp-port", ns.udp_port, 5566)
+    check("argparse default offline_map is False", ns.offline_map, False)
+    ns2 = live_map._parse_args(["/dev/cu.foo", "921600"])
+    check("legacy positional port still parses", ns2.port, "/dev/cu.foo")
+    check("legacy positional baud still parses", ns2.baud, 921600)
+    check("legacy positional defaults to usb source", ns2.source, "usb")
+
     if FAIL_COUNT == 0:
         print("test_live_map_parse: OK")
         return 0

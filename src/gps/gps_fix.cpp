@@ -2,8 +2,10 @@
 #include "gps/gps_constellation.h"
 #include "gps_fix_bundle.h"
 #include "gps_filter.h"
+#include "wifi_server.h"
 
 #include <esp_timer.h>
+#include <stdio.h>
 
 namespace {
 
@@ -127,17 +129,33 @@ void gps_send_fix_if_ready() {
                 emit_point.lat_deg = filtered.lat_deg;
                 emit_point.lon_deg = filtered.lon_deg;
             }
-            Serial.printf("[gps-live] lat=%.7f lon=%.7f sats=%d fix_3d=%d "
-                          "speed=%.2f head=%.1f hdop=%.1f q=%u tier=%u "
-                          "t_us=%lld\n",
-                          emit_point.lat_deg, emit_point.lon_deg,
-                          emit_point.satellites, emit_point.fix_3d ? 1 : 0,
-                          (double)emit_point.speed_kmh,
-                          (double)emit_point.heading_deg,
-                          (double)emit_point.hdop,
-                          emit_point.quality_score,
-                          emit_point.quality_tier,
-                          (long long)emit_point.timestamp_us);
+            // Format the line once, then ship the same bytes out
+            // both transports.  Keeping the formatter in one place
+            // guarantees Serial and UDP can never drift in field
+            // names, precision, or ordering — tools/live_map.py
+            // doesn't have to care which transport delivered the
+            // line.  160 bytes is comfortably wider than the longest
+            // realistic payload (~135 bytes including newline).
+            char buf[160];
+            int n = snprintf(buf, sizeof(buf),
+                             "[gps-live] lat=%.7f lon=%.7f sats=%d fix_3d=%d "
+                             "speed=%.2f head=%.1f hdop=%.1f q=%u tier=%u "
+                             "t_us=%lld\n",
+                             emit_point.lat_deg, emit_point.lon_deg,
+                             emit_point.satellites, emit_point.fix_3d ? 1 : 0,
+                             (double)emit_point.speed_kmh,
+                             (double)emit_point.heading_deg,
+                             (double)emit_point.hdop,
+                             emit_point.quality_score,
+                             emit_point.quality_tier,
+                             (long long)emit_point.timestamp_us);
+            if (n > 0) {
+                size_t out_len = (n < (int)sizeof(buf))
+                                     ? (size_t)n
+                                     : sizeof(buf) - 1;
+                Serial.write(reinterpret_cast<const uint8_t*>(buf), out_len);
+                gps_live_udp_broadcast(buf, out_len);
+            }
             last_live_ms = now_ms;
         }
     }

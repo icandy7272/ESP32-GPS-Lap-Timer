@@ -28,8 +28,10 @@ Drawn elements:
   - Bottom: last 20 lap/session log lines with "X s ago" timestamps
 """
 
+import argparse
 import json
 import re
+import socket
 import sys
 import threading
 import time
@@ -45,8 +47,69 @@ except ImportError:
     sys.exit(1)
 
 
-PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/cu.usbserial-10"
-BAUD = int(sys.argv[2]) if len(sys.argv) > 2 else 115200
+# --- CLI / transport configuration ---------------------------------------
+# Two transports are supported:
+#   - source=usb   : pyserial reader on PORT @ BAUD (default, original mode).
+#   - source=udp   : UDP listener on UDP_PORT, fed by the firmware's
+#                    gps_live_udp_broadcast() helper over the KartGPS AP.
+#                    Used when the board is battery-powered and there is
+#                    no USB cable to the laptop (Kalman walk-test path).
+# Backward compatibility: the original `python3 live_map.py [port [baud]]`
+# positional invocation keeps working — argparse accepts both positional
+# and flag forms.
+SOURCE = "usb"
+PORT = "/dev/cu.usbserial-10"
+BAUD = 115200
+UDP_PORT = 5555
+OFFLINE_MAP = False
+
+
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="KartGPS live map — USB serial or WiFi UDP transport.",
+        # Allow `live_map.py /dev/cu.usbserial-10 115200` to keep working
+        # by treating the two positionals as optional; argparse already
+        # supports mixing positionals and flags.
+    )
+    parser.add_argument(
+        "port",
+        nargs="?",
+        default=PORT,
+        help="Serial port path (USB mode). Default: %(default)s",
+    )
+    parser.add_argument(
+        "baud",
+        nargs="?",
+        type=int,
+        default=BAUD,
+        help="Serial baud rate (USB mode). Default: %(default)s",
+    )
+    parser.add_argument(
+        "--source",
+        choices=("usb", "udp"),
+        default="usb",
+        help="Transport for the [gps-live] stream. Default: usb.",
+    )
+    parser.add_argument(
+        "--udp-port",
+        type=int,
+        default=UDP_PORT,
+        dest="udp_port",
+        help="UDP listen port when --source=udp. Default: %(default)s.",
+    )
+    parser.add_argument(
+        "--offline-map",
+        action="store_true",
+        dest="offline_map",
+        help=(
+            "Render the canvas-only map instead of the Leaflet/OSM view. "
+            "Use this when the laptop is joined to the KartGPS AP and has "
+            "no internet — Leaflet and tile providers cannot load."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
 LISTEN = ("127.0.0.1", 8080)
 # 60 seconds of trail history at the 25 Hz [gps-live] cadence.
 # Originally 600 (60 s at 10 Hz); when we bumped the stream rate to
@@ -1273,6 +1336,72 @@ def serial_reader() -> None:
             try:
                 if line:
                     parse_line(line)
+            except Exception as exc:  # noqa: BLE001 — diagnostic catch-all
+                print(f"[live_map] parse_line raised on {line!r}: {exc}")
+                continue
+
+
+def udp_reader() -> None:
+    """Receive [gps-live] datagrams broadcast by the firmware on
+    UDP_PORT and feed them through parse_line() — the same parser the
+    USB serial reader uses.  Format-identical, transport-different.
+
+    Unlike serial_reader this never sends commands back to the board:
+    UDP-mode firmware (`--source udp`) is one-way.  The reverse channel
+    (e.g. `gps stream <Hz>`, `tracks list`) is only available over USB.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # SO_REUSEADDR so a second invocation on the same machine doesn't
+    # block on a TIME_WAIT-style state from the previous run.  This is
+    # also what lets the host test bind a transient port without
+    # racing against the prior test's teardown.
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    bind_addr = ("0.0.0.0", UDP_PORT)
+    try:
+        sock.bind(bind_addr)
+    except OSError as exc:
+        print(f"[live_map] UDP bind {bind_addr} failed: {exc}")
+        _mark_serial_disconnected(f"udp bind failed: {exc}")
+        return
+
+    print(f"[live_map] UDP listening on 0.0.0.0:{UDP_PORT}")
+    _mark_serial_connected()
+
+    leftover = ""
+    # Cap the in-flight tail.  A single firmware [gps-live] line tops out
+    # near 135 bytes; an emitter that never sends \n is buggy or hostile,
+    # and we don't want it to grow `leftover` to a memory hazard.  4096
+    # is ~30x the realistic line and a clear "something is wrong" signal
+    # if we ever blow through it.
+    LEFTOVER_MAX = 4096
+    while True:
+        try:
+            data, _src = sock.recvfrom(2048)
+        except OSError as exc:
+            print(f"[live_map] UDP recvfrom error: {exc}")
+            _mark_serial_disconnected(str(exc))
+            time.sleep(0.5)
+            continue
+
+        # Datagrams are independent — broadcasts from the firmware
+        # already align on whole `[gps-live] ...\n` lines, so we
+        # almost never see a partial.  But if a future emitter ever
+        # ships two lines in one packet, splitting on \n is the right
+        # default.  `leftover` covers the (unlikely) case of a packet
+        # that arrives split across the newline boundary.
+        text = leftover + data.decode("utf-8", errors="replace")
+        lines = text.split("\n")
+        leftover = lines.pop()  # incomplete tail, if any
+        if len(leftover) > LEFTOVER_MAX:
+            print(f"[live_map] UDP leftover exceeded {LEFTOVER_MAX}B "
+                  f"({len(leftover)}B) without a newline; dropping tail")
+            leftover = ""
+        for line in lines:
+            line = line.rstrip("\r")
+            if not line:
+                continue
+            try:
+                parse_line(line)
             except Exception as exc:  # noqa: BLE001 — diagnostic catch-all
                 print(f"[live_map] parse_line raised on {line!r}: {exc}")
                 continue
@@ -2585,6 +2714,237 @@ poll();
 """
 
 
+# --- Offline canvas-only template ----------------------------------------
+# Activated by --offline-map.  Self-contained: no CDN, no online tiles,
+# no Leaflet.  Renders the [gps-live] stream onto a dark canvas with a
+# 1 m / 5 m grid and a small numeric side panel.  Designed for the
+# Kalman walk-test, where the laptop is joined to the KartGPS AP and
+# has no internet path to OSM / ArcGIS / unpkg.com.
+#
+# Intentionally minimal: trail + current dot + grid + a "wobble (last
+# 10 s)" readout.  P1/P2 detection-line overlay and scatter mode are
+# deferred — see docs/superpowers/plans/2026-05-06-wifi-live-map.md.
+HTML_OFFLINE = r"""<!doctype html>
+<html><head>
+<meta charset="utf-8"/>
+<title>KartGPS Live Map (offline)</title>
+<style>
+ html,body{margin:0;height:100%;background:#0a0a0a;color:#eee;
+   font:13px/1.4 ui-monospace,Menlo,Consolas,monospace}
+ #canvas{position:absolute;inset:0;display:block;width:100vw;height:100vh}
+ #panel{position:absolute;top:8px;right:8px;z-index:10;
+   padding:8px 12px;background:rgba(0,0,0,.78);border:1px solid #444;
+   min-width:220px;border-radius:6px}
+ #panel .row{display:flex;justify-content:space-between;gap:12px;
+   padding:1px 0}
+ #panel .label{color:#9eb3ca}
+ #panel .val{color:#e8f3ff;font-weight:bold}
+ #panel .wobble{color:#7ff5a1;font-weight:bold}
+ #status{position:absolute;top:8px;left:8px;z-index:10;
+   padding:6px 10px;background:rgba(0,0,0,.78);border:1px solid #444;
+   border-radius:6px;color:#dbeafe}
+ #status.warn{border-color:#a33;color:#ffb4b4}
+ .grid-label{font-size:10px}
+</style></head><body>
+<canvas id="canvas"></canvas>
+<div id="status">connecting…</div>
+<div id="panel">
+  <div class="row"><span class="label">lat</span><span class="val" id="v-lat">–</span></div>
+  <div class="row"><span class="label">lon</span><span class="val" id="v-lon">–</span></div>
+  <div class="row"><span class="label">sats</span><span class="val" id="v-sats">–</span></div>
+  <div class="row"><span class="label">quality</span><span class="val" id="v-q">–</span></div>
+  <div class="row"><span class="label">HDOP</span><span class="val" id="v-hdop">–</span></div>
+  <div class="row"><span class="label">wobble (10s)</span><span class="wobble" id="v-wobble">–</span></div>
+</div>
+<script>
+const canvas=document.getElementById('canvas');
+const ctx=canvas.getContext('2d');
+let dpr=Math.max(1,window.devicePixelRatio||1);
+
+function resize(){
+  dpr=Math.max(1,window.devicePixelRatio||1);
+  canvas.width=Math.floor(window.innerWidth*dpr);
+  canvas.height=Math.floor(window.innerHeight*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize',resize);
+resize();
+
+let originLat=null;
+let originLon=null;
+const recent=[]; // [{t_ms_local, lat, lon}], capped
+
+function project(lat,lon){
+  // local meter projection rooted at first fix.  See firmware
+  // gps_kalman / preview helpers for the same constants.
+  const lonScale=111320*Math.cos(originLat*Math.PI/180);
+  return {x:(lon-originLon)*lonScale, y:(lat-originLat)*110540};
+}
+
+function drawGrid(viewport){
+  const W=window.innerWidth;
+  const H=window.innerHeight;
+  ctx.fillStyle='#0a0a0a';
+  ctx.fillRect(0,0,W,H);
+  // Grid step in meters depends on the viewport span.
+  const spanM=viewport.spanM;
+  // Always draw a 1 m grid + a 5 m bold grid.
+  for(let step=1;step<=5;step+=4){
+    ctx.beginPath();
+    ctx.strokeStyle=(step===1)?'#1a1a22':'#2a2a3a';
+    ctx.lineWidth=(step===1)?1:1.5;
+    const minMx=Math.floor(viewport.minMx/step)*step;
+    const maxMx=Math.ceil(viewport.maxMx/step)*step;
+    for(let mx=minMx;mx<=maxMx;mx+=step){
+      const px=viewport.toPxX(mx);
+      ctx.moveTo(px,0); ctx.lineTo(px,H);
+    }
+    const minMy=Math.floor(viewport.minMy/step)*step;
+    const maxMy=Math.ceil(viewport.maxMy/step)*step;
+    for(let my=minMy;my<=maxMy;my+=step){
+      const py=viewport.toPxY(my);
+      ctx.moveTo(0,py); ctx.lineTo(W,py);
+    }
+    ctx.stroke();
+  }
+  // Corner labels for scale.
+  ctx.fillStyle='#557';
+  ctx.font='11px ui-monospace,Menlo,monospace';
+  ctx.fillText('1 m fine / 5 m bold',8,H-10);
+  ctx.fillText('span '+spanM.toFixed(1)+' m',8,H-26);
+}
+
+function buildViewport(){
+  // Bounding box of recent fixes in local meters, with a min span.
+  if(recent.length===0||originLat===null){return null;}
+  let minMx=Infinity,maxMx=-Infinity,minMy=Infinity,maxMy=-Infinity;
+  for(const r of recent){
+    const p=project(r.lat,r.lon);
+    if(p.x<minMx)minMx=p.x;
+    if(p.x>maxMx)maxMx=p.x;
+    if(p.y<minMy)minMy=p.y;
+    if(p.y>maxMy)maxMy=p.y;
+  }
+  const minSpan=5; // metres — keep stationary dot visible
+  let spanX=maxMx-minMx, spanY=maxMy-minMy;
+  if(spanX<minSpan){
+    const cx=(minMx+maxMx)/2; minMx=cx-minSpan/2; maxMx=cx+minSpan/2;
+    spanX=minSpan;
+  }
+  if(spanY<minSpan){
+    const cy=(minMy+maxMy)/2; minMy=cy-minSpan/2; maxMy=cy+minSpan/2;
+    spanY=minSpan;
+  }
+  // Pad 10 m on each side so the dot doesn't clip the edge.
+  minMx-=10; maxMx+=10; minMy-=10; maxMy+=10;
+  spanX=maxMx-minMx; spanY=maxMy-minMy;
+  const W=window.innerWidth, H=window.innerHeight;
+  const scale=Math.min(W/spanX, H/spanY);
+  const usedW=spanX*scale, usedH=spanY*scale;
+  const ox=(W-usedW)/2, oy=(H-usedH)/2;
+  return {
+    minMx,maxMx,minMy,maxMy,
+    spanM:Math.max(spanX,spanY),
+    toPxX(mx){return ox+(mx-minMx)*scale;},
+    toPxY(my){return H-(oy+(my-minMy)*scale);}
+  };
+}
+
+function drawTrail(vp){
+  if(recent.length<2)return;
+  ctx.strokeStyle='#3b82f6';
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  for(let i=0;i<recent.length;i++){
+    const p=project(recent[i].lat,recent[i].lon);
+    const px=vp.toPxX(p.x), py=vp.toPxY(p.y);
+    if(i===0)ctx.moveTo(px,py); else ctx.lineTo(px,py);
+  }
+  ctx.stroke();
+}
+
+function drawCurrent(vp){
+  const r=recent[recent.length-1];
+  if(!r)return;
+  const p=project(r.lat,r.lon);
+  const px=vp.toPxX(p.x), py=vp.toPxY(p.y);
+  ctx.fillStyle='#22c55e';
+  ctx.beginPath(); ctx.arc(px,py,5,0,Math.PI*2); ctx.fill();
+}
+
+function wobbleCm(){
+  // Max pairwise distance among fixes from the last 10 seconds, in cm.
+  // Variable name avoids shadowing the global `window` (review R3.4).
+  if(recent.length<2||originLat===null)return null;
+  const cutoff=performance.now()-10000;
+  const recentWindow=recent.filter(r=>r.t_ms_local>=cutoff);
+  if(recentWindow.length<2)return null;
+  let maxD=0;
+  for(let i=0;i<recentWindow.length;i++){
+    const pi=project(recentWindow[i].lat,recentWindow[i].lon);
+    for(let j=i+1;j<recentWindow.length;j++){
+      const pj=project(recentWindow[j].lat,recentWindow[j].lon);
+      const dx=pi.x-pj.x, dy=pi.y-pj.y;
+      const d=Math.sqrt(dx*dx+dy*dy);
+      if(d>maxD)maxD=d;
+    }
+  }
+  return maxD*100; // m -> cm
+}
+
+function setStatus(text, warn){
+  const el=document.getElementById('status');
+  el.textContent=text;
+  el.className=warn?'warn':'';
+}
+
+async function poll(){
+  try{
+    const r=await fetch('/state',{cache:'no-store'});
+    if(!r.ok){setStatus('state http '+r.status,true); return;}
+    const s=await r.json();
+    const cur=s.current;
+    if(cur && Number.isFinite(cur[0]) && Number.isFinite(cur[1])){
+      if(originLat===null){originLat=cur[0]; originLon=cur[1];}
+      recent.push({t_ms_local:performance.now(), lat:cur[0], lon:cur[1]});
+      while(recent.length>1500)recent.shift();
+      // Update side panel.
+      document.getElementById('v-lat').textContent=cur[0].toFixed(7);
+      document.getElementById('v-lon').textContent=cur[1].toFixed(7);
+      document.getElementById('v-sats').textContent=String(s.sats||0);
+      document.getElementById('v-q').textContent=
+        (s.quality_score||0)+' / tier '+(s.quality_tier||0);
+      document.getElementById('v-hdop').textContent=
+        (typeof s.hdop==='number' && s.hdop>=0)?s.hdop.toFixed(1):'–';
+      const w=wobbleCm();
+      document.getElementById('v-wobble').textContent=
+        (w===null)?'–':w.toFixed(1)+' cm';
+      const link=s.serial||{};
+      if(link.connected){setStatus(link.detail||'connected',false);}
+      else{setStatus('waiting for stream',true);}
+    } else {
+      setStatus('waiting for fix',true);
+    }
+  } catch(e){
+    setStatus('poll error: '+e,true);
+  }
+  // Render.
+  const vp=buildViewport();
+  if(vp){
+    drawGrid(vp);
+    drawTrail(vp);
+    drawCurrent(vp);
+  } else {
+    ctx.fillStyle='#0a0a0a';
+    ctx.fillRect(0,0,window.innerWidth,window.innerHeight);
+  }
+  setTimeout(poll,100); // ~10 Hz UI refresh
+}
+poll();
+</script></body></html>
+"""
+
+
 _ALLOWED_COMMANDS = {
     "track cancel",
     "track save",
@@ -2650,7 +3010,7 @@ def _is_allowed_command(cmd: str) -> bool:
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/":
-            body = HTML.encode()
+            body = (HTML_OFFLINE if OFFLINE_MAP else HTML).encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -2756,19 +3116,40 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    threading.Thread(target=serial_reader, daemon=True).start()
-    threading.Thread(target=track_query_bootstrap, daemon=True).start()
-    print(f"[live_map] serial: {PORT} @ {BAUD}")
+    global SOURCE, PORT, BAUD, UDP_PORT, OFFLINE_MAP
+    args = _parse_args(sys.argv[1:])
+    SOURCE = args.source
+    PORT = args.port
+    BAUD = args.baud
+    UDP_PORT = args.udp_port
+    OFFLINE_MAP = args.offline_map
+
+    if SOURCE == "udp":
+        # UDP transport is one-way: broadcast-from-board only.  Skip
+        # the serial bootstrap (gps stream / tracks list) because we
+        # cannot write commands back over UDP — the operator will
+        # need a USB session if they want to change runtime config.
+        threading.Thread(target=udp_reader, daemon=True).start()
+        print(f"[live_map] source=udp listen=0.0.0.0:{UDP_PORT}"
+              f" map={'offline' if OFFLINE_MAP else 'leaflet'}")
+    else:
+        threading.Thread(target=serial_reader, daemon=True).start()
+        threading.Thread(target=track_query_bootstrap, daemon=True).start()
+        print(f"[live_map] source=usb port={PORT} baud={BAUD}"
+              f" map={'offline' if OFFLINE_MAP else 'leaflet'}")
+
     print(f"[live_map] open http://{LISTEN[0]}:{LISTEN[1]}")
     try:
         ThreadingHTTPServer(LISTEN, Handler).serve_forever()
     except KeyboardInterrupt:
         print("\n[live_map] bye")
     finally:
-        try:
-            _serial_write_command("gps stream off")
-        except Exception:
-            pass
+        # Only meaningful for the USB path; UDP has no reverse channel.
+        if SOURCE == "usb":
+            try:
+                _serial_write_command("gps stream off")
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

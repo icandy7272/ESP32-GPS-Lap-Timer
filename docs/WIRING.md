@@ -346,6 +346,12 @@ ESP32-S3 启动时以下引脚电平会影响启动模式，**慎用或避用**�
 - 烧录模式：自锁总开关 `OFF`，只接电脑 USB 给 ESP32 供电和烧录
 - 不建议在外部 `5V_SW` 仍连接 ESP32 `5V/VIN` 时，再把电脑 USB 同时插上
 - 若设备正在录制，关机前先停止录制，再断开总电源，可减少 `_recording.vbo.tmp` 恢复压力
+- **电池模式下用 live_map（无需 USB）：** 板子上电后，笔记本加入 `KartGPS`
+  AP，然后跑 `python3 tools/live_map.py --source udp --offline-map`，浏览器
+  打开 `http://127.0.0.1:8080`。固件会把 `[gps-live]` 用 UDP 5555 广播出来；
+  `--offline-map` 走本地 canvas 渲染，不依赖 Leaflet/OSM 之类的在线瓦片
+  （加入 AP 之后笔记本是没有外网的）。详见
+  `docs/superpowers/plans/2026-05-06-wifi-live-map.md`。
 
 ---
 
