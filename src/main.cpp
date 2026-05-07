@@ -156,27 +156,6 @@ static void prepare_early_boot_hardware(uint32_t settle_delay_ms) {
     delay(settle_delay_ms);
 }
 
-static void prime_tft_cold_boot_power_path() {
-    // Field evidence on the breadboard setup shows the TFT module only becomes
-    // reliable on a true cold power-on if BL is driven high early and long
-    // enough before the normal reset/init sequence begins. Pure extra delay
-    // was not sufficient.
-    constexpr uint32_t kPrimeLowMs = 120;
-    constexpr uint32_t kPrimeHighMs = 120;
-
-    pinMode(PIN_LED, OUTPUT);
-    digitalWrite(PIN_LED, HIGH);
-
-    pinMode(PIN_TFT_BL, OUTPUT);
-    digitalWrite(PIN_TFT_BL, LOW);
-    delay(kPrimeLowMs);
-    digitalWrite(PIN_TFT_BL, HIGH);
-    delay(kPrimeHighMs);
-    digitalWrite(PIN_TFT_BL, LOW);
-
-    digitalWrite(PIN_LED, LOW);
-}
-
 static void print_boot_info() {
     Serial.println("========================================");
     Serial.println("  ESP32-S3 GPS Lap Timer v1.0");
@@ -1078,13 +1057,31 @@ static void boot_wait_for_gps(uint32_t timeout_ms) {
 }
 
 void setup() {
+    // First action of the entire app: drive the TFT backlight LOW.
+    // Before this point the BL pin is whatever state ROM/EN reset left
+    // it in — high-Z input on cold POWERON, or PWM-leftover on a warm
+    // reset.  Many ESP32-S3 carriers have a weak pull-up on the BL
+    // line, so the panel briefly lights up showing the previous
+    // firmware's VRAM (or just full white on cold start) until our
+    // first software cycle runs.  prepare_early_boot_hardware() below
+    // also asserts BL LOW, but it runs after Serial.begin + the boot
+    // status setup, so there's a ~500 ms gap where the user sees the
+    // unwanted white phase.  Doing it here cuts that gap to a few µs.
+    pinMode(PIN_TFT_BL, OUTPUT);
+    digitalWrite(PIN_TFT_BL, LOW);
+
     const esp_reset_reason_t reset_reason = esp_reset_reason();
     const uint32_t power_hold_ms = boot_power_hold_ms(reset_reason);
     s_previous_boot_probe_phase = capture_previous_boot_probe();
     boot_probe_mark(EarlyBootProbe::SETUP_ENTRY);
-    if (reset_reason == ESP_RST_POWERON) {
-        prime_tft_cold_boot_power_path();
-    }
+    // Note: the breadboard-era prime_tft_cold_boot_power_path() helper
+    // (BL strobed LOW->HIGH->LOW for 240 ms before init) was removed
+    // 2026-05-06 after the PCB build no longer needed it.  The
+    // unconditional prepare_early_boot_hardware() below still drives
+    // PIN_TFT_BL LOW (boot_sequence.cpp:75), so the panel stays dark
+    // until display_init() turns the backlight on with real content.
+    // If a true cold power-on ever shows the TFT failing to initialise
+    // again on the PCB, restore the prime helper from git history.
 
     Serial.begin(115200);
     delay(200);

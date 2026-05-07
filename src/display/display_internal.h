@@ -143,4 +143,12 @@ void draw_lap_list_screen(const SessionState& st);
 
 // Boot renderer internals.
 void draw_boot_static_frame();
+// Two-phase variant of draw_boot_static_frame(): clear-only and
+// decorations-only.  Lets the caller turn the backlight on once the
+// panel is solid black but before the slower logo + status zone
+// painting starts, cutting the perceived "screen looks dead" gap on
+// cold boot in half (PCB build 2026-05-06).  draw_boot_static_frame()
+// is equivalent to calling these two in order.
+void draw_boot_frame_clear();
+void draw_boot_frame_decorations();
 void draw_boot_status(const BootStatus& status);

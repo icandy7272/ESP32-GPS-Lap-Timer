@@ -93,16 +93,16 @@ verification steps lives in
       `[GPS][warn] gps timeout after 30000 ms` — expected indoors. Take the
       board outside, confirm GPS reaches fix and emits NMEA on the
       configured baud, and that the live map shows movement.
-- [ ] **Stage A.3 (TFT clock sweep — 2026-04-29 deferred):** TFT
-      `-DSPI_FREQUENCY=27000000` / `-DSPI_READ_FREQUENCY=20000000` produced
-      a white screen on the hand-soldered PCB. Currently held at the
-      breadboard `4000000` / `6000000` values, which are confirmed working.
-      Sweep upward in steps (10 / 15 / 20 / 27 MHz), reflash + visually
-      check that the boot splash, recording UI, and sector view all draw
-      cleanly at each step. Stop at the highest pair that still draws
-      cleanly and update `platformio.ini` plus the comment near the
-      `BREADBOARD_OVERRIDE` line. The matching `SPI_READ_FREQUENCY` should
-      stay roughly 1.4× lower than `SPI_FREQUENCY`.
+- [x] **Stage A.3 (TFT clock sweep — done 2026-05-06):** ran 10/7, 15/11,
+      20/15 sweep on the hand-soldered PCB; splash rendered cleanly at
+      every step.  Settled at **20 MHz write / 15 MHz read**, one band
+      below the original 27/20 attempt that white-screened.  Boot to
+      splash dropped from 1952 ms (4/6) to 1544 ms (20/15), saving
+      ~408 ms.  Datasheet hard limits are 10 MHz write / 6.67 MHz read
+      (ILI9341 §19.3.4), so we run 2.0× / 2.25× past spec — within
+      typical TFT_eSPI overclocking practice (default 27/20 = 2.7×).
+      Recording UI / sector view validation under battery + GPS is
+      pending; if either ever shows artifacts, drop one band to 15/11.
 - [ ] **Stage B (before going to a real track):** stop using the walking-test
       env. Default `pio run` already builds production thresholds — walking
       mode is now isolated in `[env:esp32-s3-devkitc-1-walking-test]`

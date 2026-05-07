@@ -345,15 +345,23 @@ static void init_tft_once() {
     reset_tft_hardware();
     s_tft.init();
     s_tft.setRotation(1);  // landscape 320x240
-    s_tft.fillScreen(TFT_BLACK);
+    // No fillScreen here on purpose.  The backlight is held LOW until
+    // ensure_backlight_ready() runs, so any pixels written before that
+    // are invisible.  Every caller of ensure_tft_ready() either follows
+    // up with draw_boot_static_frame() (which fillScreens itself) or
+    // with a draw_*_screen() that fully repaints.  At 4 MHz SPI a
+    // 320x240 fillScreen costs ~400 ms of boot time we don't need to
+    // pay (PCB build 2026-05-06 boot-time tightening).
 }
 
 static void init_tft() {
-    // Some breadboard cold boots appear to miss the first panel init even
-    // though setup continues. A second reset+init pass is cheap and gives
-    // the controller another clean chance to latch commands.
-    init_tft_once();
-    delay(50);
+    // Single reset+init pass.  The breadboard build originally ran a
+    // second pass after a 50 ms delay because some cold boots appeared
+    // to miss the first init.  On the PCB build (post-soldering
+    // 2026-04-29) the second pass is what produced the visible "two
+    // white flashes" before the splash, and the first pass already
+    // latches reliably.  Restore the second call from git history if a
+    // PCB cold boot ever shows the panel staying white or dead.
     init_tft_once();
 }
 
@@ -385,7 +393,15 @@ static void ensure_backlight_ready() {
 void display_boot_init() {
     ensure_tft_ready();
     if (!s_boot_frame_ready) {
-        draw_boot_static_frame();
+        // Build the entire splash with the backlight off, then turn it
+        // on once VRAM is final.  Tried turning the backlight on
+        // between fillScreen and decorations 2026-05-06 to shorten
+        // the perceived dark gap, but at 4 MHz SPI the logo paints
+        // visibly line-by-line (~195 ms top-to-bottom wipe) which
+        // user-tested worse than a clean snap-in.  Revisit once the
+        // TFT clock sweep (Stage A.3) lifts SPI past ~10 MHz.
+        draw_boot_frame_clear();
+        draw_boot_frame_decorations();
         s_boot_frame_ready = true;
     }
     ensure_backlight_ready();

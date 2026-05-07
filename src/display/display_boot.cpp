@@ -119,9 +119,19 @@ void publish_compat_status(BootStage stage, BootState state, const char* detail)
 
 }  // namespace
 
-void draw_boot_static_frame() {
+void draw_boot_frame_clear() {
+    // Phase 1 of the two-phase boot frame: VRAM goes solid black.
+    // Cheap to call at any point; the slow part is the SPI throughput
+    // (~400 ms at 4 MHz for a full 320x240 fill).  Caller is expected
+    // to follow with draw_boot_frame_decorations() once the backlight
+    // is up.
     s_tft.fillScreen(TFT_BLACK);
+}
 
+void draw_boot_frame_decorations() {
+    // Phase 2: paints the centred logo and clears the status zone.
+    // Assumes draw_boot_frame_clear() (or any other fillScreen-equivalent
+    // operation) has already left the rest of the panel black.
     const int logo_x = (SCREEN_W - static_cast<int>(kBootLogoWidth)) / 2;
     const int logo_y = (kStatusZoneTop - static_cast<int>(kBootLogoHeight)) / 2;
     s_tft.pushImage(logo_x, logo_y, kBootLogoWidth, kBootLogoHeight, kBootLogoPixels);
@@ -130,6 +140,16 @@ void draw_boot_static_frame() {
 
     s_boot_frame_drawn = true;
     s_boot_view_cached = false;
+}
+
+void draw_boot_static_frame() {
+    // Compatibility entry point — equivalent to the previous monolithic
+    // helper.  display_boot_init() now calls the two phases directly so
+    // it can sneak ensure_backlight_ready() in between, but other
+    // callers (e.g. draw_boot_status' fall-back path below) just want a
+    // one-shot full repaint.
+    draw_boot_frame_clear();
+    draw_boot_frame_decorations();
 }
 
 void draw_boot_status(const BootStatus& status) {

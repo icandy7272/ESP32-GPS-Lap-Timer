@@ -13,15 +13,16 @@ namespace {
 // Warm reset already benefits from rails and external modules that are
 // partially or fully up, so keep the delay modest.
 constexpr uint32_t WARM_POWER_STABLE_DELAY_MS = 500;
-// BREADBOARD_OVERRIDE: on true POWERON cold boots, the SD module may
-// share SPI while being powered from a slower external rail. Wait
-// substantially longer before the first shared-SPI transaction so the
-// TFT init doesn't race an unpowered SD card on the bus.
-constexpr uint32_t COLD_POWER_STABLE_DELAY_MS = 2000;
+// PCB build (post-soldering 2026-04-29): the SD and TFT rails come up
+// quickly on regulated 3.3 V, so a 500 ms hold is plenty.  The previous
+// 2000 ms was a BREADBOARD_OVERRIDE for the SD module's slower external
+// rail; if a cold POWERON ever shows TFT/SD init failing on the PCB,
+// bump back toward 1000-2000 ms.
+constexpr uint32_t COLD_POWER_STABLE_DELAY_MS = 500;
 constexpr uint32_t TFT_RESET_LOW_MS = 20;
-// ILI9341 datasheet: 120 ms minimum after hardware reset.
-// Use 150 ms for breadboard margin.
-constexpr uint32_t TFT_RESET_HIGH_MS = 150;
+// ILI9341 datasheet: 120 ms minimum after hardware reset.  Use 130 ms
+// (was 150 ms for breadboard margin; PCB build trims toward datasheet).
+constexpr uint32_t TFT_RESET_HIGH_MS = 130;
 
 }  // namespace
 
