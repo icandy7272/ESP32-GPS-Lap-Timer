@@ -1,9 +1,33 @@
 // =============================================================
+// ⚠️  REFERENCE DOCUMENT, NOT PRIMARY CAD ⚠️
+//
+// As of 2026-05-09, the primary CAD tool for the enclosure is
+// Fusion 360 (macOS Gatekeeper blocks the 2021.01 OpenSCAD build
+// available via Homebrew Cask, and there is no current official
+// OpenSCAD macOS package).  The Fusion 360 source of truth lives
+// at hardware/case/case_v1.f3d once you build the model.
+//
+// This .scad file is kept as:
+//   1. The canonical measurement worksheet — every dimension that
+//      needs to be on the bench with a caliper is listed in §1
+//      with a comment explaining what to measure.  The same data
+//      is mirrored in parameters.md / parameters.csv for Fusion.
+//   2. The design intent reference — why the case is shaped this
+//      way (GPS face up, battery low, BOOT/RST pinholes, etc.).
+//   3. Future-proofing — if OpenSCAD ever becomes usable on macOS
+//      again, or you want to batch-generate variants, the model
+//      is one F5 away.
+//
+// When the Fusion 360 parameters and these constants disagree,
+// FUSION 360 IS THE TRUTH.  Update §1 here to match, but do not
+// rely on this file alone.
+// =============================================================
+//
 // ESP32-S3 GPS Lap Timer — enclosure parametric model (skeleton)
 //
 // Project:  ESP32_track_GPS
 // Created:  2026-05-09
-// Status:   skeleton; fill in measured dimensions before printing.
+// Status:   reference doc; primary CAD is Fusion 360 (see README).
 //
 // Design intent (see docs/PRD.md §设备物理结构 and
 // docs/WIRING.md §组装与振动加固):

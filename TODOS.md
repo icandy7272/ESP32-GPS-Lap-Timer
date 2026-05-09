@@ -114,17 +114,24 @@ verification steps lives in
 
 ### Enclosure
 
-- [ ] **Case v1: measure + design + print.**  Skeleton OpenSCAD model is in
-      `hardware/case/case.scad` with every dimension parameterised at the
-      top.  Steps:
-      1. Calipers — fill in `hardware/case/case.scad` §1 (TFT, perfboard,
-         battery, GPS, M12 buttons).
-      2. Open the file in OpenSCAD, F5 to preview, iterate dimensions.
-      3. F6 render → File → Export STL → ship to JLC 3DP / 打印宝.
+- [ ] **Case v1: measure + design + print.**  Primary CAD is Fusion 360
+      (OpenSCAD blocked by macOS Gatekeeper on Sequoia).  Dimensions
+      live in `hardware/case/parameters.md` (中文表 + 注释) and
+      `hardware/case/parameters.csv` (Fusion 360 import).  Steps:
+      1. Calipers — overwrite the placeholder values in `parameters.md`
+         §1 (TFT, perfboard, battery, GPS, M12 buttons).
+      2. Fusion 360 → Modify → Change Parameters → Import the CSV (or
+         hand-type the table).  Build the model referencing parameter
+         names, not raw numbers.
+      3. Save As `hardware/case/case_v1.f3d`; export STL via Save As
+         Mesh → Format STL → High; ship to JLC 3DP / 打印宝.
       4. Print PLA at 30% infill / 0.2mm layer first; PETG once stable.
-      5. Test fit, log issues to `case.scad` §7 FIT NOTES, reprint.
+      5. Test fit, log issues to a `## FIT NOTES v1` section appended
+         to `parameters.md`, reprint.
       Workflow notes in `hardware/case/README.md`.  Design constraints
       in `docs/PRD.md §设备物理结构` and `docs/WIRING.md §组装与振动加固`.
+      Optional: `hardware/case/case.scad` is the OpenSCAD reference
+      doc — same dimension data, kept around for future tooling.
 
 ### Plan B — split SD off the shared SPI bus (contingency)
 

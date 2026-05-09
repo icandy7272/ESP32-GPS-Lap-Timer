@@ -1,0 +1,41 @@
+TFT_PCB_W,mm,89.4 mm,TFT PCB long edge (spec; verify with calipers)
+TFT_PCB_H,mm,56 mm,TFT PCB short edge (spec)
+TFT_PCB_THICKNESS,mm,1.6 mm,Bare PCB thickness
+TFT_BACK_HEIGHT,mm,8 mm,Tallest component on TFT back side (backlight inverter / cap)
+TFT_VISIBLE_W,mm,64.8 mm,Visible glass long edge (spec)
+TFT_VISIBLE_H,mm,48.6 mm,Visible glass short edge (spec)
+TFT_VISIBLE_OFFSET_X,mm,12.3 mm,Visible glass left offset from PCB left edge ((89.4-64.8)/2 if centered)
+TFT_VISIBLE_OFFSET_Y,mm,3.7 mm,Visible glass top offset from PCB top edge
+TFT_SCREW_HOLE_DIA,mm,2.6 mm,~M2.5 mounting holes; widen +0.4mm for clearance fit
+TFT_SCREW_HOLE_DX,mm,83.4 mm,TFT mounting hole spacing along long edge
+TFT_SCREW_HOLE_DY,mm,50 mm,TFT mounting hole spacing along short edge
+PCB_W,mm,70 mm,Perfboard long edge (measure your actual board)
+PCB_H,mm,50 mm,Perfboard short edge
+PCB_THICKNESS,mm,1.6 mm,Perfboard thickness
+PCB_USB_C_X,mm,17 mm,ESP32 DevKit USB-C connector center X from PCB left edge
+PCB_USB_C_Z_OFFSET,mm,1.5 mm,USB-C centerline height above PCB top
+PCB_BOOT_BTN_X,mm,25 mm,BOOT button center X from PCB left edge
+PCB_RST_BTN_X,mm,32 mm,RST button center X from PCB left edge
+PCB_BOOT_RST_Y,mm,6 mm,BOOT and RST buttons share this Y from board edge
+PCB_BTN_TOP_Z,mm,3 mm,Tactile button cap height above PCB
+BATT_W,mm,70 mm,18650 pack long edge
+BATT_H,mm,38 mm,18650 pack height (single 18650 ~19mm; 2P pack ~38mm)
+BATT_D,mm,19 mm,18650 pack thickness
+USBC_DAUGHTER_W,mm,25 mm,Battery USB-C charge daughter board length
+USBC_DAUGHTER_H,mm,15 mm,Battery USB-C charge daughter board height
+USBC_PORT_W,mm,9 mm,USB-C plug opening width on outer wall
+USBC_PORT_H,mm,3.5 mm,USB-C plug opening height
+GPS_MODULE_W,mm,28 mm,BK-880 GPS module long edge
+GPS_MODULE_H,mm,28 mm,BK-880 GPS module short edge
+GPS_PATCH_HEIGHT,mm,7 mm,Ceramic patch antenna height above its PCB
+GPS_PATCH_HEADROOM,mm,3 mm,Air gap above GPS patch (RF clearance)
+BTN_PANEL_HOLE_DIA,mm,13 mm,Panel hole for M12 metal latching button (12mm thread + 1mm clearance)
+BTN_BACKSIDE_DEPTH,mm,25 mm,Free space needed behind button face (barrel + connector tab)
+WALL,mm,2 mm,Outer shell wall thickness
+LID_LIP,mm,4 mm,Top lid overlap depth into base
+LID_LIP_GAP,mm,0.3 mm,Sliding clearance at lid lip
+PRINT_TOLERANCE,mm,0.4 mm,Generic FDM hole oversize for sliding fit
+SCREW_BOSS_DIA,mm,5.5 mm,Outer diameter of M2 screw boss
+SCREW_HOLE_DIA,mm,1.7 mm,M2 self-tap pilot hole diameter
+PCB_STANDOFF_H,mm,4 mm,Gap between PCB and inner case floor
+TFT_BEZEL_INSET,mm,1 mm,Bezel overhang past visible edge
