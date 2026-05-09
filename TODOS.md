@@ -112,6 +112,20 @@ verification steps lives in
       `ARM_DISTANCE_M` 3 → 10 m, lap-time floors 5 s → 15 s for both
       lap_timer and session).
 
+### Enclosure
+
+- [ ] **Case v1: measure + design + print.**  Skeleton OpenSCAD model is in
+      `hardware/case/case.scad` with every dimension parameterised at the
+      top.  Steps:
+      1. Calipers — fill in `hardware/case/case.scad` §1 (TFT, perfboard,
+         battery, GPS, M12 buttons).
+      2. Open the file in OpenSCAD, F5 to preview, iterate dimensions.
+      3. F6 render → File → Export STL → ship to JLC 3DP / 打印宝.
+      4. Print PLA at 30% infill / 0.2mm layer first; PETG once stable.
+      5. Test fit, log issues to `case.scad` §7 FIT NOTES, reprint.
+      Workflow notes in `hardware/case/README.md`.  Design constraints
+      in `docs/PRD.md §设备物理结构` and `docs/WIRING.md §组装与振动加固`.
+
 ### Plan B — split SD off the shared SPI bus (contingency)
 
 **Trigger:** only pursue if, after Stage A (SD SPI at 25 MHz), walk test or
