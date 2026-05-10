@@ -253,8 +253,20 @@ bool s_laplist_header_drawn = false;
 static bool s_pending_full_redraw = false;
 
 static void render_frame(bool screen_changed) {
+    // crash_bc_core1 markers 63-69 narrow the field-test PANIC down
+    // from "somewhere inside render_frame" (last log only had 61) to
+    // a specific sub-call.  The sequence under a clean frame is:
+    //   60 -> 61 -> 63 -> 64 -> [65 -> 66 -> 67 if full_redraw]
+    //                       -> 68 -> 69 (per-screen draw) -> (return) -> 62
+    // If the next field test crashes with core1=66 the fault is in
+    // the boot fillScreen, with 69 it's in draw_driving/status/laplist,
+    // and so on.
+    extern int crash_bc_core1;
+    crash_bc_core1 = 63;  // display: render_frame entered, computing dirty
+
     DirtyFlags df = compute_dirty(s_cached_state, s_prev_state,
                                   screen_changed);
+    crash_bc_core1 = 64;  // display: dirty computed, before phase decision
 
     // Carry forward a pending full redraw from a previous failed frame
     if (s_pending_full_redraw) {
@@ -272,16 +284,20 @@ static void render_frame(bool screen_changed) {
     // Phase 1: clear pass (if needed) — release SPI between phases
     // so storage_task can write VBO data and INT_WDT doesn't fire.
     if (df.full_redraw) {
+        crash_bc_core1 = 65;  // display: phase 1 — about to take spi_mtx
         if (xSemaphoreTake(s_spi_mtx, pdMS_TO_TICKS(SPI_TIMEOUT_MS)) != pdTRUE) {
             s_pending_full_redraw = true;  // retry next frame
             return;
         }
+        crash_bc_core1 = 66;  // display: phase 1 — inside fillScreen
         s_tft.fillScreen(TFT_BLACK);
         xSemaphoreGive(s_spi_mtx);
+        crash_bc_core1 = 67;  // display: phase 1 — spi_mtx released, taskYIELD
         taskYIELD();  // let storage_task / wifi_task run
     }
 
     // Phase 2: content draw
+    crash_bc_core1 = 68;  // display: phase 2 — about to take spi_mtx
     if (xSemaphoreTake(s_spi_mtx, pdMS_TO_TICKS(SPI_TIMEOUT_MS)) != pdTRUE) {
         if (df.full_redraw) {
             // Screen was cleared but content wasn't drawn — mark as pending
@@ -291,6 +307,7 @@ static void render_frame(bool screen_changed) {
         return;
     }
 
+    crash_bc_core1 = 69;  // display: phase 2 — inside draw_*_screen
     switch (s_current_screen) {
         case SCREEN_DRIVING:
             draw_driving_screen(df, s_cached_state);

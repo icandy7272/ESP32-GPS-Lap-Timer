@@ -154,7 +154,12 @@ void gps_send_fix_if_ready() {
                                      ? (size_t)n
                                      : sizeof(buf) - 1;
                 Serial.write(reinterpret_cast<const uint8_t*>(buf), out_len);
-                gps_live_udp_broadcast(buf, out_len);
+                // 2026-05-09 field-test diagnostic: temporarily disable
+                // the UDP broadcast path to rule it out as a contributor
+                // to the display-task PANIC chain (crash_bc_core1=61).
+                // Re-enable once the next field test isolates whether
+                // the crash recurs without UDP traffic.
+                // gps_live_udp_broadcast(buf, out_len);
             }
             last_live_ms = now_ms;
         }

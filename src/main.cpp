@@ -1321,7 +1321,28 @@ void setup() {
     }
 
     // --- Auto-detect track from GPS position ---
-    if (s_boot_fix_valid) {
+    //
+    // Field test 2026-05-09 found that this boot-time auto-detect was
+    // unconditionally overriding the catalog track loaded a few lines
+    // up by `track_load_first(&active_track)`.  After every PANIC
+    // reboot the device flipped between several nearby test tracks
+    // (test4 / test2 / test04231 / test0422) depending on which
+    // happened to be closest at the boot location, even though the
+    // catalog had a deterministic first entry already loaded.
+    //
+    // Fix: only auto-detect when no track was loaded from the catalog
+    // (active_track.name still empty).  The runtime-side guard in
+    // track_runtime_should_apply_late_auto_detect() already does the
+    // equivalent check for late auto-detect; this brings boot-time
+    // behavior in line with that.
+    //
+    // Future: persist the user's last manual selection in
+    // settings.json (AppConfig has no track_id field today), restore
+    // it at config_load() instead of track_load_first(), and call
+    // track_runtime_note_manual_selection() so subsequent auto-detect
+    // is gated by is_manual_source().
+    bool track_already_loaded = (active_track.name[0] != '\0');
+    if (s_boot_fix_valid && !track_already_loaded) {
         const TrackDefinition* detected =
             track_auto_detect(s_boot_fix.lat_deg, s_boot_fix.lon_deg);
         if (detected) {

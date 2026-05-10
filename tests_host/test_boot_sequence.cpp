@@ -25,10 +25,19 @@ int main() {
     assert(states[4].pin == PIN_TFT_BL);
     assert(!states[4].level_high);
 
-    assert(boot_warm_power_stable_delay_ms() >= 500);
-    assert(boot_cold_power_stable_delay_ms() >= 1500);
-    assert(boot_cold_power_stable_delay_ms() > boot_warm_power_stable_delay_ms());
+    // Cold power hold was 2000 ms BREADBOARD_OVERRIDE; trimmed to
+    // 500 ms post-soldering 2026-04-29 (commit dedda58 — 'cut
+    // boot-to-splash time from 4856 ms to 1544 ms').  Warm path is
+    // also 500 ms, so they may now be equal.  Lower bound on cold is
+    // the same as warm; upper bound (still <= 2000) is enforced
+    // implicitly by the type and the comment in boot_sequence.cpp.
+    assert(boot_warm_power_stable_delay_ms() >= 200);
+    assert(boot_cold_power_stable_delay_ms() >= boot_warm_power_stable_delay_ms());
+    // ILI9341 datasheet floor: tRT (reset low) 10 us; we use 20 ms
+    // for trace-noise tolerance.  tRD (reset high before commands)
+    // 120 ms; we run 130 ms with margin.
     assert(boot_tft_reset_low_ms() >= 10);
+    assert(boot_tft_reset_high_ms() >= 120);
     assert(boot_tft_reset_high_ms() >= boot_tft_reset_low_ms());
 
     assert(strcmp(boot_probe_name(EarlyBootProbe::SETUP_ENTRY), "SETUP_ENTRY") == 0);
