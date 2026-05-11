@@ -1,0 +1,475 @@
+
+=== Boot @ 5026 ms  reset=POWERON  heap=302968  psram=8373647 ===
+[BOOT-EARLY] SETUP_ENTRY
+[BOOT-EARLY] SERIAL_READY
+[BOOT][0711 ms][POWER][start] applying early boot safe state (cold power-on hold)
+[BOOT-EARLY] POWER_STABLE
+[BOOT][2732 ms][POWER][ok] rails stable after 2000 ms hold
+[BOOT][2732 ms][DISPLAY][start] resetting TFT
+[BOOT-EARLY] DISPLAY_START
+[BOOT-EARLY] DISPLAY_READY
+[BOOT][4856 ms][DISPLAY][ok] boot splash ready
+[BOOT][4925 ms][STORAGE][start] initializing storage and config
+[BOOT-EARLY] STORAGE_START
+[BOOT][5062 ms][STORAGE][ok] sd mounted, defaults in use
+[BOOT][5181 ms][STORAGE][ok] track loaded: 2
+[BOOT-EARLY] STORAGE_READY
+[BOOT][5275 ms][GPS][start] starting UART and GPS task
+[BOOT-EARLY] GPS_START
+[BOOT][8089 ms][GPS][start] waiting for fix
+[BOOT][9127 ms][GPS][start] waiting for fix
+[BOOT][10140 ms][GPS][start] waiting for fix
+[BOOT][11153 ms][GPS][start] waiting for fix
+[BOOT][12166 ms][GPS][start] waiting for fix
+[BOOT][13179 ms][GPS][start] waiting for fix
+[BOOT][14192 ms][GPS][start] waiting for fix
+[BOOT][15208 ms][GPS][start] waiting for fix
+[BOOT][16221 ms][GPS][start] waiting for fix
+[BOOT][17234 ms][GPS][start] waiting for fix
+[BOOT][18247 ms][GPS][start] waiting for fix
+[BOOT][19260 ms][GPS][start] waiting for fix
+[BOOT][20277 ms][GPS][start] waiting for fix
+[BOOT][21290 ms][GPS][start] waiting for fix
+[BOOT][22303 ms][GPS][start] waiting for fix
+[BOOT][23316 ms][GPS][start] waiting for fix
+[BOOT][24329 ms][GPS][start] waiting for fix
+[BOOT][25342 ms][GPS][start] waiting for fix
+[BOOT][26358 ms][GPS][start] waiting for fix
+[BOOT][27371 ms][GPS][start] waiting for fix
+[BOOT][28384 ms][GPS][start] waiting for fix
+[BOOT][29397 ms][GPS][start] waiting for fix
+[BOOT][30410 ms][GPS][start] waiting for fix
+[BOOT][31423 ms][GPS][start] waiting for fix
+[BOOT][32436 ms][GPS][start] waiting for fix
+[BOOT][33449 ms][GPS][start] waiting for fix
+[BOOT][34462 ms][GPS][start] waiting for fix
+[BOOT][35475 ms][GPS][start] waiting for fix
+[BOOT][36488 ms][GPS][start] waiting for fix
+[BOOT][37501 ms][GPS][start] waiting for fix
+[BOOT][37922 ms][GPS][warn] gps timeout after 30000 ms
+[BOOT][38500 ms][READY][ok] entering runtime
+[BOOT][39807 ms][READY][ok] runtime tasks started, heap=209748, psram=8003567
+[BOOT-EARLY] READY
+
+=== Boot @ 5018 ms  reset=POWERON  heap=302968  psram=8373647 ===
+[BOOT-EARLY] SETUP_ENTRY
+[BOOT-EARLY] SERIAL_READY
+[BOOT][0705 ms][POWER][start] applying early boot safe state (cold power-on hold)
+[BOOT-EARLY] POWER_STABLE
+[BOOT][2726 ms][POWER][ok] rails stable after 2000 ms hold
+[BOOT][2726 ms][DISPLAY][start] resetting TFT
+[BOOT-EARLY] DISPLAY_START
+[BOOT-EARLY] DISPLAY_READY
+[BOOT][4855 ms][DISPLAY][ok] boot splash ready
+[BOOT][4924 ms][STORAGE][start] initializing storage and config
+[BOOT-EARLY] STORAGE_START
+[BOOT][5076 ms][STORAGE][ok] sd mounted, defaults in use
+[BOOT][5179 ms][STORAGE][ok] track loaded: 2
+[BOOT-EARLY] STORAGE_READY
+[BOOT][5309 ms][GPS][start] starting UART and GPS task
+[BOOT-EARLY] GPS_START
+[BOOT][7150 ms][GPS][start] waiting for fix
+[BOOT][8183 ms][GPS][start] waiting for fix
+[BOOT][9241 ms][GPS][start] waiting for fix
+[BOOT][10249 ms][GPS][start] waiting for fix
+[BOOT][11257 ms][GPS][start] waiting for fix
+[BOOT][12313 ms][GPS][start] waiting for fix
+[BOOT][13321 ms][GPS][start] waiting for fix
+[BOOT][14377 ms][GPS][start] waiting for fix
+[BOOT][15388 ms][GPS][start] waiting for fix
+[BOOT][16396 ms][GPS][start] waiting for fix
+[BOOT][17452 ms][GPS][start] waiting for fix
+[BOOT][18460 ms][GPS][start] waiting for fix
+[BOOT][19515 ms][GPS][start] waiting for fix
+[BOOT][20525 ms][GPS][start] waiting for fix
+[BOOT][21589 ms][GPS][start] waiting for fix
+[BOOT][22597 ms][GPS][start] waiting for fix
+[BOOT][23605 ms][GPS][start] waiting for fix
+[BOOT][24669 ms][GPS][start] waiting for fix
+[BOOT][25677 ms][GPS][start] waiting for fix
+[BOOT][26741 ms][GPS][start] waiting for fix
+[BOOT][27749 ms][GPS][start] waiting for fix
+[BOOT][28757 ms][GPS][start] waiting for fix
+[BOOT][29820 ms][GPS][start] waiting for fix
+[BOOT][30828 ms][GPS][start] waiting for fix
+[BOOT][31891 ms][GPS][start] waiting for fix
+[BOOT][32902 ms][GPS][start] waiting for fix
+[BOOT][33968 ms][GPS][start] waiting for fix
+[BOOT][34976 ms][GPS][start] waiting for fix
+[BOOT][35984 ms][GPS][start] waiting for fix
+[BOOT][37046 ms][GPS][start] waiting for fix
+[BOOT][37054 ms][GPS][warn] gps timeout after 30000 ms
+[BOOT][37683 ms][READY][ok] entering runtime
+[BOOT][38982 ms][READY][ok] runtime tasks started, heap=209748, psram=8003567
+[BOOT-EARLY] READY
+
+=== Boot @ 1599 ms  reset=POWERON  heap=302584  psram=8373647 ===
+[BOOT-EARLY] SETUP_ENTRY
+[BOOT-EARLY] SERIAL_READY
+[BOOT][0466 ms][POWER][start] applying early boot safe state (cold power-on hold)
+[BOOT-EARLY] POWER_STABLE
+[BOOT][0987 ms][POWER][ok] rails stable after 500 ms hold
+[BOOT][0987 ms][DISPLAY][start] resetting TFT
+[BOOT-EARLY] DISPLAY_START
+[BOOT-EARLY] DISPLAY_READY
+[BOOT][1544 ms][DISPLAY][ok] boot splash ready
+[BOOT][1560 ms][STORAGE][start] initializing storage and config
+[BOOT-EARLY] STORAGE_START
+[BOOT][1621 ms][STORAGE][ok] sd mounted, defaults in use
+[BOOT][1671 ms][STORAGE][ok] track loaded: 2
+[BOOT-EARLY] STORAGE_READY
+[BOOT][1744 ms][GPS][start] starting UART and GPS task
+[BOOT-EARLY] GPS_START
+[BOOT][3534 ms][GPS][start] waiting for fix
+[BOOT][4548 ms][GPS][start] waiting for fix
+[BOOT][5565 ms][GPS][start] waiting for fix
+[BOOT][6573 ms][GPS][start] waiting for fix
+[BOOT][7581 ms][GPS][start] waiting for fix
+[BOOT][8598 ms][GPS][start] waiting for fix
+[BOOT][9606 ms][GPS][start] waiting for fix
+[BOOT][10623 ms][GPS][start] waiting for fix
+[BOOT][11631 ms][GPS][start] waiting for fix
+[BOOT][12650 ms][GPS][start] waiting for fix
+[BOOT][13658 ms][GPS][start] waiting for fix
+[BOOT][14666 ms][GPS][start] waiting for fix
+[BOOT][15683 ms][GPS][start] waiting for fix
+[BOOT][16691 ms][GPS][start] waiting for fix
+[BOOT][17708 ms][GPS][start] waiting for fix
+[BOOT][18716 ms][GPS][start] waiting for fix
+[BOOT][19724 ms][GPS][start] waiting for fix
+[BOOT][20741 ms][GPS][start] waiting for fix
+[BOOT][21752 ms][GPS][start] waiting for fix
+[BOOT][22769 ms][GPS][start] waiting for fix
+[BOOT][23779 ms][GPS][start] waiting for fix
+[BOOT][24796 ms][GPS][start] waiting for fix
+[BOOT][25804 ms][GPS][start] waiting for fix
+[BOOT][26812 ms][GPS][start] waiting for fix
+[BOOT][27829 ms][GPS][start] waiting for fix
+[BOOT][28837 ms][GPS][start] waiting for fix
+[BOOT][29854 ms][GPS][start] waiting for fix
+[BOOT][30862 ms][GPS][start] waiting for fix
+[BOOT][31870 ms][GPS][start] waiting for fix
+[BOOT][32887 ms][GPS][start] waiting for fix
+[BOOT][33495 ms][GPS][warn] gps timeout after 30000 ms
+[BOOT][34029 ms][READY][ok] entering runtime
+[BOOT][34770 ms][READY][ok] runtime tasks started, heap=207464, psram=8003567
+[BOOT-EARLY] READY
+
+=== Boot @ 1597 ms  reset=POWERON  heap=302584  psram=8373647 ===
+[BOOT-EARLY] SETUP_ENTRY
+[BOOT-EARLY] SERIAL_READY
+[BOOT][0466 ms][POWER][start] applying early boot safe state (cold power-on hold)
+[BOOT-EARLY] POWER_STABLE
+[BOOT][0987 ms][POWER][ok] rails stable after 500 ms hold
+[BOOT][0987 ms][DISPLAY][start] resetting TFT
+[BOOT-EARLY] DISPLAY_START
+[BOOT-EARLY] DISPLAY_READY
+[BOOT][1544 ms][DISPLAY][ok] boot splash ready
+[BOOT][1560 ms][STORAGE][start] initializing storage and config
+[BOOT-EARLY] STORAGE_START
+[BOOT][1621 ms][STORAGE][ok] sd mounted, defaults in use
+[BOOT][1665 ms][STORAGE][ok] track loaded: 2
+[BOOT-EARLY] STORAGE_READY
+[BOOT][1738 ms][GPS][start] starting UART and GPS task
+[BOOT-EARLY] GPS_START
+[BOOT][4137 ms][GPS][start] waiting for fix
+[BOOT][5151 ms][GPS][start] waiting for fix
+[BOOT][6159 ms][GPS][start] waiting for fix
+[BOOT][7176 ms][GPS][start] waiting for fix
+[BOOT][8186 ms][GPS][start] waiting for fix
+[BOOT][9203 ms][GPS][start] waiting for fix
+[BOOT][10211 ms][GPS][start] waiting for fix
+[BOOT][11228 ms][GPS][start] waiting for fix
+[BOOT][12236 ms][GPS][start] waiting for fix
+[BOOT][13244 ms][GPS][start] waiting for fix
+[BOOT][14261 ms][GPS][start] waiting for fix
+[BOOT][15269 ms][GPS][start] waiting for fix
+[BOOT][16286 ms][GPS][start] waiting for fix
+[BOOT][17297 ms][GPS][start] waiting for fix
+[BOOT][18305 ms][GPS][start] waiting for fix
+[BOOT][19330 ms][GPS][start] waiting for fix
+[BOOT][20348 ms][GPS][start] waiting for fix
+[BOOT][21357 ms][GPS][start] waiting for fix
+[BOOT][22375 ms][GPS][start] waiting for fix
+[BOOT][23384 ms][GPS][start] waiting for fix
+[BOOT][24393 ms][GPS][start] waiting for fix
+[BOOT][25411 ms][GPS][start] waiting for fix
+[BOOT][26420 ms][GPS][start] waiting for fix
+[BOOT][27438 ms][GPS][start] waiting for fix
+[BOOT][28447 ms][GPS][start] waiting for fix
+[BOOT][28904 ms][GPS][start] waiting for fix (4 sats)
+[BOOT][29905 ms][GPS][start] waiting for fix (4 sats)
+[BOOT][30146 ms][GPS][start] waiting for fix (5 sats)
+[BOOT][31147 ms][GPS][start] waiting for fix (5 sats)
+[BOOT][32147 ms][GPS][start] waiting for fix (5 sats)
+[BOOT][33186 ms][GPS][start] waiting for fix (5 sats)
+[BOOT][33947 ms][GPS][warn] gps timeout after 30000 ms (best 5 sats)
+[BOOT][34470 ms][READY][ok] entering runtime
+[BOOT][35204 ms][READY][ok] runtime tasks started, heap=206996, psram=8003567
+[BOOT-EARLY] READY
+
+=== Boot @ 1599 ms  reset=POWERON  heap=302584  psram=8373647 ===
+[BOOT-EARLY] SETUP_ENTRY
+[BOOT-EARLY] SERIAL_READY
+[BOOT][0466 ms][POWER][start] applying early boot safe state (cold power-on hold)
+[BOOT-EARLY] POWER_STABLE
+[BOOT][0987 ms][POWER][ok] rails stable after 500 ms hold
+[BOOT][0987 ms][DISPLAY][start] resetting TFT
+[BOOT-EARLY] DISPLAY_START
+[BOOT-EARLY] DISPLAY_READY
+[BOOT][1544 ms][DISPLAY][ok] boot splash ready
+[BOOT][1560 ms][STORAGE][start] initializing storage and config
+[BOOT-EARLY] STORAGE_START
+[BOOT][1611 ms][STORAGE][ok] sd mounted, defaults in use
+[BOOT][1666 ms][STORAGE][ok] track loaded: 2
+[BOOT-EARLY] STORAGE_READY
+[BOOT][1732 ms][GPS][start] starting UART and GPS task
+[BOOT-EARLY] GPS_START
+[BOOT][3453 ms][GPS][start] waiting for fix
+[BOOT][4468 ms][GPS][start] waiting for fix
+[BOOT][5477 ms][GPS][start] waiting for fix
+[BOOT][6486 ms][GPS][start] waiting for fix
+[BOOT][7495 ms][GPS][start] waiting for fix
+[BOOT][8504 ms][GPS][start] waiting for fix
+[BOOT][9513 ms][GPS][start] waiting for fix
+[BOOT][10522 ms][GPS][start] waiting for fix
+[BOOT][11534 ms][GPS][start] waiting for fix
+[BOOT][12543 ms][GPS][start] waiting for fix
+[BOOT][13552 ms][GPS][start] waiting for fix
+[BOOT][14561 ms][GPS][start] waiting for fix
+[BOOT][15570 ms][GPS][start] waiting for fix
+[BOOT][16579 ms][GPS][start] waiting for fix
+[BOOT][17588 ms][GPS][start] waiting for fix
+[BOOT][18601 ms][GPS][start] waiting for fix
+[BOOT][19610 ms][GPS][start] waiting for fix
+[BOOT][20619 ms][GPS][start] waiting for fix
+[BOOT][21628 ms][GPS][start] waiting for fix
+[BOOT][22639 ms][GPS][start] waiting for fix
+[BOOT][23648 ms][GPS][start] waiting for fix
+[BOOT][24657 ms][GPS][start] waiting for fix
+[BOOT][25666 ms][GPS][start] waiting for fix
+[BOOT][26675 ms][GPS][start] waiting for fix
+[BOOT][27684 ms][GPS][start] waiting for fix
+[BOOT][28693 ms][GPS][start] waiting for fix
+[BOOT][29702 ms][GPS][start] waiting for fix
+[BOOT][30711 ms][GPS][start] waiting for fix
+[BOOT][31720 ms][GPS][start] waiting for fix
+[BOOT][32729 ms][GPS][start] waiting for fix
+[BOOT][33341 ms][GPS][warn] gps timeout after 30000 ms
+[BOOT][33865 ms][READY][ok] entering runtime
+[BOOT][34608 ms][READY][ok] runtime tasks started, heap=207464, psram=8003567
+[BOOT-EARLY] READY
+
+=== Boot @ 1679 ms  reset=PANIC  heap=302584  psram=8373647 ===
+[BOOT-EARLY] SETUP_ENTRY
+[BOOT-EARLY] SERIAL_READY
+[BOOT][0471 ms][POWER][start] applying early boot safe state
+[BOOT-EARLY] POWER_STABLE
+[BOOT][0992 ms][POWER][ok] rails stable after 500 ms hold
+[BOOT][0992 ms][DISPLAY][start] resetting TFT
+[BOOT-EARLY] DISPLAY_START
+[BOOT-EARLY] DISPLAY_READY
+[BOOT][1549 ms][DISPLAY][ok] boot splash ready
+[BOOT][1565 ms][STORAGE][start] initializing storage and config
+[BOOT-EARLY] STORAGE_START
+[BOOT][1692 ms][STORAGE][ok] sd mounted, defaults in use
+[BOOT] Previous crash: reason=PANIC (Guru Meditation) boot_stage=UNKNOWN boot_state=unknown core0=752467721 core1=61 wm:stor=3980 disp=5960 sess=948 wifi=8732 lapt=2364
+[BOOT][1761 ms][STORAGE][ok] track loaded: 2
+[BOOT-EARLY] STORAGE_READY
+[BOOT][1827 ms][STORAGE][warn] session recovered
+[BOOT][3859 ms][GPS][start] starting UART and GPS task
+[BOOT-EARLY] GPS_START
+[BOOT][5895 ms][GPS][ok] 3D fix acquired (12 sats)
+[BOOT][5918 ms][GPS][ok] track matched: 2
+[BOOT][6933 ms][READY][ok] entering runtime
+[BOOT][7659 ms][READY][ok] runtime tasks started, heap=206864, psram=8003567
+[BOOT-EARLY] READY
+
+=== Boot @ 1684 ms  reset=PANIC  heap=302584  psram=8373647 ===
+[BOOT-EARLY] SETUP_ENTRY
+[BOOT-EARLY] SERIAL_READY
+[BOOT][0471 ms][POWER][start] applying early boot safe state
+[BOOT-EARLY] POWER_STABLE
+[BOOT][0992 ms][POWER][ok] rails stable after 500 ms hold
+[BOOT][0992 ms][DISPLAY][start] resetting TFT
+[BOOT-EARLY] DISPLAY_START
+[BOOT-EARLY] DISPLAY_READY
+[BOOT][1550 ms][DISPLAY][ok] boot splash ready
+[BOOT][1565 ms][STORAGE][start] initializing storage and config
+[BOOT-EARLY] STORAGE_START
+[BOOT][1696 ms][STORAGE][ok] sd mounted, defaults in use
+[BOOT] Previous crash: reason=PANIC (Guru Meditation) boot_stage=UNKNOWN boot_state=unknown core0=0 core1=61 wm:stor=3756 disp=5992 sess=1896 wifi=11108 lapt=956
+[BOOT][1768 ms][STORAGE][ok] track loaded: 2
+[BOOT-EARLY] STORAGE_READY
+[BOOT][1834 ms][STORAGE][warn] session recovered
+[BOOT][3860 ms][GPS][start] starting UART and GPS task
+[BOOT-EARLY] GPS_START
+[BOOT][6136 ms][GPS][ok] 3D fix acquired (9 sats)
+[BOOT][6160 ms][GPS][ok] track matched: test4
+[BOOT][7175 ms][READY][ok] entering runtime
+[BOOT][7903 ms][READY][ok] runtime tasks started, heap=206960, psram=8003567
+[BOOT-EARLY] READY
+
+=== Boot @ 1694 ms  reset=PANIC  heap=302584  psram=8373647 ===
+[BOOT-EARLY] SETUP_ENTRY
+[BOOT-EARLY] SERIAL_READY
+[BOOT][0471 ms][POWER][start] applying early boot safe state
+[BOOT-EARLY] POWER_STABLE
+[BOOT][0992 ms][POWER][ok] rails stable after 500 ms hold
+[BOOT][0992 ms][DISPLAY][start] resetting TFT
+[BOOT-EARLY] DISPLAY_START
+[BOOT-EARLY] DISPLAY_READY
+[BOOT][1549 ms][DISPLAY][ok] boot splash ready
+[BOOT][1565 ms][STORAGE][start] initializing storage and config
+[BOOT-EARLY] STORAGE_START
+[BOOT][1706 ms][STORAGE][ok] sd mounted, defaults in use
+[BOOT] Previous crash: reason=PANIC (Guru Meditation) boot_stage=UNKNOWN boot_state=unknown core0=0 core1=61 wm:stor=3980 disp=5960 sess=1224 wifi=9476 lapt=1212
+[BOOT][1776 ms][STORAGE][ok] track loaded: 2
+[BOOT-EARLY] STORAGE_READY
+[BOOT][1842 ms][STORAGE][warn] session recovered
+[BOOT][3869 ms][GPS][start] starting UART and GPS task
+[BOOT-EARLY] GPS_START
+[BOOT][5513 ms][GPS][ok] 3D fix acquired (9 sats)
+[BOOT][5536 ms][GPS][ok] track matched: test2
+[BOOT][6551 ms][READY][ok] entering runtime
+[BOOT][7279 ms][READY][ok] runtime tasks started, heap=206960, psram=8003567
+[BOOT-EARLY] READY
+
+=== Boot @ 1691 ms  reset=PANIC  heap=302584  psram=8373647 ===
+[BOOT-EARLY] SETUP_ENTRY
+[BOOT-EARLY] SERIAL_READY
+[BOOT][0471 ms][POWER][start] applying early boot safe state
+[BOOT-EARLY] POWER_STABLE
+[BOOT][0992 ms][POWER][ok] rails stable after 500 ms hold
+[BOOT][0993 ms][DISPLAY][start] resetting TFT
+[BOOT-EARLY] DISPLAY_START
+[BOOT-EARLY] DISPLAY_READY
+[BOOT][1550 ms][DISPLAY][ok] boot splash ready
+[BOOT][1565 ms][STORAGE][start] initializing storage and config
+[BOOT-EARLY] STORAGE_START
+[BOOT][1707 ms][STORAGE][ok] sd mounted, defaults in use
+[BOOT] Previous crash: reason=PANIC (Guru Meditation) boot_stage=UNKNOWN boot_state=unknown core0=0 core1=70 wm:stor=5244 disp=5992 sess=3316 wifi=9476 lapt=2364
+[BOOT][1776 ms][STORAGE][ok] track loaded: 2
+[BOOT-EARLY] STORAGE_READY
+[BOOT][1842 ms][STORAGE][warn] session recovered
+[BOOT][3867 ms][GPS][start] starting UART and GPS task
+[BOOT-EARLY] GPS_START
+[BOOT][5507 ms][GPS][ok] 3D fix acquired (9 sats)
+[BOOT][5533 ms][GPS][ok] track matched: test2
+[BOOT][6548 ms][READY][ok] entering runtime
+[BOOT][7275 ms][READY][ok] runtime tasks started, heap=207192, psram=8003567
+[BOOT-EARLY] READY
+
+=== Boot @ 1711 ms  reset=PANIC  heap=302584  psram=8373647 ===
+[BOOT-EARLY] SETUP_ENTRY
+[BOOT-EARLY] SERIAL_READY
+[BOOT][0471 ms][POWER][start] applying early boot safe state
+[BOOT-EARLY] POWER_STABLE
+[BOOT][0992 ms][POWER][ok] rails stable after 500 ms hold
+[BOOT][0992 ms][DISPLAY][start] resetting TFT
+[BOOT-EARLY] DISPLAY_START
+[BOOT-EARLY] DISPLAY_READY
+[BOOT][1549 ms][DISPLAY][ok] boot splash ready
+[BOOT][1565 ms][STORAGE][start] initializing storage and config
+[BOOT-EARLY] STORAGE_START
+[BOOT][1745 ms][STORAGE][ok] sd mounted, defaults in use
+[BOOT] Previous crash: reason=PANIC (Guru Meditation) boot_stage=UNKNOWN boot_state=unknown core0=0 core1=61 wm:stor=5244 disp=6072 sess=3316 wifi=11324 lapt=2620
+[BOOT][1813 ms][STORAGE][ok] track loaded: 2
+[BOOT-EARLY] STORAGE_READY
+[BOOT][1878 ms][STORAGE][warn] session recovered
+[BOOT][3906 ms][GPS][start] starting UART and GPS task
+[BOOT-EARLY] GPS_START
+[BOOT][6152 ms][GPS][ok] 3D fix acquired (10 sats)
+[BOOT][6175 ms][GPS][ok] track matched: test2
+[BOOT][7189 ms][READY][ok] entering runtime
+[BOOT][7915 ms][READY][ok] runtime tasks started, heap=206960, psram=8003567
+[BOOT-EARLY] READY
+
+=== Boot @ 1716 ms  reset=PANIC  heap=302584  psram=8373647 ===
+[BOOT-EARLY] SETUP_ENTRY
+[BOOT-EARLY] SERIAL_READY
+[BOOT][0471 ms][POWER][start] applying early boot safe state
+[BOOT-EARLY] POWER_STABLE
+[BOOT][0992 ms][POWER][ok] rails stable after 500 ms hold
+[BOOT][0992 ms][DISPLAY][start] resetting TFT
+[BOOT-EARLY] DISPLAY_START
+[BOOT-EARLY] DISPLAY_READY
+[BOOT][1549 ms][DISPLAY][ok] boot splash ready
+[BOOT][1565 ms][STORAGE][start] initializing storage and config
+[BOOT-EARLY] STORAGE_START
+[BOOT][1728 ms][STORAGE][ok] sd mounted, defaults in use
+[BOOT] Previous crash: reason=PANIC (Guru Meditation) boot_stage=UNKNOWN boot_state=unknown core0=0 core1=61 wm:stor=5244 disp=5992 sess=3316 wifi=11332 lapt=2572
+[BOOT][1798 ms][STORAGE][ok] track loaded: 2
+[BOOT-EARLY] STORAGE_READY
+[BOOT][1863 ms][STORAGE][warn] session recovered
+[BOOT][3889 ms][GPS][start] starting UART and GPS task
+[BOOT-EARLY] GPS_START
+[BOOT][6173 ms][GPS][ok] 3D fix acquired (9 sats)
+[BOOT][6196 ms][GPS][ok] track matched: test04231
+[BOOT][7210 ms][READY][ok] entering runtime
+[BOOT][7936 ms][READY][ok] runtime tasks started, heap=206960, psram=8003567
+[BOOT-EARLY] READY
+
+=== Boot @ 1694 ms  reset=PANIC  heap=302584  psram=8373647 ===
+[BOOT-EARLY] SETUP_ENTRY
+[BOOT-EARLY] SERIAL_READY
+[BOOT][0471 ms][POWER][start] applying early boot safe state
+[BOOT-EARLY] POWER_STABLE
+[BOOT][0992 ms][POWER][ok] rails stable after 500 ms hold
+[BOOT][0992 ms][DISPLAY][start] resetting TFT
+[BOOT-EARLY] DISPLAY_START
+[BOOT-EARLY] DISPLAY_READY
+[BOOT][1549 ms][DISPLAY][ok] boot splash ready
+[BOOT][1565 ms][STORAGE][start] initializing storage and config
+[BOOT-EARLY] STORAGE_START
+[BOOT][1706 ms][STORAGE][ok] sd mounted, defaults in use
+[BOOT] Previous crash: reason=PANIC (Guru Meditation) boot_stage=UNKNOWN boot_state=unknown core0=0 core1=61 wm:stor=5244 disp=5992 sess=3316 wifi=11332 lapt=2572
+[BOOT][1778 ms][STORAGE][ok] track loaded: 2
+[BOOT-EARLY] STORAGE_READY
+[BOOT][1844 ms][STORAGE][warn] session recovered
+
+=== Boot @ 1598 ms  reset=POWERON  heap=302584  psram=8373647 ===
+[BOOT-EARLY] SETUP_ENTRY
+[BOOT-EARLY] SERIAL_READY
+[BOOT][0466 ms][POWER][start] applying early boot safe state (cold power-on hold)
+[BOOT-EARLY] POWER_STABLE
+[BOOT][0987 ms][POWER][ok] rails stable after 500 ms hold
+[BOOT][0988 ms][DISPLAY][start] resetting TFT
+[BOOT-EARLY] DISPLAY_START
+[BOOT-EARLY] DISPLAY_READY
+[BOOT][1545 ms][DISPLAY][ok] boot splash ready
+[BOOT][1560 ms][STORAGE][start] initializing storage and config
+[BOOT-EARLY] STORAGE_START
+[BOOT][1609 ms][STORAGE][ok] sd mounted, defaults in use
+[BOOT][1653 ms][STORAGE][ok] track loaded: 2
+[BOOT-EARLY] STORAGE_READY
+[BOOT][1718 ms][GPS][start] starting UART and GPS task
+[BOOT-EARLY] GPS_START
+[BOOT][4440 ms][GPS][start] waiting for fix
+[BOOT][5453 ms][GPS][start] waiting for fix
+[BOOT][5863 ms][GPS][start] waiting for fix (5 sats)
+[BOOT][5909 ms][GPS][ok] 3D fix acquired (6 sats)
+[BOOT][5932 ms][GPS][ok] track matched: test0422
+[BOOT][6946 ms][READY][ok] entering runtime
+[BOOT][7673 ms][READY][ok] runtime tasks started, heap=206960, psram=8003567
+[BOOT-EARLY] READY
+
+=== Boot @ 1712 ms  reset=PANIC  heap=302584  psram=8373647 ===
+[BOOT-EARLY] SETUP_ENTRY
+[BOOT-EARLY] SERIAL_READY
+[BOOT][0471 ms][POWER][start] applying early boot safe state
+[BOOT-EARLY] POWER_STABLE
+[BOOT][0992 ms][POWER][ok] rails stable after 500 ms hold
+[BOOT][0992 ms][DISPLAY][start] resetting TFT
+[BOOT-EARLY] DISPLAY_START
+[BOOT-EARLY] DISPLAY_READY
+[BOOT][1550 ms][DISPLAY][ok] boot splash ready
+[BOOT][1565 ms][STORAGE][start] initializing storage and config
+[BOOT-EARLY] STORAGE_START
+[BOOT][1724 ms][STORAGE][ok] sd mounted, defaults in use
+[BOOT] Previous crash: reason=PANIC (Guru Meditation) boot_stage=UNKNOWN boot_state=unknown core0=13 core1=61 wm:stor=3980 disp=5960 sess=1092 wifi=6568 lapt=1180
+[BOOT][1799 ms][STORAGE][ok] track loaded: 2
+[BOOT-EARLY] STORAGE_READY
+[BOOT][1864 ms][STORAGE][warn] session recovered
+[BOOT][3889 ms][GPS][start] starting UART and GPS task
+[BOOT-EARLY] GPS_START
