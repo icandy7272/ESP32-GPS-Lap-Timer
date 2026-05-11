@@ -375,7 +375,23 @@ static void handle_button_press(const ButtonEvent* ev)
 
     // Toggle recording
     if (s_phase == SESSION_READY || s_phase == SESSION_FINISHED) {
-        session_start_recording("Unknown Track");
+        // Use the currently-active track name rather than the literal
+        // "Unknown Track" placeholder.  Field test 2026-05-11 found
+        // that the previous hardcoded "Unknown Track" string clobbered
+        // session_state.track_name (via session_start_recording ->
+        // strncpy at session.cpp:113) so after the user pressed REC the
+        // display switched from the loaded track to "Unknown Track" and
+        // never came back — there is no code path that restores it on
+        // stop.  active_track is the source of truth for the loaded
+        // (or auto-detected) track; fall back to the placeholder only
+        // when no track is actually loaded.
+        extern TrackDefinition active_track;
+        const char* name = active_track.name;
+        if (name == nullptr || name[0] == '\0' ||
+            strcmp(name, "No Track") == 0) {
+            name = "Unknown Track";
+        }
+        session_start_recording(name);
     } else if (s_phase == SESSION_RECORDING) {
         (void)session_stop_recording();
     }

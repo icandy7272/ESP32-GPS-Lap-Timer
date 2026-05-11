@@ -156,10 +156,30 @@ static void draw_delta_normal(const SessionState& st) {
     }
 }
 
+// Sub-69 crash markers (2026-05-11 diagnostic round 2).  Field test 1
+// localized the PANIC chain to crash_bc_core1=69 (inside the switch
+// that calls draw_*_screen).  Test 2 still hit 69 after disabling UDP
+// and dropping TFT SPI to 15 MHz, so the fault is in the draw path
+// proper.  The 80-89 range narrows down which sub-call of
+// draw_driving_screen / draw_driving_delta is the culprit.
+//   80 = draw_driving_delta entered, before fillSprite
+//   81 = fillSprite returned, before drawText
+//   82 = drawText returned, before pushSprite (the big SPI burst)
+//   83 = pushSprite returned cleanly
+//   84 = draw_driving_screen: top-bar fillRect (background pass)
+//   85 = draw_driving_screen: about to draw_driving_top_bar
+//   86 = draw_driving_screen: about to draw_driving_current_time
+//   87 = draw_driving_screen: about to draw_driving_delta
+//   88 = draw_driving_screen: about to draw_driving_bottom_bar
+//   89 = draw_driving_screen exited
+extern int crash_bc_core1;
+
 static void draw_driving_delta(const SessionState& st) {
+    crash_bc_core1 = 80;
     uint16_t bg = driving_bg_colour(st);
 
     s_delta_sprite.fillSprite(bg);
+    crash_bc_core1 = 81;
     s_delta_sprite.setTextDatum(MC_DATUM);
     s_delta_sprite.setTextColor(TFT_WHITE, bg);
 
@@ -175,8 +195,10 @@ static void draw_driving_delta(const SessionState& st) {
             draw_delta_normal(st);
             break;
     }
+    crash_bc_core1 = 82;
 
     s_delta_sprite.pushSprite(0, DELTA_AREA_Y);
+    crash_bc_core1 = 83;
 }
 
 // --- Bottom bar --------------------------------------------------------
@@ -213,20 +235,26 @@ static void draw_driving_bottom_bar(const SessionState& st) {
 void draw_driving_screen(const DirtyFlags& df,
                          const SessionState& st) {
     if (df.full_redraw || df.background) {
+        crash_bc_core1 = 84;
         uint16_t bg = driving_bg_colour(st);
         s_tft.fillRect(0, 0, SCREEN_W, INFO_BAR_H, bg);
     }
 
     if (df.full_redraw || df.lap_number || df.background) {
+        crash_bc_core1 = 85;
         draw_driving_top_bar(st);
     }
     if (df.full_redraw || df.current_time || df.background) {
+        crash_bc_core1 = 86;
         draw_driving_current_time(st);
     }
     if (df.full_redraw || df.delta || df.background) {
+        crash_bc_core1 = 87;
         draw_driving_delta(st);
     }
     if (df.full_redraw || df.best_time || df.gps_info || df.background) {
+        crash_bc_core1 = 88;
         draw_driving_bottom_bar(st);
     }
+    crash_bc_core1 = 89;
 }
