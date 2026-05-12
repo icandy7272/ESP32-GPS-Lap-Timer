@@ -447,14 +447,16 @@ for sx in (-1, 1):
     sy = +1  # 只在 +Y 一侧
     cx = sx * corner_boss_x
     cy = sy * corner_boss_y
+    # 方形外形 (FDM 稳定, 嵌件压入时方壁受力均匀, 不会椭圆变形)
+    # 内部嵌件孔保持圆形 (匹配 Φ3.5 黄铜嵌件)
     boss = (
         cq.Workplane("XY")
         .center(cx, cy)
-        .circle(CORNER_BOSS_DIA / 2)
+        .rect(CORNER_BOSS_DIA, CORNER_BOSS_DIA)
         .extrude(corner_boss_h_back)
         .translate((0, 0, WALL))
     )
-    # Drill M2 insert pilot from top
+    # Drill M2 insert pilot from top (圆形)
     boss = (
         boss.faces(">Z")
         .workplane()
@@ -483,14 +485,16 @@ pcb_post_positions = [
 ]
 
 for px, py in pcb_post_positions:
+    # 方形立柱外形 (FDM 比圆柱稳定: 4 个垂直棱角抗翘, slicer 直线 perimeter)
+    # 内部 M2 自攻孔保持圆形 (跟螺纹匹配)
     post = (
         cq.Workplane("XY")
         .center(px, py)
-        .circle(PCB_POST_DIA / 2)
+        .rect(PCB_POST_DIA, PCB_POST_DIA)
         .extrude(PCB_POST_HEIGHT)
         .translate((0, 0, WALL))
     )
-    # M2 自攻底孔 (从立柱顶部往下钻)
+    # M2 自攻底孔 (圆形, 从立柱顶部往下钻)
     post = (
         post.faces(">Z")
         .workplane()
@@ -501,7 +505,8 @@ for px, py in pcb_post_positions:
 
 # 电池围栏（4 条短墙围电池外形）
 BATT_FENCE_HEIGHT = 5.0
-BATT_FENCE_THICK = 1.5
+BATT_FENCE_THICK = 2.0   # 1.5 → 2.0: 给 FDM 0.4 喷嘴 4 perimeter 完全填实
+                          # (1.5 太薄, slicer 可能 fallback 到 2-3 perimeter 不稳)
 BATT_FENCE_GAP = 0.3   # 电池滑入间隙
 # 电池实测位置（2026-05-11）：
 #   ㉚ 电池左沿到洞洞板左沿 = 14 mm  → 电池中心 X = +15.61 (相对洞洞板中心)

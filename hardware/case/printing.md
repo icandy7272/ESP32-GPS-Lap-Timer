@@ -188,6 +188,30 @@ lip 装入后, 凸条 (front -Y lip 外侧) 应该卡在凹槽 (back -Y inner_wa
 | `RIDGE_CHAMFER_DROP` | 0.3 | 40° 导入斜面尺寸. 增加 → 凸条更易滑入凹槽 |
 | `PRINT_TOLERANCE` | 0.4 | 未使用此处 (M3 孔 / 通孔间隙) |
 
+## 6b. FDM 结构友好性设计 (已实施)
+
+| 特征 | 实现 | 收益 |
+|---|---|---|
+| **PCB 立柱方形** (4.5×4.5, 圆形 pilot) | `rect()` 代替 `circle()` | 4 个垂直棱角抗 warp, slicer 直线 perimeter, 壁厚均匀 |
+| **Corner boss 方形** (6.5×6.5, 圆形 insert 孔) | 同上 | 嵌件压入时方壁受力均匀, 不会椭圆变形 |
+| **电池围栏 2.0mm** (原 1.5) | `BATT_FENCE_THICK = 2.0` | 4 perimeter (4 × 0.42 = 1.68mm) 完全填实 |
+| **lip 末端 C0.3 倒角** | 已加 | 装配 lead-in, 避免 sharp corner 撞 base 入口 |
+| **40° ridge lead-in chamfer** | 已加 | ridge 滑进 groove 平顺 |
+| **R0.2 groove fillet 删除** | 已删 | <0.4mm FDM 无法分辨, 不浪费 code |
+
+## 6c. 未来 prototype 后再 review
+
+如果打印或装配遇到以下 failure mode, 再做对应优化:
+
+| 现象 | 优化项 | 怎么改 |
+|---|---|---|
+| 立柱倾斜 > 1° | 加粗 PCB post | 改 `PCB_POST_DIA = 5.5` (需 mount hole Z 范围裁剪) |
+| 立柱根部断裂 | 加底部 R fillet | cadquery edge select 选 post-floor 边, fillet R0.5 |
+| Case 外观 sharp corner 不舒服 | 外角 R2 fillet | 在 front/back 外壳上加 R2 outer corner fillet |
+| TFT 玻璃顶撞前壳内表面 | 增加 AIR_GAP_TOP | 改 `AIR_GAP_TOP = 1.5` |
+| 电池底贴 后壳 内底 (FDM 翘) | 已加 0.5 gap | 已经 `AIR_GAP_BOT = 0.5` ✓ |
+| 4 个 mount hole 漏灰尘 | 通孔 RTV silicone 填封 | 物理打完后封 |
+
 ## 7. 典型打印时间 (参考)
 
 | 模式 | front | back | 总 |
