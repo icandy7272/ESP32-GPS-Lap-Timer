@@ -511,6 +511,50 @@ for sx in (-1, 1):
     back = back.union(boss)
 
 # ============================================================
+# Corner block lip-passage clearance — cut a notch at each +Y corner block's
+# outer corner (±X +Y), letting the front shell lip slide past during assembly.
+#
+# 没这个 cut 的话: lip 是 ring 形 (1mm 壁), Z=[5.755, 14.005] world.
+# Lip 的 +X+Y 和 -X+Y 两个角材料 (~1mm × 1mm cross section, 8mm 高) 跟 corner
+# block X-Y 投影 [44, 51]×[31.25, 45.035] 在 +Y 角完全重叠 → 装不进去.
+#
+# Cut 尺寸 (per corner): 1.37 × 1.37 × 9 mm, 留 0.3mm 内侧间隙 + 0.07mm 滑动 fit.
+# M2 嵌件 pilot 在 (±47.25, +34.5) — 离 cut 区域 X 方向 0.8mm / Y 方向 7.65mm,
+# pilot 100% 保留, corner block 下半 (Z < lip末端) 仍完整.
+# ============================================================
+LIP_PASS_CLEAR = 0.3   # cut 内侧距 lip 壁内缘的额外间隙 (FDM tolerance 余量)
+
+lip_outer_x_face = inner_x / 2 - GAP_NORMAL              # 50.93 (lip +X 外缘)
+lip_outer_y_top  = inner_y / 2 - GAP_NORMAL              # 44.965 (lip +Y 外缘)
+lip_inner_x_face = lip_outer_x_face - WALL / 2           # 49.93 (lip 壁内缘)
+lip_inner_y_top  = lip_outer_y_top - WALL / 2            # 43.965
+
+cut_x_inner = lip_inner_x_face - LIP_PASS_CLEAR          # 49.63
+cut_x_outer = inner_x / 2                                # 51 (back 内壁)
+cut_y_inner = lip_inner_y_top - LIP_PASS_CLEAR           # 43.665
+cut_y_outer = inner_y / 2                                # 45.035 (back 内壁)
+cut_x_dim   = cut_x_outer - cut_x_inner                  # 1.37 mm
+cut_y_dim   = cut_y_outer - cut_y_inner                  # 1.37 mm
+cut_x_mid   = (cut_x_inner + cut_x_outer) / 2            # 50.315
+cut_y_mid   = (cut_y_inner + cut_y_outer) / 2            # 44.35
+
+# Z range (back local): 覆盖整段 lip Z + 0.5mm 上下 buffer
+lip_z_end_back  = (case_z / 2 - FRONT_DEPTH - LID_LIP) + case_z / 2   # 28.34 (lip末端)
+lip_z_top_back  = (case_z / 2 - FRONT_DEPTH) + case_z / 2             # 36.84 (seam)
+cut_z_bot_back  = lip_z_end_back - 0.5
+cut_z_top_back  = lip_z_top_back + 0.5
+cut_z_dim       = cut_z_top_back - cut_z_bot_back
+
+for sx in (-1, 1):
+    cut = (
+        cq.Workplane("XY")
+        .center(sx * cut_x_mid, cut_y_mid)
+        .box(cut_x_dim, cut_y_dim, cut_z_dim, centered=(True, True, False))
+        .translate((0, 0, cut_z_bot_back))
+    )
+    back = back.cut(cut)
+
+# ============================================================
 # 洞洞板固定：4 个塑料立柱 + M2 自攻螺丝 (方案 E)
 # ============================================================
 # 洞洞板 4 角现有孔实测 (2026-05-11):
