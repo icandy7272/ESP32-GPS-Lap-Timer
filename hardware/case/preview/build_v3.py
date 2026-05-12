@@ -263,26 +263,30 @@ front = front.cut(window_cut)
 # 按键孔放后壳 +Y 面（见下方 BACK SHELL 区段）。
 #
 # GPS RF 窗口跨 back + front shell +Y 外壁 (case +Y 面 = 按键所在那面 = 朝天):
-# 这里是 front portion. 跟 back portion 在 seam (Z=14.005 world) 对齐拼成一整片.
-# Front portion: Z=[seam, seam + (FRONT_DEPTH - WALL)] world = [14.005, 20.835]
-#                front local Z=[0, FRONT_DEPTH - WALL] = [0, 6.83]
-# 不切到 front shell roof (Z>20.835 = front local Z > 6.83), 避免 roof 太薄.
+# 这里是 front 部分. 需要 cut 两块 front shell 材料:
+#   (A) Lip +Y 壁 (Y=[43.965, 44.965], Z=lip Z 范围): 1mm 塑料挡在 RF 路径上
+#   (B) Front body +Y 壁 (Y=[45.035, 47.035], Z=front body Z 范围): 从 2mm 削到 1mm
+# 不切 lip wall 的话, RF 信号经过 lip 1mm + back wall 1mm = 2mm PETG (= 跟没切一样)
+# 切了 lip wall, RF 信号经过 仅 back wall 1mm = 真有 RF benefit
 
-# Match back portion Y position (Y=45.485 world center, Y range [44.935, 46.035])
-gps_recess_cy_w_front = inner_y / 2 + GPS_RECESS_DEPTH / 2 - 0.05  # = 45.485
+# Y 范围: 从 lip 内表面外侧 (~43.5, 在 lip cavity 里) 到 case 外壁 - 1mm
+# 这范围在 lip Z 区段 cut lip wall, 在 body Z 区段 cut body wall (两个不同 Y, 但一个 Y range 覆盖)
+# lip_inner_y_top = inner_y/2 - LID_LIP_GAP/2 - WALL/2 = 45.035 - 0.07 - 1 = 43.965
 gps_recess_cx_w_front = -PCB_W / 2 + 51 + GPS_MODULE_W / 2          # = 15
+front_y_min = inner_y / 2 - LID_LIP_GAP / 2 - WALL / 2 - 0.5         # 43.465 (lip 壁内表面 - 0.5 buffer)
+front_y_max = inner_y / 2 + GPS_RECESS_DEPTH                         # 46.035 (= 1mm 外壁剩)
+front_window_dy = front_y_max - front_y_min                          # 2.57
 
-# Front portion Z range (front local, 跟 back portion 跨 seam 重叠 0.05mm 确保连续)
-front_window_z_bot_local = -0.05                  # 跟 back 重叠 0.05mm
-front_window_z_top_local = FRONT_DEPTH - WALL     # = 6.83 (roof 底)
-front_window_h = front_window_z_top_local - front_window_z_bot_local
-front_window_cz_local = (front_window_z_bot_local + front_window_z_top_local) / 2
+# Z 范围 (front local): 从 lip 末端 (-LID_LIP) 到 roof 底 (FRONT_DEPTH - WALL)
+front_z_min_local = -LID_LIP - 0.05    # -8.05 (lip末端外 0.05mm overlap)
+front_z_max_local = FRONT_DEPTH - WALL # 6.83 (roof 底, 不切 roof)
+front_window_h = front_z_max_local - front_z_min_local               # 14.88
 
 gps_recess_front = (
     cq.Workplane("XY")
-    .center(gps_recess_cx_w_front, gps_recess_cy_w_front)
-    .box(GPS_RECESS_W, GPS_RECESS_DEPTH + 0.1, front_window_h, centered=(True, True, True))
-    .translate((0, 0, front_window_cz_local))
+    .center(gps_recess_cx_w_front, (front_y_min + front_y_max) / 2)
+    .box(GPS_RECESS_W, front_window_dy, front_window_h, centered=(True, True, False))
+    .translate((0, 0, front_z_min_local))
 )
 front = front.cut(gps_recess_front)
 
