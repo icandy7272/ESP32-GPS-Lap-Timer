@@ -84,10 +84,13 @@ PRINT_TOLERANCE = 0.4
 TFT_BEZEL_INSET = 1.0
 LIP_END_CHAMFER = 0.3      # lip 末端 4 边 C0.3 倒角 — FDM 装配 lead-in
 
-# GPS 天线上方 RF 窗口 (internal recess, 不改外观)
-GPS_RECESS_W = 25.0        # X 宽 (覆盖典型 GPS ceramic patch ≤25mm)
-GPS_RECESS_H = 25.0        # Y 宽
-GPS_RECESS_DEPTH = 1.0     # 凹 1mm: 顶壁 2mm → 1mm (FDM PETG 1mm 可靠)
+# GPS 天线 RF 窗口 (internal recess, 在 back shell 外底面 — 用户实测天线朝 -Z)
+# 位置约束: 必须在 GPS protrusion 区 (Y > pcb_top), 避开电池阻挡
+#         电池在 perfboard 背面 -Z 一侧, X=[-4.78, 36], Y=[-44.035, 27.035]
+#         电池金属阻 RF; 只有 GPS 凸出 perfboard +Y 的 14.3mm 区域 下方无电池, RF 通畅
+GPS_RECESS_W = 25.0        # X 宽 (覆盖 GPS X=[1, 29] 的中段 25mm)
+GPS_RECESS_H = 13.0        # Y 窄 (限在 protrusion 区, Y=[28.185, 41.185])
+GPS_RECESS_DEPTH = 1.0     # 凹 1mm: 底壁 2mm → 1mm
                            # RF 减衰 ~1-2dB (vs 2mm 全壁)
                            # (lip 壁厚 1mm, 内外两圈各 0.3 = 0.6mm 消耗, 净剩 0.4mm)
 
@@ -253,24 +256,10 @@ window_cut = (
 )
 front = front.cut(window_cut)
 
-# GPS 天线 RF 窗口 — internal recess (从 cavity 一侧凹, 不破坏外观)
-# 把 GPS 天线正上方那 25×25mm 区域的顶壁从 2mm 削薄到 1mm, 信号衰减 ~1-2dB
-# 位置: GPS 中心 (世界 X=15, Y=28.335) — 计算见下
-# Z 范围 (front local): [FRONT_DEPTH-WALL, FRONT_DEPTH-WALL+GPS_RECESS_DEPTH]
-#                      = [6.83, 7.83] (从 cavity 顶面向 +Z 凿入 1mm)
-gps_module_cx = -PCB_W / 2 + 51 + GPS_MODULE_W / 2   # = 15 (world X)
-gps_module_cy = pcb_top_y - (GPS_MODULE_H - 14.3) + GPS_MODULE_H / 2  # = 28.335 (world Y)
-# (GPS 模块 14.3mm 突出 pcb_top, 28-14.3=13.7mm 在 pcb 上, 中心 Y = pcb_top + 0.3)
-gps_recess = (
-    cq.Workplane("XY")
-    .center(gps_module_cx, gps_module_cy)
-    .box(GPS_RECESS_W, GPS_RECESS_H, GPS_RECESS_DEPTH + 0.1, centered=(True, True, False))
-    .translate((0, 0, FRONT_DEPTH - WALL - 0.05))
-)
-front = front.cut(gps_recess)
-
 # 注意：按键孔不在前壳上！前壳深度 8.83mm < 按键孔直径 13.4mm
 # 按键孔放后壳 +Y 面（见下方 BACK SHELL 区段）。
+# GPS RF 窗口也不在前壳! 用户实测: GPS 天线朝 -Z 方向 (= 朝 back shell 外底面),
+# 故 RF 窗口在 back shell 外底面 (见 BACK SHELL 区段).
 
 # TFT 4 个 M3 螺柱 (从前壳 +Z 内壁朝 -Z 伸)
 # 螺柱长 = AIR_GAP_TOP (玻璃到前壳内表面间隙) + TFT_FRONT_HEIGHT (玻璃凸出 PCB)
@@ -451,6 +440,23 @@ back_inner = (
     .translate((0, 0, WALL))
 )
 back = back.cut(back_inner)
+
+# ============================================================
+# GPS RF 窗口 — internal recess 在 back shell 底面 (用户实测 GPS 天线朝 -Z)
+# 把 GPS protrusion 区上方 那块 25×13mm 底壁从 2mm 削薄到 1mm, 信号衰减 ~1-2dB
+# 位置: 限在 Y > 电池顶 (Y=27.035), 避开电池金属阻挡
+# Z 范围 (back local): 从内底面 (Z=WALL=2) 朝 -Z 凿入 1mm, 留外底 1mm 厚
+# ============================================================
+gps_recess_cx = -PCB_W / 2 + 51 + GPS_MODULE_W / 2   # = 15 (GPS X 中心)
+# Y 中心在 protrusion 区中点 (= 电池顶 27.035 跟 GPS 端 42.335 中点)
+gps_recess_cy = (pcb_top_y - 1 + pcb_top_y + 14.3) / 2  # ≈ 34.685
+gps_recess_back = (
+    cq.Workplane("XY")
+    .center(gps_recess_cx, gps_recess_cy)
+    .box(GPS_RECESS_W, GPS_RECESS_H, GPS_RECESS_DEPTH + 0.1, centered=(True, True, False))
+    .translate((0, 0, WALL - GPS_RECESS_DEPTH - 0.05))  # cut Z=[0.95, 2.05] back local
+)
+back = back.cut(gps_recess_back)
 
 # 2 个 M12 按键圆孔 (后壳 +Y 顶面)
 # X 位置在洞洞板左右边缘附近 (±37)，让接线柱沿 -Y 延伸时避开电池/ESP32 X 范围
