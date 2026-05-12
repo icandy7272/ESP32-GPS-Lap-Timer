@@ -27,3 +27,8 @@ test_backups/
 
 # Field test data — real walking-session captures, not regenerable
 walking_logs/
+
+# CAD generated artifacts (regenerable from build_*.py)
+hardware/case/preview/*.step
+hardware/case/preview/*.stl
+hardware/case/preview/view_*.svg

@@ -1,41 +1,57 @@
-TFT_PCB_W,mm,89.4 mm,TFT PCB long edge (spec; verify with calipers)
-TFT_PCB_H,mm,56 mm,TFT PCB short edge (spec)
-TFT_PCB_THICKNESS,mm,1.6 mm,Bare PCB thickness
-TFT_BACK_HEIGHT,mm,8 mm,Tallest component on TFT back side (backlight inverter / cap)
-TFT_VISIBLE_W,mm,64.8 mm,Visible glass long edge (spec)
-TFT_VISIBLE_H,mm,48.6 mm,Visible glass short edge (spec)
-TFT_VISIBLE_OFFSET_X,mm,12.3 mm,Visible glass left offset from PCB left edge ((89.4-64.8)/2 if centered)
-TFT_VISIBLE_OFFSET_Y,mm,3.7 mm,Visible glass top offset from PCB top edge
-TFT_SCREW_HOLE_DIA,mm,2.6 mm,~M2.5 mounting holes; widen +0.4mm for clearance fit
-TFT_SCREW_HOLE_DX,mm,83.4 mm,TFT mounting hole spacing along long edge
-TFT_SCREW_HOLE_DY,mm,50 mm,TFT mounting hole spacing along short edge
-PCB_W,mm,70 mm,Perfboard long edge (measure your actual board)
-PCB_H,mm,50 mm,Perfboard short edge
-PCB_THICKNESS,mm,1.6 mm,Perfboard thickness
+TFT_PCB_W,mm,89.45 mm,TFT PCB long edge (measured 2026-05-11; spec 89.40 ±0.20)
+TFT_PCB_H,mm,56.01 mm,TFT PCB short edge (measured 2026-05-11; spec 56.00 ±0.20)
+TFT_PCB_THICKNESS,mm,1.17 mm,Bare PCB thickness (measured 2026-05-11; spec did not break out PCB only)
+TFT_BACK_HEIGHT,mm,8.28 mm,Tallest back-side protrusion (measured 2026-05-11; current 8-pin straight header + solder; drops to ~4mm with right-angle header / FFC)
+TFT_FRONT_HEIGHT,mm,3.83 mm,Glass + polarizer + LCM frame protrusion above PCB front (measured 2026-05-11; spec §3 marks 3.75 MAX)
+TFT_VISIBLE_W,mm,67.53 mm,Visible glass long edge (measured 2026-05-11; spec AA=64.80 is light-emitting area only; outer-glass needed for case window)
+TFT_VISIBLE_H,mm,52.07 mm,Visible glass short edge (measured 2026-05-11; spec AA=48.60)
+TFT_VISIBLE_OFFSET_X,mm,7.5 mm,Glass left edge to PCB left edge along long axis (measured 2026-05-11; NOT centered; opposite side = 14.42)
+TFT_VISIBLE_OFFSET_Y,mm,2.37 mm,Glass top edge to PCB top edge along short axis (measured 2026-05-11; opposite side = 1.57)
+TFT_SCREW_HOLE_DIA,mm,3.01 mm,M3 mounting holes (measured 2026-05-11; spec §5 marks Φ2.50 but real part is M3 — factory drawing out of sync)
+TFT_SCREW_HOLE_DX,mm,83.42 mm,TFT mounting hole spacing along long edge (measured 2026-05-11; spec 83.40 ±0.20)
+TFT_SCREW_HOLE_DY,mm,50.07 mm,TFT mounting hole spacing along short edge (measured 2026-05-11; spec 50.00 ±0.20)
+TFT_OFFSET_LEFT,mm,8.56 mm,TFT PCB left edge to perfboard left edge (measured 2026-05-11; TFT off-center +3.3mm right)
+TFT_OFFSET_TOP,mm,12.9 mm,TFT PCB top edge to perfboard top edge (measured 2026-05-11; TFT off-center -5.9mm away from GPS)
+TFT_BACK_TO_PERFBOARD_GAP,mm,10.56 mm,Total Z distance from TFT PCB back face to perfboard front face (measured 2026-05-12). Includes female header socket + TFT pin-base plastic + any air gap. Not equal to TFT_BACK_HEIGHT (8.28 is only the pin protrusion); 10.56 - 8.28 = 2.28mm is socket-bottom plastic not filled by pins.
+PCB_W,mm,100 mm,Perfboard long edge (measured 2026-05-11)
+PCB_H,mm,70 mm,Perfboard short edge (measured 2026-05-11)
+PCB_THICKNESS,mm,1.5 mm,Perfboard thickness (measured 2026-05-11)
+ESP32_BOT_TO_PERFBOARD_BACK,mm,15.63 mm,ESP32-S3 DevKit farthest face (USB-C / pins / module body) to perfboard back Z distance (measured 2026-05-12). 15.63 < BATT_BOT_TO_PERFBOARD_BACK (23.11) so battery determines backside_h; ESP32 not squeezed by back shell.
 PCB_USB_C_X,mm,17 mm,ESP32 DevKit USB-C connector center X from PCB left edge
 PCB_USB_C_Z_OFFSET,mm,1.5 mm,USB-C centerline height above PCB top
 PCB_BOOT_BTN_X,mm,25 mm,BOOT button center X from PCB left edge
 PCB_RST_BTN_X,mm,32 mm,RST button center X from PCB left edge
 PCB_BOOT_RST_Y,mm,6 mm,BOOT and RST buttons share this Y from board edge
 PCB_BTN_TOP_Z,mm,3 mm,Tactile button cap height above PCB
-BATT_W,mm,70 mm,18650 pack long edge
-BATT_H,mm,38 mm,18650 pack height (single 18650 ~19mm; 2P pack ~38mm)
-BATT_D,mm,19 mm,18650 pack thickness
+BATT_W,mm,40.78 mm,CK18650-1234S-NP 5V pack X dim (short axis) (measured 2026-05-11)
+BATT_H,mm,71.07 mm,CK18650-1234S-NP pack Y dim (long axis, mounted vertically) (measured 2026-05-11)
+BATT_D,mm,19.5 mm,CK18650-1234S-NP pack Z dim (protrusion from perfboard back) (measured 2026-05-11)
+BATT_BOT_TO_PERFBOARD_BACK,mm,23.11 mm,Z distance from perfboard back face to battery bottom face (measured 2026-05-12). Battery is NOT touching perfboard back — 23.11 - BATT_D(19.50) = 3.61mm is wire/solder/foam space. This is the true backside_h value (replaces old wrong max(BATT_D, ESP32...) = 19.5 estimate).
 USBC_DAUGHTER_W,mm,25 mm,Battery USB-C charge daughter board length
 USBC_DAUGHTER_H,mm,15 mm,Battery USB-C charge daughter board height
 USBC_PORT_W,mm,9 mm,USB-C plug opening width on outer wall
 USBC_PORT_H,mm,3.5 mm,USB-C plug opening height
-GPS_MODULE_W,mm,28 mm,BK-880 GPS module long edge
-GPS_MODULE_H,mm,28 mm,BK-880 GPS module short edge
-GPS_PATCH_HEIGHT,mm,7 mm,Ceramic patch antenna height above its PCB
+GPS_MODULE_W,mm,28 mm,BK-880 GPS module shield long edge (measured 2026-05-11)
+GPS_MODULE_H,mm,28 mm,BK-880 GPS module shield short edge (measured 2026-05-11)
+GPS_PATCH_HEIGHT,mm,11 mm,GPS module total height (antenna + shield) (measured 2026-05-11)
 GPS_PATCH_HEADROOM,mm,3 mm,Air gap above GPS patch (RF clearance)
+GPS_PROTRUSION_Y,mm,14.3 mm,GPS module protrusion from perfboard top edge along Y (measured 2026-05-11; includes tilt-induced ESP32-side overhang)
+GPS_LEFT_TO_PCB_LEFT,mm,51 mm,GPS shield left edge to perfboard left edge (measured 2026-05-11; GPS offset +15mm right of perfboard center; button X moved to ±37 to avoid collision)
 BTN_PANEL_HOLE_DIA,mm,13 mm,Panel hole for M12 metal latching button (12mm thread + 1mm clearance)
-BTN_BACKSIDE_DEPTH,mm,25 mm,Free space needed behind button face (barrel + connector tab)
+BTN_BACKSIDE_DEPTH,mm,13 mm,M12 button thread length 10.92 + ~2mm nut (measured 2026-05-11; wire must exit sideways)
+BTN_THREAD_DIA,mm,11.88 mm,M12 button thread OD (measured 2026-05-11; spec 12 but real part smaller)
+BTN_FLANGE_DIA,mm,13.83 mm,M12 button flange (collar below the cap) diameter (measured 2026-05-11)
+BATT_LEFT_TO_PCB_LEFT,mm,14 mm,Battery left edge to perfboard left edge (measured 2026-05-11; battery center X = +15.61 relative to PCB center)
+ESP32_LEFT_TO_PCB_LEFT,mm,55.23 mm,ESP32 DevKit left edge to perfboard left edge (measured 2026-05-11; ESP32 center X = -17.73)
+BATT_TOP_TO_PCB_TOP,mm,1 mm,Battery top to perfboard top edge (measured 2026-05-11; includes wire error)
+STACK_MEASURED_Z,mm,39 mm,Measured total stack Z-thickness (TFT glass top to battery bottom) (measured 2026-05-11)
 WALL,mm,2 mm,Outer shell wall thickness
-LID_LIP,mm,4 mm,Top lid overlap depth into base
+LID_LIP,mm,5 mm,Front shell lip slide-fit depth into back shell (v3)
 LID_LIP_GAP,mm,0.3 mm,Sliding clearance at lid lip
 PRINT_TOLERANCE,mm,0.4 mm,Generic FDM hole oversize for sliding fit
-SCREW_BOSS_DIA,mm,5.5 mm,Outer diameter of M2 screw boss
-SCREW_HOLE_DIA,mm,1.7 mm,M2 self-tap pilot hole diameter
-PCB_STANDOFF_H,mm,4 mm,Gap between PCB and inner case floor
+CORNER_BOSS_DIA,mm,6.5 mm,4-corner screw boss OD (M2 brass insert)
+INSERT_HOLE_DIA,mm,3.5 mm,M2 brass heat-set insert pilot diameter
+INSERT_DEPTH,mm,5 mm,Brass insert press-fit depth
+M2_THROUGH_DIA,mm,2.4 mm,M2 screw through hole with clearance
+M2_HEAD_DIA,mm,4.5 mm,M2 socket head capscrew counterbore diameter
 TFT_BEZEL_INSET,mm,1 mm,Bezel overhang past visible edge
