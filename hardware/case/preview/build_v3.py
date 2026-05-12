@@ -82,6 +82,8 @@ LID_LIP_GAP_BOT = 0.20     # 底部 (-Y, 有公凸条+母凹槽) 双边总间隙
                            # = LID_LIP_GAP_BOT/2 + GROOVE_DEPTH - RIDGE_HEIGHT = 0.10 + 0.05 = 0.15
 PRINT_TOLERANCE = 0.4
 TFT_BEZEL_INSET = 1.0
+LIP_END_CHAMFER = 0.3      # lip 末端 4 边 C0.3 倒角 — FDM 装配 lead-in
+                           # (lip 壁厚 1mm, 内外两圈各 0.3 = 0.6mm 消耗, 净剩 0.4mm)
 
 # v3 new
 CORNER_BOSS_DIA = 6.5      # 4-corner screw boss OD
@@ -282,6 +284,15 @@ lip_inner_cut = (
     .translate((0, 0, -LID_LIP - 0.1))
 )
 lip_ring = lip_outer_box.cut(lip_inner_cut)
+
+# lip 末端 C0.5 倒角: 装配 lead-in, 避免 lip 末端 sharp 角撞 base inner_wall 入口边
+# 必须在 union 前 + M2 通孔 cut 前做, 否则 faces("<Z") 会包含 M2 孔的圆边, chamfer 失败
+# 这会倒 lip 末端 outer + inner 两圈 (8 边), inner 圈在 lip 内部, 不影响装配
+try:
+    lip_ring = lip_ring.faces("<Z").chamfer(LIP_END_CHAMFER)
+except Exception as e:
+    print(f"[lip-end chamfer skipped] {e}")
+
 front = front.union(lip_ring)
 
 # 2 corner M2 through holes + sunk heads (仅上半 +Y 一侧，因为下方 boss 撞洞洞板取消了)
@@ -342,7 +353,6 @@ GROOVE_DEPTH = 0.35             # 母凹槽径向深度 (= 凸条高 + 0.05 余�
 GROOVE_Z_THICK = 1.2            # 母凹槽 Z 上下宽度 (= 凸条厚 + 0.2 余量)
 GROOVE_TOP_FROM_BACK_TOP = 2.0  # 凹槽上边距 back top (seam) 2.0mm 朝 -Z
 GROOVE_BOT_FROM_BACK_TOP = 3.2  # 凹槽下边距 back top 3.2mm 朝 -Z
-GROOVE_TOP_FILLET = 0.2         # 上缘 R0.2 导入圆角
 
 OVERLAP = 0.5                   # union/cut 强制融合用的体重叠量
 
@@ -538,24 +548,9 @@ groove_cut = (
 )
 back = back.cut(groove_cut)
 
-# 上缘 R0.2 导入圆角: 选 cut 完后 inner_wall 上 groove 顶面跟 inner_wall 表面交线
-# 路径: back.faces("<Y") 选最外那个面 (= 后壳 -Y 外壁外表面), 但这不是 groove 边
-# 用 BoundingBox 精挑: 在 -Y 内壁附近, Z = groove 顶面 的 X 方向直边
-# 简化方案: 用 lambda selector by edge center position
-try:
-    inner_wall_y = -inner_y / 2
-    candidate_edges = []
-    for e in back.val().Edges():
-        c = e.Center()
-        # 边在 inner_wall surface 那个 Y, 在 groove 顶面那个 Z, X 方向延伸
-        if abs(c.y - inner_wall_y) < 0.01 and abs(c.z - groove_z_top_back) < 0.01:
-            candidate_edges.append(e)
-    if candidate_edges:
-        back = back.newObject(candidate_edges).fillet(GROOVE_TOP_FILLET - 0.01)
-    else:
-        print("[groove top fillet] no matching edge found")
-except Exception as e:
-    print(f"[groove top fillet skipped] {e}")
+# 凹槽上缘 R0.2 圆角原本要做的, 但 0.4mm FDM 喷嘴印不出 < 0.4mm 圆角.
+# 切片器会量化成 0 或 1 个 layer step, 实际打印效果跟没有 fillet 一样.
+# 故省略 — 凸条自己的 40° chamfer 已提供足够的 lead-in.
 
 # Translate back shell to world coords
 back_world = back.translate((0, 0, -case_z / 2))
