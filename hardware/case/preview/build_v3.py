@@ -541,14 +541,12 @@ lip_outer_y_top  = inner_y / 2 - GAP_NORMAL              # 44.965 (lip +Y 外缘
 lip_inner_x_face = lip_outer_x_face - WALL / 2           # 49.93 (lip 壁内缘)
 lip_inner_y_top  = lip_outer_y_top - WALL / 2            # 43.965
 
-cut_x_inner = lip_inner_x_face - LIP_PASS_CLEAR          # 49.63
-cut_x_outer = inner_x / 2                                # 51 (back 内壁)
-cut_y_inner = lip_inner_y_top - LIP_PASS_CLEAR           # 43.665
-cut_y_outer = inner_y / 2                                # 45.035 (back 内壁)
-cut_x_dim   = cut_x_outer - cut_x_inner                  # 1.37 mm
-cut_y_dim   = cut_y_outer - cut_y_inner                  # 1.37 mm
-cut_x_mid   = (cut_x_inner + cut_x_outer) / 2            # 50.315
-cut_y_mid   = (cut_y_inner + cut_y_outer) / 2            # 44.35
+# Lip 4 壁的 cut 范围:
+#   lip ±X 壁 路径: X=[lip_inner_x - 0.3, inner_x/2], Y=[block_y_inner, block_y_outer]
+#   lip +Y 壁 路径: X=[block_x_inner, block_x_outer], Y=[lip_inner_y - 0.3, inner_y/2]
+# 两个 cut 合起来在 corner block 上挖一个 L 形 (两条边的 strip)
+cut_x_inner = lip_inner_x_face - LIP_PASS_CLEAR          # 49.63 (lip ±X 壁 cut 的内边)
+cut_y_inner = lip_inner_y_top - LIP_PASS_CLEAR           # 43.665 (lip +Y 壁 cut 的内边)
 
 # Z range (back local): 覆盖整段 lip Z + 0.5mm 上下 buffer
 lip_z_end_back  = (case_z / 2 - FRONT_DEPTH - LID_LIP) + case_z / 2   # 28.34 (lip末端)
@@ -558,13 +556,41 @@ cut_z_top_back  = lip_z_top_back + 0.5
 cut_z_dim       = cut_z_top_back - cut_z_bot_back
 
 for sx in (-1, 1):
-    cut = (
+    # Block bounds (sign-aware)
+    block_x_inner_world = sx * (corner_boss_x - CORNER_BOSS_DIA / 2)  # ±44
+    block_x_outer_world = sx * inner_x / 2                             # ±51
+    block_y_inner_world = corner_boss_y - CORNER_BOSS_DIA / 2          # +31.25
+    block_y_outer_world = inner_y / 2                                  # +45.035
+
+    # Cut A: lip ±X 壁 passage (沿 Y 方向, 在 block +X 边/-X 边)
+    # X 范围: lip wall X + 0.3 clearance 到 内壁
+    # Y 范围: block 整段 Y + 0.2 buffer (确保切干净)
+    cut_a_x_in = sx * cut_x_inner   # ±49.63
+    cut_a_x_out = block_x_outer_world  # ±51
+    cut_a_y_min = block_y_inner_world - 0.2
+    cut_a_y_max = block_y_outer_world + 0.2
+    cut_a = (
         cq.Workplane("XY")
-        .center(sx * cut_x_mid, cut_y_mid)
-        .box(cut_x_dim, cut_y_dim, cut_z_dim, centered=(True, True, False))
+        .center((cut_a_x_in + cut_a_x_out) / 2, (cut_a_y_min + cut_a_y_max) / 2)
+        .box(abs(cut_a_x_out - cut_a_x_in), cut_a_y_max - cut_a_y_min, cut_z_dim, centered=(True, True, False))
         .translate((0, 0, cut_z_bot_back))
     )
-    back = back.cut(cut)
+    back = back.cut(cut_a)
+
+    # Cut B: lip +Y 壁 passage (沿 X 方向, 在 block +Y 边)
+    # X 范围: block 整段 X + 0.2 buffer
+    # Y 范围: lip wall Y + 0.3 clearance 到 内壁
+    cut_b_x_min = min(block_x_inner_world, block_x_outer_world) - 0.2
+    cut_b_x_max = max(block_x_inner_world, block_x_outer_world) + 0.2
+    cut_b_y_in = cut_y_inner   # +43.665
+    cut_b_y_out = block_y_outer_world  # +45.035
+    cut_b = (
+        cq.Workplane("XY")
+        .center((cut_b_x_min + cut_b_x_max) / 2, (cut_b_y_in + cut_b_y_out) / 2)
+        .box(cut_b_x_max - cut_b_x_min, cut_b_y_out - cut_b_y_in, cut_z_dim, centered=(True, True, False))
+        .translate((0, 0, cut_z_bot_back))
+    )
+    back = back.cut(cut_b)
 
 # ============================================================
 # 洞洞板固定：4 个塑料立柱 + M2 自攻螺丝 (方案 E)
