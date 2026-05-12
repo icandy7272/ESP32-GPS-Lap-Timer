@@ -84,14 +84,17 @@ PRINT_TOLERANCE = 0.4
 TFT_BEZEL_INSET = 1.0
 LIP_END_CHAMFER = 0.3      # lip 末端 4 边 C0.3 倒角 — FDM 装配 lead-in
 
-# GPS 天线 RF 窗口 (internal recess)
-# Mounting: case +Y 面朝天 (= 按键所在那面朝上, sky direction)
-# GPS 天线朝 +Y 方向, RF 窗口必须开在 back shell +Y 外壁
-# 位置约束: 避开 2 个按键孔 (Z=[-8.875, 4.005]) + seam (Z=14.005), 留 buffer
-GPS_RECESS_W = 25.0        # X 宽 (沿 case_x 方向, 覆盖 GPS X=[1, 29] 中段 25mm)
-GPS_RECESS_H = 9.0         # Z 高 (沿 case_z 方向, 在按键顶 4.005 + 0.5 到 seam 14.005 - 0.5)
-GPS_RECESS_DEPTH = 1.0     # Y 深 (朝 +Y 切入 wall material 1mm: +Y 壁 2mm → 1mm)
+# GPS 天线 RF 窗口 (internal recess, 跨 seam 联合 back+front shell)
+# Mounting: case +Y 面朝天, GPS 天线 patch 朝 +Y 方向
+# RF 窗口必须在 case +Y 外壁, 覆盖 GPS 天线尽可能多面积
+# 受限于: 按键孔 (Z=[-8.875, 4.005]) + front shell roof (Z=[20.835, 22.835])
+# 最大可用 Z 范围 = [4.5, 20.835] = 16.335mm 高, 跨 back+front shell seam
+# 拆分两个 cut: back portion Z=[4.5, 14.005] + front portion Z=[14.005, 20.835]
+GPS_RECESS_W = 28.0        # X 宽 (完整覆盖 GPS X=[1, 29])
+GPS_RECESS_DEPTH = 1.0     # Y 深 (朝 +Y 切入 wall material 1mm, +Y 壁 2mm → 1mm)
                            # RF 减衰 ~1-2dB (vs 2mm 全壁)
+GPS_RECESS_Z_BOT_W = 4.5   # 窗口底 (world Z, 按键顶 4.005 + 0.5 buffer)
+GPS_RECESS_Z_TOP_W = 20.835  # 窗口顶 (world Z, front shell roof 底 = 不切 roof)
                            # (lip 壁厚 1mm, 内外两圈各 0.3 = 0.6mm 消耗, 净剩 0.4mm)
 
 # v3 new
@@ -258,8 +261,30 @@ front = front.cut(window_cut)
 
 # 注意：按键孔不在前壳上！前壳深度 8.83mm < 按键孔直径 13.4mm
 # 按键孔放后壳 +Y 面（见下方 BACK SHELL 区段）。
-# GPS RF 窗口也不在前壳! 用户实测: GPS 天线朝 -Z 方向 (= 朝 back shell 外底面),
-# 故 RF 窗口在 back shell 外底面 (见 BACK SHELL 区段).
+#
+# GPS RF 窗口跨 back + front shell +Y 外壁 (case +Y 面 = 按键所在那面 = 朝天):
+# 这里是 front portion. 跟 back portion 在 seam (Z=14.005 world) 对齐拼成一整片.
+# Front portion: Z=[seam, seam + (FRONT_DEPTH - WALL)] world = [14.005, 20.835]
+#                front local Z=[0, FRONT_DEPTH - WALL] = [0, 6.83]
+# 不切到 front shell roof (Z>20.835 = front local Z > 6.83), 避免 roof 太薄.
+
+# Match back portion Y position (Y=45.485 world center, Y range [44.935, 46.035])
+gps_recess_cy_w_front = inner_y / 2 + GPS_RECESS_DEPTH / 2 - 0.05  # = 45.485
+gps_recess_cx_w_front = -PCB_W / 2 + 51 + GPS_MODULE_W / 2          # = 15
+
+# Front portion Z range (front local, 跟 back portion 跨 seam 重叠 0.05mm 确保连续)
+front_window_z_bot_local = -0.05                  # 跟 back 重叠 0.05mm
+front_window_z_top_local = FRONT_DEPTH - WALL     # = 6.83 (roof 底)
+front_window_h = front_window_z_top_local - front_window_z_bot_local
+front_window_cz_local = (front_window_z_bot_local + front_window_z_top_local) / 2
+
+gps_recess_front = (
+    cq.Workplane("XY")
+    .center(gps_recess_cx_w_front, gps_recess_cy_w_front)
+    .box(GPS_RECESS_W, GPS_RECESS_DEPTH + 0.1, front_window_h, centered=(True, True, True))
+    .translate((0, 0, front_window_cz_local))
+)
+front = front.cut(gps_recess_front)
 
 # TFT 4 个 M3 螺柱 (从前壳 +Z 内壁朝 -Z 伸)
 # 螺柱长 = AIR_GAP_TOP (玻璃到前壳内表面间隙) + TFT_FRONT_HEIGHT (玻璃凸出 PCB)
@@ -442,25 +467,27 @@ back_inner = (
 back = back.cut(back_inner)
 
 # ============================================================
-# GPS RF 窗口 — internal recess 在 back shell +Y 外壁 (case +Y 面 = 朝天)
-# Mounting: case 以 +Y 朝天, GPS 天线 patch 朝 +Y 方向, RF 信号穿过 +Y 壁出去
+# GPS RF 窗口 — internal recess 跨 back+front shell +Y 外壁
+# Back shell 部分: Z=[4.5, 14.005] world = 9.505mm
 # 从 +Y 内壁面 (Y=inner_y/2=45.035) 朝 +Y 切入 wall material 1mm
 # Cut Y range world = [45.035, 46.035] (在 wall 内, 留 1mm 外壁防尘)
-# 位置: 避开 2 个按键孔 (Z=[-8.875, 4.005] world) + seam (Z=14.005)
 # ============================================================
 gps_recess_cx_w = -PCB_W / 2 + 51 + GPS_MODULE_W / 2   # = 15 (X 中心, GPS X 中点)
-gps_recess_cz_w = (4.5 + 13.5) / 2                     # = 9.0 (Z 中心, 在按键顶 4.005+0.5 到 seam 14.005-0.5)
-# Y 中心: 切深 1mm 朝 +Y, 加 0.1mm 内腔 overlap 让 cut 干净
-gps_recess_cy_w = inner_y / 2 + GPS_RECESS_DEPTH / 2 - 0.05   # = 45.485
+gps_recess_cy_w = inner_y / 2 + GPS_RECESS_DEPTH / 2 - 0.05   # = 45.485 (Y 中心 in wall)
 
-# back local Z = world Z + case_z/2
-gps_recess_cz_back = gps_recess_cz_w + case_z / 2
+# Back portion: Z=[GPS_RECESS_Z_BOT_W, seam]
+seam_z_w = case_z / 2 - FRONT_DEPTH                    # 14.005
+back_window_z_bot_w = GPS_RECESS_Z_BOT_W               # 4.5
+back_window_z_top_w = seam_z_w + 0.05                  # 14.055 (0.05mm 超过 seam, 跟 front cut 重叠确保连续)
+back_window_cz_w = (back_window_z_bot_w + back_window_z_top_w) / 2
+back_window_h = back_window_z_top_w - back_window_z_bot_w
+back_window_cz_back = back_window_cz_w + case_z / 2
 
 gps_recess_back = (
     cq.Workplane("XY")
     .center(gps_recess_cx_w, gps_recess_cy_w)
-    .box(GPS_RECESS_W, GPS_RECESS_DEPTH + 0.1, GPS_RECESS_H, centered=(True, True, True))
-    .translate((0, 0, gps_recess_cz_back))
+    .box(GPS_RECESS_W, GPS_RECESS_DEPTH + 0.1, back_window_h, centered=(True, True, True))
+    .translate((0, 0, back_window_cz_back))
 )
 back = back.cut(gps_recess_back)
 
