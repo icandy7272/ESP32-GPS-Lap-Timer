@@ -84,13 +84,13 @@ PRINT_TOLERANCE = 0.4
 TFT_BEZEL_INSET = 1.0
 LIP_END_CHAMFER = 0.3      # lip 末端 4 边 C0.3 倒角 — FDM 装配 lead-in
 
-# GPS 天线 RF 窗口 (internal recess, 在 back shell 外底面 — 用户实测天线朝 -Z)
-# 位置约束: 必须在 GPS protrusion 区 (Y > pcb_top), 避开电池阻挡
-#         电池在 perfboard 背面 -Z 一侧, X=[-4.78, 36], Y=[-44.035, 27.035]
-#         电池金属阻 RF; 只有 GPS 凸出 perfboard +Y 的 14.3mm 区域 下方无电池, RF 通畅
-GPS_RECESS_W = 25.0        # X 宽 (覆盖 GPS X=[1, 29] 的中段 25mm)
-GPS_RECESS_H = 13.0        # Y 窄 (限在 protrusion 区, Y=[28.185, 41.185])
-GPS_RECESS_DEPTH = 1.0     # 凹 1mm: 底壁 2mm → 1mm
+# GPS 天线 RF 窗口 (internal recess)
+# Mounting: case +Y 面朝天 (= 按键所在那面朝上, sky direction)
+# GPS 天线朝 +Y 方向, RF 窗口必须开在 back shell +Y 外壁
+# 位置约束: 避开 2 个按键孔 (Z=[-8.875, 4.005]) + seam (Z=14.005), 留 buffer
+GPS_RECESS_W = 25.0        # X 宽 (沿 case_x 方向, 覆盖 GPS X=[1, 29] 中段 25mm)
+GPS_RECESS_H = 9.0         # Z 高 (沿 case_z 方向, 在按键顶 4.005 + 0.5 到 seam 14.005 - 0.5)
+GPS_RECESS_DEPTH = 1.0     # Y 深 (朝 +Y 切入 wall material 1mm: +Y 壁 2mm → 1mm)
                            # RF 减衰 ~1-2dB (vs 2mm 全壁)
                            # (lip 壁厚 1mm, 内外两圈各 0.3 = 0.6mm 消耗, 净剩 0.4mm)
 
@@ -442,19 +442,25 @@ back_inner = (
 back = back.cut(back_inner)
 
 # ============================================================
-# GPS RF 窗口 — internal recess 在 back shell 底面 (用户实测 GPS 天线朝 -Z)
-# 把 GPS protrusion 区上方 那块 25×13mm 底壁从 2mm 削薄到 1mm, 信号衰减 ~1-2dB
-# 位置: 限在 Y > 电池顶 (Y=27.035), 避开电池金属阻挡
-# Z 范围 (back local): 从内底面 (Z=WALL=2) 朝 -Z 凿入 1mm, 留外底 1mm 厚
+# GPS RF 窗口 — internal recess 在 back shell +Y 外壁 (case +Y 面 = 朝天)
+# Mounting: case 以 +Y 朝天, GPS 天线 patch 朝 +Y 方向, RF 信号穿过 +Y 壁出去
+# 从 +Y 内壁面 (Y=inner_y/2=45.035) 朝 +Y 切入 wall material 1mm
+# Cut Y range world = [45.035, 46.035] (在 wall 内, 留 1mm 外壁防尘)
+# 位置: 避开 2 个按键孔 (Z=[-8.875, 4.005] world) + seam (Z=14.005)
 # ============================================================
-gps_recess_cx = -PCB_W / 2 + 51 + GPS_MODULE_W / 2   # = 15 (GPS X 中心)
-# Y 中心在 protrusion 区中点 (= 电池顶 27.035 跟 GPS 端 42.335 中点)
-gps_recess_cy = (pcb_top_y - 1 + pcb_top_y + 14.3) / 2  # ≈ 34.685
+gps_recess_cx_w = -PCB_W / 2 + 51 + GPS_MODULE_W / 2   # = 15 (X 中心, GPS X 中点)
+gps_recess_cz_w = (4.5 + 13.5) / 2                     # = 9.0 (Z 中心, 在按键顶 4.005+0.5 到 seam 14.005-0.5)
+# Y 中心: 切深 1mm 朝 +Y, 加 0.1mm 内腔 overlap 让 cut 干净
+gps_recess_cy_w = inner_y / 2 + GPS_RECESS_DEPTH / 2 - 0.05   # = 45.485
+
+# back local Z = world Z + case_z/2
+gps_recess_cz_back = gps_recess_cz_w + case_z / 2
+
 gps_recess_back = (
     cq.Workplane("XY")
-    .center(gps_recess_cx, gps_recess_cy)
-    .box(GPS_RECESS_W, GPS_RECESS_H, GPS_RECESS_DEPTH + 0.1, centered=(True, True, False))
-    .translate((0, 0, WALL - GPS_RECESS_DEPTH - 0.05))  # cut Z=[0.95, 2.05] back local
+    .center(gps_recess_cx_w, gps_recess_cy_w)
+    .box(GPS_RECESS_W, GPS_RECESS_DEPTH + 0.1, GPS_RECESS_H, centered=(True, True, True))
+    .translate((0, 0, gps_recess_cz_back))
 )
 back = back.cut(gps_recess_back)
 

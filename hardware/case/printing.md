@@ -220,7 +220,7 @@ lip 装入后, 凸条 (front -Y lip 外侧) 应该卡在凹槽 (back -Y inner_wa
 |---|---|---|---|
 | 4 PCB 立柱 (Φ4.5 × 23mm, aspect 5:1) | 独立柱体 + 2.15mm 侧 gap | 矩形 6.65×4.5 延伸到 ±X 内壁 | warp 风险 → ~0, pilot 周壁 X 向 2.25/4.4mm |
 | 2 corner M2 嵌件柱 (6.5×6.5 × 34mm, aspect 5.3:1) | 独立方柱 + 0.5mm/7.3mm gap | 角块 7×13.785 同时 touch +X 和 +Y 壁 | warp 风险 → ~0, 嵌件压入有更多塑料缓冲 |
-| **GPS 天线 RF 窗口** (25×13mm 区域底壁) | back shell 底壁 2mm, RF 衰减 ~2-3dB | 内凹 1mm, RF 衰减 ~1-2dB | **GPS 灵敏度 +1-2dB**, 在 back shell 底面 (= GPS 天线朝 -Z 方向, kart 安装时朝天空) |
+| **GPS 天线 RF 窗口** (25×9mm 区域 +Y 壁) | back shell +Y 外壁 2mm, RF 衰减 ~2-3dB | 内凹 1mm, RF 衰减 ~1-2dB | **GPS 灵敏度 +1-2dB**, 在 back shell +Y 外壁 (= 按键所在那一面, kart 安装时 +Y 朝天) |
 
 ## 6e. 未集成但 OK 的 free-standing features
 
