@@ -495,19 +495,31 @@ pcb_post_positions = [
 ]
 
 for px, py in pcb_post_positions:
-    # 方形立柱外形 (FDM 比圆柱稳定: 4 个垂直棱角抗翘, slicer 直线 perimeter)
-    # 内部 M2 自攻孔保持圆形 (跟螺纹匹配)
+    # 立柱 X 方向延伸到最近的内壁 (= 案 ±X 侧边内壳)
+    # 把立柱跟侧壁焊成一体 → FDM warp 风险大降, 刚度大增, slicer 出线统一
+    # X 范围: 从立柱内侧面 (远离墙) 一直到内墙表面
+    # Y 范围: 保持 PCB_POST_DIA (4.5), 中心 = py (跟 M2 螺丝对齐)
+    # Z 范围: 跟原来一致 (WALL → WALL+PCB_POST_HEIGHT)
+    sx = 1 if px > 0 else -1
+    post_x_inner_face = px - sx * PCB_POST_DIA / 2   # 远离墙的那个 X face
+    post_x_outer_face = sx * inner_x / 2             # 内墙表面 (±51)
+    post_x_dim = abs(post_x_outer_face - post_x_inner_face)   # = 6.65 mm
+    post_cx = (post_x_inner_face + post_x_outer_face) / 2     # = ±47.675
+
     post = (
         cq.Workplane("XY")
-        .center(px, py)
-        .rect(PCB_POST_DIA, PCB_POST_DIA)
+        .center(post_cx, py)
+        .rect(post_x_dim, PCB_POST_DIA)
         .extrude(PCB_POST_HEIGHT)
         .translate((0, 0, WALL))
     )
     # M2 自攻底孔 (圆形, 从立柱顶部往下钻)
+    # 钻孔位置在 (px, py) = 原洞洞板 mount hole 位置, NOT 矩形立柱中心
+    # 故 workplane center 偏移 (px - post_cx) 让 pilot 对齐 PCB 螺丝
     post = (
         post.faces(">Z")
         .workplane()
+        .center(px - post_cx, 0)
         .circle(PCB_POST_PILOT_DIA / 2)
         .cutBlind(-(PCB_POST_HEIGHT - PCB_POST_FLOOR))
     )
