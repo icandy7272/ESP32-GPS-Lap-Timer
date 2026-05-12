@@ -431,10 +431,20 @@ back_inner = (
 back = back.cut(back_inner)
 
 # 2 个 M12 按键圆孔 (后壳 +Y 顶面)
-# X 位置在洞洞板左右边缘附近 (±43)，让接线柱沿 -Y 延伸时避开电池/ESP32 X 范围
-# Z 位置: 让法兰盘上沿距前后壳接缝 ≥ 2mm
+# X 位置在洞洞板左右边缘附近 (±37)，让接线柱沿 -Y 延伸时避开电池/ESP32 X 范围
+# Z 位置: 按键孔顶边距 lip 末端 ≥ 2mm
+#   关键: 按键 THREAD (Φ11.88, 长 13mm) 装入后会沿 -Y 进入 case 内腔
+#   如果 thread Z 范围 跟 lip Z 范围 [BACK_DEPTH-LID_LIP, BACK_DEPTH] 重叠,
+#   thread 会物理撞 lip +Y 内壁 → 按键装不进去!
+#   旧公式 BACK_DEPTH - 2 - FLANGE/2 = 27.925 只 cover 法兰盘距 seam 约束,
+#   忘了 thread 跟 lip 重叠这个硬冲突 (lip 在 seam 下方 8mm Z 范围)
 btn_d = BTN_PANEL_HOLE_DIA + PRINT_TOLERANCE
-btn_z_back_local = BACK_DEPTH - 2 - BTN_FLANGE_DIA / 2  # 法兰盘上沿距 seam ≥ 2mm
+btn_z_back_local = (BACK_DEPTH - LID_LIP) - 2 - BTN_PANEL_HOLE_DIA / 2
+# = (36.84 - 8) - 2 - 6.44 = 20.4 back local = -2.435 world
+# 验证:
+#   hole 顶 (world) = 4.005, lip 底 (world) = 6.005, clearance 2mm ✓
+#   thread 顶 (world) = 3.505, lip 底 (world) = 6.005, clearance 2.5mm ✓
+#   flange 顶 (world) = 4.48, seam = 14.005, clearance 9.5mm ✓ (旧约束自动满足)
 for bx in btn_x_positions:
     btn_cyl = cyl_along_y(btn_d, WALL + 1, bx, case_y / 2 - (WALL + 1), btn_z_back_local)
     back = back.cut(btn_cyl)
