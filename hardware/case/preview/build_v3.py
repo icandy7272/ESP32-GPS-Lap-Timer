@@ -92,9 +92,25 @@ INSERT_DEPTH = 5.0
 M2_THROUGH_DIA = 2.4
 M2_HEAD_DIA = 4.5          # M2 socket head capscrew head ~4mm + clearance
 
-# Measured stack thickness (legacy 端到端粗测, 现已被分项推导取代)
-# 端到端 STACK_MEASURED_Z = 39mm vs 分项推导 40.17mm 差 1.17mm (粗测误差); 用分项推导更准
-STACK_MEASURED_Z = 39.0   # legacy - kept for documentation only
+# TFT boss (M3 self-tap into front shell, 固定 TFT 模块)
+TFT_BOSS_OD = 5.5          # TFT 螺柱外径 (M3 通孔 Φ3.4 + 周壁 ≥1mm)
+TFT_M3_PILOT_DIA = 2.5     # M3 self-tap 底孔 (= 0.83 × M3 螺纹外径 3.0)
+TFT_BOSS_FLOOR = 1.0       # M3 self-tap 底孔顶部留 1mm 实心防穿透
+
+# PCB 立柱 (M2 self-tap 固定洞洞板)
+PCB_MOUNT_HOLE_EDGE_DIST = 3.4   # 洞洞板 4 角 现有孔中心到板边距离 (实测)
+PCB_POST_DIA = 4.5         # 立柱外径. 当前 aspect 5:1 (Φ4.5 × 23mm), FDM 可能轻微 warp
+                           # 如果 prototype 立柱歪 > 1°, 改 5.5mm 增加刚度
+PCB_POST_PILOT_DIA = 1.8   # M2 self-tap 底孔 (= 0.83 × M2 螺纹外径 2.0)
+PCB_POST_FLOOR = 1.0       # M2 self-tap 底孔顶部留 1mm 实心
+
+# 外壳挂载 (cable tie / M3 螺丝 通孔, 后壳 -Z 外底面)
+MOUNT_HOLE_DIA = 4.0       # Φ4mm 通孔: 容纳 5mm 内宽 cable tie 或 M3 螺丝
+MOUNT_HOLE_OFFSET_FROM_EDGE = 4.0  # 通孔中心距 case 外缘 4mm
+                                   # (offset=5mm 会让 -Y 角 mount hole 撞 PCB post -Y; 4mm 留 0.82mm 间隙)
+
+# Stack 高度: 分项推导 (= 玻璃顶到电池底 ≈ 40.17mm)
+# 早期端到端粗测 = 39mm, 跟分项推导差 1.17mm = 粗测误差, 用分项推导更准
 
 # ============================================================
 # Derived (sandwich) — 全部分项推导, 每项都跟一个实测对应
@@ -108,7 +124,9 @@ frontside_h = TFT_BACK_TO_PERFBOARD_GAP + TFT_PCB_THICKNESS + TFT_FRONT_HEIGHT  
 # inner_z = 后壳内底 → 前壳内表面
 #   = backside_h + PCB_THICKNESS + frontside_h + AIR_GAP_TOP + AIR_GAP_BOT
 AIR_GAP_TOP = 1.0     # 玻璃顶 ↔ 前壳 +Z 内表面 空气间隙
-AIR_GAP_BOT = 0.0     # 电池底 ↔ 后壳 -Z 内表面 空气间隙 (贴底)
+AIR_GAP_BOT = 0.5     # 电池底 ↔ 后壳 -Z 内表面 空气间隙
+                      # 0.5mm 给 FDM 翘边 / 电池底面不平 / 双面胶 留余量
+                      # (原 0.0 太紧, 实际装配易卡)
 inner_z = backside_h + PCB_THICKNESS + frontside_h + AIR_GAP_TOP + AIR_GAP_BOT
 inner_y = max(TFT_PCB_H, PCB_H, BATT_LENGTH_Y) + GPS_PROTRUSION_Y + 2
 inner_x = max(TFT_PCB_W, PCB_W) + 2
@@ -117,8 +135,11 @@ case_x = inner_x + 2 * WALL
 case_y = inner_y + 2 * WALL
 case_z = inner_z + 2 * WALL
 
-# Front shell: TFT 玻璃凸 + 余 + 前壁
-FRONT_DEPTH = TFT_FRONT_HEIGHT + 5
+# Front shell depth: WALL (顶盖厚) + AIR_GAP_TOP (玻璃顶到内表面) + TFT_FRONT_HEIGHT (玻璃) + buffer
+# = 2 + 1 + 3.83 + 2 = 8.83 mm
+# Buffer 2mm 给 TFT 螺柱安装余量 (TFT PCB 正面到 lip 顶接合面之间)
+FRONT_DEPTH_BUFFER = 2.0
+FRONT_DEPTH = WALL + AIR_GAP_TOP + TFT_FRONT_HEIGHT + FRONT_DEPTH_BUFFER
 # Back shell: 跟前壳本体在 seam 处接合 (lid body bottom = back top, 世界 Z 同点 = 13.755)
 # 旧公式 = case_z - FRONT_DEPTH + LID_LIP 错误地多加了 LID_LIP, 导致后壳外壁顶部
 # 跟前壳本体在 Z=[seam, seam+LID_LIP] 区段重叠 (geometry bug). 修正后 lip 在 back
@@ -152,8 +173,6 @@ corner_boss_x = inner_x / 2 - CORNER_BOSS_DIA / 2 - 0.5
 # 现: 取 PCB_H 一半 + 余量 → 既能稳定合盖，也避开按键孔区
 corner_boss_y = PCB_H / 2 - 0.5  # = +34.5（4 角螺柱在 Y = ±34.5）
 
-# Button position Z (within front shell local coords; front shell origin at Z=0, top at Z=FRONT_DEPTH)
-btn_z_local = FRONT_DEPTH / 2
 # 按键 X 位置：避开 corner boss (X=±47.25) 且避开 GPS (X=[+1,+29])
 # 按键物理体 X = X ± 5.94 (螺纹半径)
 # X=±37 时按键 X 范围 [+31.06, +42.94]:
@@ -232,7 +251,9 @@ front = front.cut(window_cut)
 # 按键孔放后壳 +Y 面（见下方 BACK SHELL 区段）。
 
 # TFT 4 个 M3 螺柱 (从前壳 +Z 内壁朝 -Z 伸)
-tft_boss_h = TFT_FRONT_HEIGHT + 1
+# 螺柱长 = AIR_GAP_TOP (玻璃到前壳内表面间隙) + TFT_FRONT_HEIGHT (玻璃凸出 PCB)
+#       = 螺柱底端正好贴 TFT PCB 正面
+tft_boss_h = AIR_GAP_TOP + TFT_FRONT_HEIGHT
 tft_boss_top_local_z = FRONT_DEPTH - WALL
 tft_boss_bot_local_z = tft_boss_top_local_z - tft_boss_h
 for sx in (-1, 1):
@@ -242,15 +263,15 @@ for sx in (-1, 1):
         boss = (
             cq.Workplane("XY")
             .center(cx, cy)
-            .circle(5.5 / 2)
+            .circle(TFT_BOSS_OD / 2)
             .extrude(tft_boss_h)
             .translate((0, 0, tft_boss_bot_local_z))
         )
         boss = (
             boss.faces("<Z")
             .workplane()
-            .circle(2.5 / 2)  # M3 self-tap pilot
-            .cutBlind(-(tft_boss_h - 1))
+            .circle(TFT_M3_PILOT_DIA / 2)
+            .cutBlind(-(tft_boss_h - TFT_BOSS_FLOOR))
         )
         front = front.union(boss)
 
@@ -447,12 +468,9 @@ for sx in (-1, 1):
 # ============================================================
 # 洞洞板 4 角现有孔实测 (2026-05-11):
 #   ㉝ 孔径 = Φ2 mm
-#   ㉞ 孔边缘到洞洞板边沿 = 2.4 mm → 孔中心到边沿 3.4mm
-# 孔位置 (相对洞洞板中心): X = ±(50-3.4) = ±46.6, Y = ±(35-3.4) = ±31.6
-PCB_MOUNT_HOLE_OFFSET_X = PCB_W / 2 - 3.4    # = 46.6 (相对洞洞板中心)
-PCB_MOUNT_HOLE_OFFSET_Y = PCB_H / 2 - 3.4    # = 31.6
-PCB_POST_DIA = 4.5            # 立柱外径 (M2 自攻塑料柱推荐 ≥ 4mm)
-PCB_POST_PILOT_DIA = 1.8      # M2 自攻底孔 (推荐 0.85 × 螺纹外径 2.0)
+#   ㉞ 孔边缘到洞洞板边沿 = 2.4 mm → 孔中心到边沿 = PCB_MOUNT_HOLE_EDGE_DIST = 3.4mm
+PCB_MOUNT_HOLE_OFFSET_X = PCB_W / 2 - PCB_MOUNT_HOLE_EDGE_DIST    # = 46.6
+PCB_MOUNT_HOLE_OFFSET_Y = PCB_H / 2 - PCB_MOUNT_HOLE_EDGE_DIST    # = 31.6
 # 立柱高度 = backside_h (从后壳内底立到洞洞板背面贴电池处)
 PCB_POST_HEIGHT = backside_h
 
@@ -477,7 +495,7 @@ for px, py in pcb_post_positions:
         post.faces(">Z")
         .workplane()
         .circle(PCB_POST_PILOT_DIA / 2)
-        .cutBlind(-(PCB_POST_HEIGHT - 1))  # 留 1mm 底
+        .cutBlind(-(PCB_POST_HEIGHT - PCB_POST_FLOOR))
     )
     back = back.union(post)
 
@@ -551,6 +569,29 @@ back = back.cut(groove_cut)
 # 凹槽上缘 R0.2 圆角原本要做的, 但 0.4mm FDM 喷嘴印不出 < 0.4mm 圆角.
 # 切片器会量化成 0 或 1 个 layer step, 实际打印效果跟没有 fillet 一样.
 # 故省略 — 凸条自己的 40° chamfer 已提供足够的 lead-in.
+
+# ============================================================
+# 4 个外壳挂载通孔 (cable tie / M3 螺丝 通过后壳 -Z 外底面)
+# 位置: 4 个 case 角落, 避开 PCB 立柱 (X=±46.6) + corner boss (Y=+34.5)
+# Note: 这 4 个 Φ4 通孔轻微破坏防尘 seal, 但案 -Z 底面朝下,
+#       灰尘不易直接进入. kart 实际使用 OK.
+# ============================================================
+mount_hole_offset_x = case_x / 2 - MOUNT_HOLE_OFFSET_FROM_EDGE   # = 48
+mount_hole_offset_y = case_y / 2 - MOUNT_HOLE_OFFSET_FROM_EDGE   # = 42
+
+for sx in (-1, 1):
+    for sy in (-1, 1):
+        mhx = sx * mount_hole_offset_x
+        mhy = sy * mount_hole_offset_y
+        # 通孔: 穿过 back floor (Z=[0, WALL] back local), 朝 -Z 方向 cut
+        mount_hole = (
+            cq.Workplane("XY")
+            .center(mhx, mhy)
+            .circle(MOUNT_HOLE_DIA / 2)
+            .extrude(WALL + 1)
+            .translate((0, 0, -0.5))
+        )
+        back = back.cut(mount_hole)
 
 # Translate back shell to world coords
 back_world = back.translate((0, 0, -case_z / 2))
