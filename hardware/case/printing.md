@@ -212,6 +212,24 @@ lip 装入后, 凸条 (front -Y lip 外侧) 应该卡在凹槽 (back -Y inner_wa
 | 电池底贴 后壳 内底 (FDM 翘) | 已加 0.5 gap | 已经 `AIR_GAP_BOT = 0.5` ✓ |
 | 4 个 mount hole 漏灰尘 | 通孔 RTV silicone 填封 | 物理打完后封 |
 
+## 6d. 已实施的"壁体集成" (free-standing → wall-attached)
+
+为减少 FDM warp 风险, 把原本独立的瘦高 features 都跟侧壁焊接:
+
+| 特征 | 旧 | 新 | 收益 |
+|---|---|---|---|
+| 4 PCB 立柱 (Φ4.5 × 23mm, aspect 5:1) | 独立柱体 + 2.15mm 侧 gap | 矩形 6.65×4.5 延伸到 ±X 内壁 | warp 风险 → ~0, pilot 周壁 X 向 2.25/4.4mm |
+| 2 corner M2 嵌件柱 (6.5×6.5 × 34mm, aspect 5.3:1) | 独立方柱 + 0.5mm/7.3mm gap | 角块 7×13.785 同时 touch +X 和 +Y 壁 | warp 风险 → ~0, 嵌件压入有更多塑料缓冲 |
+
+## 6e. 未集成但 OK 的 free-standing features
+
+| 特征 | 现状 | 为什么不 integrate |
+|---|---|---|
+| **4 TFT 螺柱** (Φ5.5 × 4.83mm 在前壳) | 独立短粗 cylinder | aspect 0.88:1, 短粗 boss FDM 没 warp 风险 |
+| **4 电池围栏墙** (中间空间, 5mm 高) | 围一个矩形 in cavity | 距侧壁 12-13mm 太远, 桥接成本高于收益 |
+| **-Y 电池围栏 bottom** | 1.3mm 嵌进 case -Y 外壁 (实际 1mm 在 cavity) | 已基本 merge 进 case wall, 移除影响小 |
+| **lip + ridge** | grown from front body | 已经是 monolithic, 无需 integrate |
+
 ## 7. 典型打印时间 (参考)
 
 | 模式 | front | back | 总 |

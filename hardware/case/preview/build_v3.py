@@ -455,21 +455,34 @@ for bx in btn_x_positions:
 corner_boss_h_back = BACK_DEPTH - WALL - 0.5  # boss 顶距 seam 0.5mm
 for sx in (-1, 1):
     sy = +1  # 只在 +Y 一侧
-    cx = sx * corner_boss_x
-    cy = sy * corner_boss_y
-    # 方形外形 (FDM 稳定, 嵌件压入时方壁受力均匀, 不会椭圆变形)
-    # 内部嵌件孔保持圆形 (匹配 Φ3.5 黄铜嵌件)
+    cx = sx * corner_boss_x   # ±47.25 (嵌件中心 X)
+    cy = sy * corner_boss_y   # +34.5  (嵌件中心 Y)
+
+    # 把 corner boss 扩展为"角块" — 同时 touch +X 和 +Y 两面内壁
+    # 跟 PCB 立柱一样 integrate 到壁体, 消除 5.3:1 aspect 的独立瘦柱体
+    # FDM warp 风险大降, 嵌件压入时角块给周围更多塑料缓冲
+    # 嵌件孔仍在原 (cx, cy), 用 workplane offset 维持
+    block_x_inner = cx - sx * CORNER_BOSS_DIA / 2   # 离 +X 壁远的那个 X face = ±44
+    block_x_outer = sx * inner_x / 2                # +X 内壁 = ±51 (0.5mm 跨度)
+    block_y_inner = cy - sy * CORNER_BOSS_DIA / 2   # 离 +Y 壁远的那个 Y face = +31.25
+    block_y_outer = sy * inner_y / 2                # +Y 内壁 = +45.035 (7.285mm 跨度)
+    block_x_dim = abs(block_x_outer - block_x_inner)   # = 7.00 mm
+    block_y_dim = abs(block_y_outer - block_y_inner)   # = 13.785 mm
+    block_cx = (block_x_inner + block_x_outer) / 2     # = ±47.5
+    block_cy = (block_y_inner + block_y_outer) / 2     # = +38.1425
+
     boss = (
         cq.Workplane("XY")
-        .center(cx, cy)
-        .rect(CORNER_BOSS_DIA, CORNER_BOSS_DIA)
+        .center(block_cx, block_cy)
+        .rect(block_x_dim, block_y_dim)
         .extrude(corner_boss_h_back)
         .translate((0, 0, WALL))
     )
-    # Drill M2 insert pilot from top (圆形)
+    # M2 黄铜嵌件孔 (圆形, 在原 boss 中心位置 (cx, cy), 不在 block 中心)
     boss = (
         boss.faces(">Z")
         .workplane()
+        .center(cx - block_cx, cy - block_cy)
         .circle(INSERT_HOLE_DIA / 2)
         .cutBlind(-INSERT_DEPTH)
     )
