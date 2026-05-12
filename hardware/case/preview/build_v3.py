@@ -83,6 +83,12 @@ LID_LIP_GAP_BOT = 0.20     # 底部 (-Y, 有公凸条+母凹槽) 双边总间隙
 PRINT_TOLERANCE = 0.4
 TFT_BEZEL_INSET = 1.0
 LIP_END_CHAMFER = 0.3      # lip 末端 4 边 C0.3 倒角 — FDM 装配 lead-in
+
+# GPS 天线上方 RF 窗口 (internal recess, 不改外观)
+GPS_RECESS_W = 25.0        # X 宽 (覆盖典型 GPS ceramic patch ≤25mm)
+GPS_RECESS_H = 25.0        # Y 宽
+GPS_RECESS_DEPTH = 1.0     # 凹 1mm: 顶壁 2mm → 1mm (FDM PETG 1mm 可靠)
+                           # RF 减衰 ~1-2dB (vs 2mm 全壁)
                            # (lip 壁厚 1mm, 内外两圈各 0.3 = 0.6mm 消耗, 净剩 0.4mm)
 
 # v3 new
@@ -246,6 +252,22 @@ window_cut = (
     .translate((glass_center_x, glass_center_y, FRONT_DEPTH - WALL / 2))
 )
 front = front.cut(window_cut)
+
+# GPS 天线 RF 窗口 — internal recess (从 cavity 一侧凹, 不破坏外观)
+# 把 GPS 天线正上方那 25×25mm 区域的顶壁从 2mm 削薄到 1mm, 信号衰减 ~1-2dB
+# 位置: GPS 中心 (世界 X=15, Y=28.335) — 计算见下
+# Z 范围 (front local): [FRONT_DEPTH-WALL, FRONT_DEPTH-WALL+GPS_RECESS_DEPTH]
+#                      = [6.83, 7.83] (从 cavity 顶面向 +Z 凿入 1mm)
+gps_module_cx = -PCB_W / 2 + 51 + GPS_MODULE_W / 2   # = 15 (world X)
+gps_module_cy = pcb_top_y - (GPS_MODULE_H - 14.3) + GPS_MODULE_H / 2  # = 28.335 (world Y)
+# (GPS 模块 14.3mm 突出 pcb_top, 28-14.3=13.7mm 在 pcb 上, 中心 Y = pcb_top + 0.3)
+gps_recess = (
+    cq.Workplane("XY")
+    .center(gps_module_cx, gps_module_cy)
+    .box(GPS_RECESS_W, GPS_RECESS_H, GPS_RECESS_DEPTH + 0.1, centered=(True, True, False))
+    .translate((0, 0, FRONT_DEPTH - WALL - 0.05))
+)
+front = front.cut(gps_recess)
 
 # 注意：按键孔不在前壳上！前壳深度 8.83mm < 按键孔直径 13.4mm
 # 按键孔放后壳 +Y 面（见下方 BACK SHELL 区段）。
