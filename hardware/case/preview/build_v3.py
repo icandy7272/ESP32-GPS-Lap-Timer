@@ -158,7 +158,13 @@ BACK_DEPTH = case_z - FRONT_DEPTH
 
 # Z key positions in world coords
 back_inner_z = -case_z / 2 + WALL
-pcb_back_face_z = back_inner_z + backside_h
+# 修复 (2026-05-13): AIR_GAP_BOT 之前只在 inner_z 公式里加了 0.5mm 把 case 撑高,
+# 但 pcb_back_face_z = back_inner_z + backside_h 没加, 导致:
+#   1. 电池底直接贴后内壁 (FDM 翘边后无余量, 装配易卡)
+#   2. GPS 天线 -Z 边沉入后壁 0.55mm (物理冲突)
+#   3. TFT_BACK_TO_PERFBOARD_GAP CAD vs 实测差 0.5mm
+# 修复后 pcb_back_face_z 抬高 0.5mm, 三个问题同时解决.
+pcb_back_face_z = back_inner_z + AIR_GAP_BOT + backside_h
 pcb_center_z = pcb_back_face_z + PCB_THICKNESS / 2
 pcb_front_face_z = pcb_back_face_z + PCB_THICKNESS
 
@@ -186,17 +192,26 @@ glass_center_x = tft_pcb_center_x + glass_offset_x
 glass_center_y = tft_pcb_center_y + glass_offset_y
 
 # 4-corner boss positions (X/Y)
-corner_boss_x = inner_x / 2 - CORNER_BOSS_DIA / 2 - 0.5
+# corner_boss_x 内嵌足够距离, 让 L-cut 后嵌件外侧壁 ≥ 2mm (FDM 安全壁厚)
+# 旧 inner_x/2 - CORNER_BOSS_DIA/2 - 0.5 = ±47.25 → L-cut (X=±49.63) 后嵌件外
+#    侧仅 0.63mm 壁 (Φ3.5 嵌件外缘 ±49.0), 热熔嵌件压入易变形/开裂
+# 新 inner_x/2 - CORNER_BOSS_DIA/2 - 2.25 = ±45.5 → 嵌件外缘 ±47.25, L-cut 内
+#    边 ±49.63, 外侧壁 2.38mm (= 6 perimeter @ 0.4mm 喷嘴) ✓
+corner_boss_x = inner_x / 2 - CORNER_BOSS_DIA / 2 - 2.25
 # corner_boss_y 故意往 -Y 一头挪，让 +Y 内壁附近的按键孔不被 corner boss 挡住
 # 原: inner_y/2 - CORNER_BOSS_DIA/2 - 0.5 = +43.29 → 按键孔撞 corner boss
 # 现: 取 PCB_H 一半 + 余量 → 既能稳定合盖，也避开按键孔区
 corner_boss_y = PCB_H / 2 - 0.5  # = +34.5（4 角螺柱在 Y = ±34.5）
 
-# 按键 X 位置：避开 corner boss (X=±47.25) 且避开 GPS (X=[+1,+29])
-# 按键物理体 X = X ± 5.94 (螺纹半径)
-# X=±37 时按键 X 范围 [+31.06, +42.94]:
-#   - vs corner boss [+44, +50.5]: 不重叠，余 1.06mm ✓
-#   - vs GPS [+1, +29]: 不重叠，余 2.06mm ✓
+# 按键 X 位置：避开 corner boss 圆柱 + GPS (X=[+1,+29])
+# 按键孔 cut 范围 X = ±37 ± 6.64 (Φ12.88 + 0.4 公差, R=6.64)
+#   = [+30.36, +43.64]
+#   - vs corner boss 圆柱 (中心 ±45.5, +34.5, R=3.25):
+#       Y 不重叠 (boss Y max=37.75 vs 按键 Y min=44.04, 间隙 6.29mm) ✓
+#   - vs corner block 矩形 (X=±[42.25, 51], Y=[31.25, 45.04]):
+#       会切 block +Y+X 角一小块 (X=[42.25, 43.64] × Y=[44.04, 45.04]
+#       × Z=[-9.08, +4.21]), 嵌件 pilot Z=[8.5, 13.5], 不撞嵌件 ✓
+#   - vs GPS [+1, +29]: X 间隙 1.36mm ✓
 btn_x_positions = (-37.0, +37.0)
 
 print(f"case outer: {case_x:.2f} x {case_y:.2f} x {case_z:.2f}")
@@ -523,20 +538,20 @@ for bx in btn_x_positions:
 corner_boss_h_back = BACK_DEPTH - WALL - 0.5  # boss 顶距 seam 0.5mm
 for sx in (-1, 1):
     sy = +1  # 只在 +Y 一侧
-    cx = sx * corner_boss_x   # ±47.25 (嵌件中心 X)
-    cy = sy * corner_boss_y   # +34.5  (嵌件中心 Y)
+    cx = sx * corner_boss_x   # ±45.5 (嵌件中心 X)
+    cy = sy * corner_boss_y   # +34.5 (嵌件中心 Y)
 
     # 把 corner boss 扩展为"角块" — 同时 touch +X 和 +Y 两面内壁
-    # 跟 PCB 立柱一样 integrate 到壁体, 消除 5.3:1 aspect 的独立瘦柱体
-    # FDM warp 风险大降, 嵌件压入时角块给周围更多塑料缓冲
+    # 跟 PCB 立柱一样 integrate 到壁体, 消除独立瘦柱体的 FDM warp 风险
+    # 嵌件压入时角块给周围更多塑料缓冲
     # 嵌件孔仍在原 (cx, cy), 用 workplane offset 维持
-    block_x_inner = cx - sx * CORNER_BOSS_DIA / 2   # 离 +X 壁远的那个 X face = ±44
-    block_x_outer = sx * inner_x / 2                # +X 内壁 = ±51 (0.5mm 跨度)
+    block_x_inner = cx - sx * CORNER_BOSS_DIA / 2   # 离 ±X 壁远的那个 X face = ±42.25
+    block_x_outer = sx * inner_x / 2                # ±X 内壁 = ±51 (8.75mm 跨度)
     block_y_inner = cy - sy * CORNER_BOSS_DIA / 2   # 离 +Y 壁远的那个 Y face = +31.25
-    block_y_outer = sy * inner_y / 2                # +Y 内壁 = +45.035 (7.285mm 跨度)
-    block_x_dim = abs(block_x_outer - block_x_inner)   # = 7.00 mm
+    block_y_outer = sy * inner_y / 2                # +Y 内壁 = +45.035 (13.785mm 跨度)
+    block_x_dim = abs(block_x_outer - block_x_inner)   # = 8.75 mm
     block_y_dim = abs(block_y_outer - block_y_inner)   # = 13.785 mm
-    block_cx = (block_x_inner + block_x_outer) / 2     # = ±47.5
+    block_cx = (block_x_inner + block_x_outer) / 2     # = ±46.625
     block_cy = (block_y_inner + block_y_outer) / 2     # = +38.1425
 
     boss = (
@@ -560,13 +575,18 @@ for sx in (-1, 1):
 # Corner block lip-passage clearance — cut a notch at each +Y corner block's
 # outer corner (±X +Y), letting the front shell lip slide past during assembly.
 #
-# 没这个 cut 的话: lip 是 ring 形 (1mm 壁), Z=[5.755, 14.005] world.
-# Lip 的 +X+Y 和 -X+Y 两个角材料 (~1mm × 1mm cross section, 8mm 高) 跟 corner
-# block X-Y 投影 [44, 51]×[31.25, 45.035] 在 +Y 角完全重叠 → 装不进去.
+# 没这个 cut 的话: lip 是 ring 形 (1mm 壁), Z=[6.005, 14.005] world.
+# Lip 的 +X+Y 和 -X+Y 两个角材料跟 corner block X-Y 投影
+# [42.25, 51]×[31.25, 45.035] 在 +Y 角完全重叠 → 装不进去.
 #
-# Cut 尺寸 (per corner): 1.37 × 1.37 × 9 mm, 留 0.3mm 内侧间隙 + 0.07mm 滑动 fit.
-# M2 嵌件 pilot 在 (±47.25, +34.5) — 离 cut 区域 X 方向 0.8mm / Y 方向 7.65mm,
-# pilot 100% 保留, corner block 下半 (Z < lip末端) 仍完整.
+# Cut 形状 (per corner): L 形 = A cut (X 壁过道) + B cut (+Y 壁过道)
+#   A cut: X=[49.63, 51] × Y=[31.05, 45.235] × Z=[5.505, 14.505] (1.37mm 薄条)
+#   B cut: X=[42.05, 51.2] × Y=[43.665, 45.035] × Z=[5.505, 14.505] (1.37mm 薄条)
+# Lip wall 内缘 + 0.3mm LIP_PASS_CLEAR 余量, 配合 0.07mm 滑动 fit.
+# M2 嵌件 pilot 在 (±45.5, +34.5):
+#   - vs A cut 外侧壁: X 间隙 2.38mm (= 49.63 - (45.5 + 1.75)) ✓ FDM 安全壁厚
+#   - vs B cut 外侧壁: Y 间隙 7.42mm (= 43.665 - (34.5 + 1.75)) ✓
+# pilot 100% 保留, corner block 下半 (Z < 5.5) 仍完整.
 # ============================================================
 LIP_PASS_CLEAR = 0.3   # cut 内侧距 lip 壁内缘的额外间隙 (FDM tolerance 余量)
 
@@ -591,7 +611,7 @@ cut_z_dim       = cut_z_top_back - cut_z_bot_back
 
 for sx in (-1, 1):
     # Block bounds (sign-aware)
-    block_x_inner_world = sx * (corner_boss_x - CORNER_BOSS_DIA / 2)  # ±44
+    block_x_inner_world = sx * (corner_boss_x - CORNER_BOSS_DIA / 2)  # ±42.25
     block_x_outer_world = sx * inner_x / 2                             # ±51
     block_y_inner_world = corner_boss_y - CORNER_BOSS_DIA / 2          # +31.25
     block_y_outer_world = inner_y / 2                                  # +45.035
@@ -634,8 +654,10 @@ for sx in (-1, 1):
 #   ㉞ 孔边缘到洞洞板边沿 = 2.4 mm → 孔中心到边沿 = PCB_MOUNT_HOLE_EDGE_DIST = 3.4mm
 PCB_MOUNT_HOLE_OFFSET_X = PCB_W / 2 - PCB_MOUNT_HOLE_EDGE_DIST    # = 46.6
 PCB_MOUNT_HOLE_OFFSET_Y = PCB_H / 2 - PCB_MOUNT_HOLE_EDGE_DIST    # = 31.6
-# 立柱高度 = backside_h (从后壳内底立到洞洞板背面贴电池处)
-PCB_POST_HEIGHT = backside_h
+# 立柱高度 = AIR_GAP_BOT + backside_h
+# 立柱顶 (back local Z = WALL + PCB_POST_HEIGHT) 到达 pcb_back_face_z 世界坐标
+# 配合 line 161 修复 AIR_GAP_BOT 应用一致性 (旧公式只用 backside_h, 立柱顶差 0.5mm)
+PCB_POST_HEIGHT = AIR_GAP_BOT + backside_h
 
 # 4 个立柱位置 (世界坐标)
 pcb_post_positions = [
