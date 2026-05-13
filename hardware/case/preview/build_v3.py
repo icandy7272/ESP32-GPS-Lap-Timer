@@ -858,12 +858,18 @@ for sx in (-1, 1):
     for sy in (-1, 1):
         mhx = sx * mount_hole_offset_x
         mhy = sy * mount_hole_offset_y
-        # 通孔: 贯穿整个 back shell Z 高度, 让 +Y 角的 corner block 也被开 Φ4 通道
+        # 通孔长度 sy-dependent:
+        #   +Y 角: 贯穿整个 back shell 高度, 让 +Y 角的 corner block 也被开 Φ4 通道
+        #   -Y 角: 只贯穿 back floor (WALL+1=3mm), 避免向上切穿防翘 groove
+        #          (groove world Z=[10.905, 12.105] 在 -Y 内壁 Y=[-45.385, -45.035]
+        #           会跟 -Y mount hole Y 范围 [-45.535, -41.535] 重叠, 长贯穿会
+        #           在两 -Y 角各打断 4mm groove, 防翘 ridge 失去咬合)
+        cut_length = (BACK_DEPTH + 1) if sy == +1 else (WALL + 1)
         mount_hole = (
             cq.Workplane("XY")
             .center(mhx, mhy)
             .circle(MOUNT_HOLE_DIA / 2)
-            .extrude(BACK_DEPTH + 1)
+            .extrude(cut_length)
             .translate((0, 0, -0.5))
         )
         back = back.cut(mount_hole)
