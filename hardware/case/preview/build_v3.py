@@ -572,20 +572,20 @@ btn_z_back_local = (BACK_DEPTH - LID_LIP) - BTN_TO_LIP_END_GAP - btn_d / 2
 BTN_CUT_LENGTH = BTN_BACKSIDE_DEPTH + 1   # = 14mm
 
 # 六角螺帽内腔台阶孔 (hex nut clearance recess)
-# 用户实测 (2026-05-13): M12 按键螺帽六角 13.88mm across flats
-#   → R_corner = 6.94 / cos(30°) = 8.01mm, 对角直径 16.03mm
-# 螺帽对角伸到 X=±37+8.01 = ±45.01, 比 corner block X 边 ±42.25 多 2.76mm,
-#   塞不进 Φ13.28 按键孔 (R 6.64). 必须开 Φ16.5 内腔台阶孔, 让螺帽从内腔装入
+# 用户实测 (2026-05-13): M12 按键螺帽六角对角直径 15.67mm
+#   → R_corner = 7.835mm, R_flat = 6.785mm, 对边 13.57mm
+# 螺帽对角伸到 X=±37+7.835 = ±44.835, 比 corner block X 边 ±42.25 多 2.585mm,
+#   塞不进 Φ13.28 按键孔 (R 6.64). 必须开 Φ16.2 内腔台阶孔, 让螺帽从内腔装入
 #   并旋转拧紧.
 # Recess 几何:
-#   Φ = 16.5 (= 对角 16.03 + 0.5mm tolerance, 任意旋转方向都装得下)
+#   Φ = 16.2 (= 对角 15.67 + 0.53mm tolerance, 任意旋转方向都装得下)
 #   Y 深 = 5mm (= 螺帽厚 ~2mm + 3mm 装配/紧固余量)
 #   Y 范围 = [case_y/2 - WALL - 5, case_y/2 - WALL] = [40.035, 45.035]
 # 副作用:
-#   切 corner block 在 X=[42.25, 45.26] × Y=[40.035, 45.035] × Z=[-11.79, 4.72]
-#   = ~248 mm³ 体积 (~6% block, OK)
-#   嵌件 pilot Z=[8.5, 13.5], recess Z 上沿 4.72, Z 间隙 3.78mm, 嵌件不受影响
-BTN_NUT_RECESS_OD = 16.5
+#   切 corner block 在 X=[42.25, 45.1] × Y=[40.035, 45.035] × Z=[-11.64, 4.57]
+#   = ~232 mm³ 体积 (~5.5% block, OK)
+#   嵌件 pilot Z=[8.5, 13.5], recess Z 上沿 4.57, Z 间隙 3.93mm, 嵌件不受影响
+BTN_NUT_RECESS_OD = 16.2
 BTN_NUT_RECESS_DEPTH = 5.0
 for bx in btn_x_positions:
     # 主按键孔 (Φ13.28, 14mm 长穿 +Y 壁 + 内腔通道)
