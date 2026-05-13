@@ -1,18 +1,28 @@
 """
 ESP32 GPS Lap Timer enclosure v3 — front + back shells, sealed, with lip slide-fit.
 
+Mounting orientation (in kart):
+  - +Y face (with 2 M12 button holes) points UP toward sky
+  - +Z face (with TFT window) faces driver horizontally
+  - GPS antenna patch on perfboard top edge, antenna face → +Y
+
 Topology:
-  - Front shell (~9mm deep) — TFT window, 2 button holes on +Y face,
-    4 TFT M3 bosses, lip ring on -Z edge.
-  - Back shell (~40mm deep) — solid 5 faces, 4 corner bosses with M2
-    brass-insert pilot holes, accepts front-shell lip.
+  - Front shell (~9mm deep) — TFT window on +Z face, 4 TFT M3 bosses,
+    lip ring (LID_LIP=8mm) on -Z edge, 2 M2 through-holes on +Y corners
+    with counter-bores.
+  - Back shell (~37mm deep) — 5 solid faces, 2 corner bosses on +Y side
+    with M2 brass-insert pilot holes, GPS RF window on +Y outer wall,
+    2 M12 button holes on +Y face, 4 PCB self-tap posts inside, 4 cable-tie
+    mount holes through floor (2 +Y holes vent through corner blocks).
+    Anti-warp: 1× ridge on front lip -Y / 1× groove on back -Y wall.
 
 Assembly:
   1. M3 screws fix TFT to front shell (4× M3×6 self-tap).
-  2. Perfboard slides into back shell.
-  3. Front shell lip slides into back shell, mating connectors align.
-  4. M2 machine screws (4×) thread from front shell through to back-shell
-     brass inserts (heat-set into PLA/PETG).
+  2. Perfboard slides into back shell, 4× M2 self-tap into PCB posts.
+  3. M12 buttons screw into back shell +Y face (panel mount).
+  4. Front shell lip slides into back shell, mating connectors align.
+  5. M2 machine screws (2× on +Y corners) thread from front through
+     to back-shell brass inserts (heat-set into PLA/PETG).
 
 All measurements per parameters.md / parameters.csv (verified 2026-05-11).
 """
@@ -93,7 +103,6 @@ GPS_RECESS_DEPTH = 1.0     # Y 深 (朝 +Y 切入 wall material 1mm, +Y 壁 2mm 
                            # RF 减衰 ~1-2dB (vs 2mm 全壁)
 GPS_ANTENNA_SIZE = 28.0    # 天线 28×28 (用户给的)
 GPS_ANTENNA_Z_ABOVE_PCB_FRONT = 2.84  # 天线 +Z 边距 perfboard 正面 (用户实测)
-                           # (lip 壁厚 1mm, 内外两圈各 0.3 = 0.6mm 消耗, 净剩 0.4mm)
 
 # v3 new
 CORNER_BOSS_DIA = 6.5      # 4-corner screw boss OD
@@ -116,8 +125,13 @@ PCB_POST_FLOOR = 1.0       # M2 self-tap 底孔顶部留 1mm 实心
 
 # 外壳挂载 (cable tie / M3 螺丝 通孔, 后壳 -Z 外底面)
 MOUNT_HOLE_DIA = 4.0       # Φ4mm 通孔: 容纳 5mm 内宽 cable tie 或 M3 螺丝
-MOUNT_HOLE_OFFSET_FROM_EDGE = 4.0  # 通孔中心距 case 外缘 4mm
-                                   # (offset=5mm 会让 -Y 角 mount hole 撞 PCB post -Y; 4mm 留 0.82mm 间隙)
+MOUNT_HOLE_OFFSET_FROM_EDGE = 3.5  # 通孔中心距 case 外缘 3.5mm
+                                   # 修复 (2026-05-13): 4 → 3.5
+                                   #   旧 4mm 让 -Y mount hole Y=-43.035, hole +Y 边 -41.035
+                                   #   距 -Y PCB post -Y 边 -40.815 仅 0.22mm (codex 抓的, 旧注释
+                                   #   说 0.82mm 是算错). 改 3.5 后 hole +Y 边 -41.535,
+                                   #   间隙 0.72mm (= 2 perimeter @ 0.4mm 喷嘴, FDM 临界但可接受).
+                                   #   外侧壁仍有 3.5 - 2 = 1.5mm 厚 (3-4 perimeter).
 
 # Stack 高度: 分项推导 (= 玻璃顶到电池底 ≈ 40.17mm)
 # 早期端到端粗测 = 39mm, 跟分项推导差 1.17mm = 粗测误差, 用分项推导更准
@@ -134,9 +148,13 @@ frontside_h = TFT_BACK_TO_PERFBOARD_GAP + TFT_PCB_THICKNESS + TFT_FRONT_HEIGHT  
 # inner_z = 后壳内底 → 前壳内表面
 #   = backside_h + PCB_THICKNESS + frontside_h + AIR_GAP_TOP + AIR_GAP_BOT
 AIR_GAP_TOP = 1.0     # 玻璃顶 ↔ 前壳 +Z 内表面 空气间隙
-AIR_GAP_BOT = 0.5     # 电池底 ↔ 后壳 -Z 内表面 空气间隙
-                      # 0.5mm 给 FDM 翘边 / 电池底面不平 / 双面胶 留余量
-                      # (原 0.0 太紧, 实际装配易卡)
+AIR_GAP_BOT = 0.7     # 电池底 ↔ 后壳 -Z 内表面 空气间隙
+                      # 修复 (2026-05-13): 0.5 → 0.7
+                      #   原 0.5 让 GPS 天线 -Z 边距后内壁差 0.05mm 是 nominal hard clash
+                      #   (codex review 抓的). 0.7 给 GPS 底 +0.15mm 余量, 电池仍有 0.7mm
+                      #   FDM 翘边间隙. 数学约束: backside_h + PCB_THICKNESS +
+                      #   GPS_ANTENNA_Z_ABOVE_PCB_FRONT + AIR_GAP_BOT >= GPS_ANTENNA_SIZE
+                      #   即 23.11 + 1.5 + 2.84 + AIR_GAP_BOT >= 28 → AIR_GAP_BOT >= 0.55
 inner_z = backside_h + PCB_THICKNESS + frontside_h + AIR_GAP_TOP + AIR_GAP_BOT
 inner_y = max(TFT_PCB_H, PCB_H, BATT_LENGTH_Y) + GPS_PROTRUSION_Y + 2
 inner_x = max(TFT_PCB_W, PCB_W) + 2
@@ -150,7 +168,7 @@ case_z = inner_z + 2 * WALL
 # Buffer 2mm 给 TFT 螺柱安装余量 (TFT PCB 正面到 lip 顶接合面之间)
 FRONT_DEPTH_BUFFER = 2.0
 FRONT_DEPTH = WALL + AIR_GAP_TOP + TFT_FRONT_HEIGHT + FRONT_DEPTH_BUFFER
-# Back shell: 跟前壳本体在 seam 处接合 (lid body bottom = back top, 世界 Z 同点 = 13.755)
+# Back shell: 跟前壳本体在 seam 处接合 (lid body bottom = back top, 世界 Z 同点 ≈ 14.1)
 # 旧公式 = case_z - FRONT_DEPTH + LID_LIP 错误地多加了 LID_LIP, 导致后壳外壁顶部
 # 跟前壳本体在 Z=[seam, seam+LID_LIP] 区段重叠 (geometry bug). 修正后 lip 在 back
 # inner cavity 里, back 外壁顶面 = lid body 底面 = seam.
@@ -244,6 +262,39 @@ def cyl_along_y(diameter, length, x, y_min, z):
         .rotate((0, 0, 0), (1, 0, 0), -90)
         .translate((x, y_min, z))
     )
+
+
+def d_shape_along_y(diameter, length, x, y_min, z_center):
+    """FDM-friendly D-shape hole, axis along +Y. Cross-section in X-Z plane:
+        - bottom half (Z < z_center): half-circle of R = diameter/2
+        - top half (Z >= z_center): rectangle 2R × R (= 2R bridge on top)
+
+    Printed in floor-down orientation (Z stacks along print bed normal):
+        - Below center: hole narrows toward bottom (cylinder taper, FDM-OK)
+        - Above center: vertical walls (0° overhang) + horizontal bridge 2R wide
+    Inscribed circle = full diameter (M12 button thread fits identically to a
+    cylinder cut).
+
+    Use this instead of cyl_along_y when a horizontal hole goes through a wall
+    that is vertical in print orientation (e.g. back shell +Y wall).
+    """
+    r = diameter / 2
+    # Full cylinder (provides bottom half-circle naturally)
+    cyl = (
+        cq.Workplane("XY")
+        .circle(r)
+        .extrude(length)
+        .rotate((0, 0, 0), (1, 0, 0), -90)
+        .translate((x, y_min, z_center))
+    )
+    # Rectangular box above z_center extends the cut to a flat top
+    # X range [x-r, x+r], Y range [y_min, y_min+length], Z range [z_center, z_center+r]
+    upper = (
+        cq.Workplane("XY")
+        .box(2 * r, length, r, centered=(False, False, False))
+        .translate((x - r, y_min, z_center))
+    )
+    return cyl.union(upper)
 
 
 def cyl_along_x(diameter, length, x_min, y, z):
@@ -369,7 +420,7 @@ lip_inner_cut = (
 )
 lip_ring = lip_outer_box.cut(lip_inner_cut)
 
-# lip 末端 C0.5 倒角: 装配 lead-in, 避免 lip 末端 sharp 角撞 base inner_wall 入口边
+# lip 末端 C0.3 倒角 (= LIP_END_CHAMFER): 装配 lead-in, 避免 lip 末端 sharp 角撞 base inner_wall 入口边
 # 必须在 union 前 + M2 通孔 cut 前做, 否则 faces("<Z") 会包含 M2 孔的圆边, chamfer 失败
 # 这会倒 lip 末端 outer + inner 两圈 (8 边), inner 圈在 lip 内部, 不影响装配
 try:
@@ -410,9 +461,9 @@ for sx in (-1, 1):
 #   - 沿 lip 底部 -Y 外侧壁通长一条 (X 方向跨 lip 底部全宽)
 #   - 高度 (径向, 朝 -Y): RIDGE_HEIGHT = 0.3 mm  (精确)
 #   - 上下厚度 (Z 方向): RIDGE_Z_THICK = 1.0 mm  (跟 lip 主体一样)
-#   - 下边缘 40° 导入斜面 (chamfer)
+#   - 下边缘 40° 导入斜面 (C0.29 chamfer)
 #   - 上边缘 0° 水平面 (锁紧面)
-#   - 根部 R0.3 圆角 (上边外角)
+#   - 根部 R0.29 圆角 (上边外角, 受 0.3mm 凸条高度限制不能取满 0.3)
 #
 # 后壳 (-Y 底部) 母凹槽:
 #   - 沿 -Y inner_wall 通长一条
@@ -430,8 +481,11 @@ RIDGE_HEIGHT = 0.3              # 公凸条径向凸出量 (精确, 朝 -Y)
 RIDGE_Z_THICK = 1.0             # 公凸条 Z 上下厚度 (= lip 主体厚度)
 RIDGE_TOP_FROM_LIP_TOP = 2.0    # 凸条上边距 lip 顶面 (Z=0 front local) 2.0mm 朝 -Z
 RIDGE_BOT_FROM_LIP_TOP = 3.0    # 凸条下边距 lip 顶面 3.0mm 朝 -Z (= TOP + Z_THICK)
-RIDGE_CHAMFER_DROP = 0.3        # 下缘 40° 导入: 0.3 distance ≈ 40° (Δh=0.3 / Δv=0.358)
-RIDGE_ROOT_FILLET = 0.3         # 根部 R0.3
+# 修复 (2026-05-13): 旧代码 chamfer/fillet 用 `0.3 - 0.01` 避免 cadquery 在
+# face 宽度 = 凸条高 = 0.3 时 chamfer 整个面引起退化几何. 实际值是 0.29mm,
+# 跟"C0.3 / R0.3"注释不一致 (codex 抓的). 改: 常量直接定 0.29, 代码不再减.
+RIDGE_CHAMFER_DROP = 0.29       # 下缘 40° 导入 (≈ 0.29 distance, ≈ 40°)
+RIDGE_ROOT_FILLET = 0.29        # 根部 R0.29 (受限于凸条 0.3mm 高, 不能取满 0.3)
 
 GROOVE_DEPTH = 0.35             # 母凹槽径向深度 (= 凸条高 + 0.05 余量)
 GROOVE_Z_THICK = 1.2            # 母凹槽 Z 上下宽度 (= 凸条厚 + 0.2 余量)
@@ -464,13 +518,13 @@ ridge = (
 
 # 下缘 40° 导入斜面: 选 ridge 的 <Y 面 (-Y 外端面) 的 <Z 边 (最下边)
 try:
-    ridge = ridge.faces("<Y").edges("<Z").chamfer(RIDGE_CHAMFER_DROP - 0.01)
+    ridge = ridge.faces("<Y").edges("<Z").chamfer(RIDGE_CHAMFER_DROP)
 except Exception as e:
     print(f"[ridge chamfer skipped] {e}")
 
-# 根部 R0.3 圆角: 选 ridge 的 <Y 面 的 >Z 边 (上边外角, 跟 lip 体连接处)
+# 根部 R0.29 圆角: 选 ridge 的 <Y 面 的 >Z 边 (上边外角, 跟 lip 体连接处)
 try:
-    ridge = ridge.faces("<Y").edges(">Z").fillet(RIDGE_ROOT_FILLET - 0.01)
+    ridge = ridge.faces("<Y").edges(">Z").fillet(RIDGE_ROOT_FILLET)
 except Exception as e:
     print(f"[ridge root fillet skipped] {e}")
 
@@ -522,19 +576,30 @@ back = back.cut(gps_recess_back)
 #   旧公式 BACK_DEPTH - 2 - FLANGE/2 = 27.925 只 cover 法兰盘距 seam 约束,
 #   忘了 thread 跟 lip 重叠这个硬冲突 (lip 在 seam 下方 8mm Z 范围)
 btn_d = BTN_PANEL_HOLE_DIA + PRINT_TOLERANCE
-btn_z_back_local = (BACK_DEPTH - LID_LIP) - 2 - BTN_PANEL_HOLE_DIA / 2
-# = (36.84 - 8) - 2 - 6.44 = 20.4 back local = -2.435 world
+# 修复 (2026-05-13): 旧公式两个 bug
+#   (a) 用 BTN_PANEL_HOLE_DIA/2 而非 btn_d/2 算 cut top, 实际 cut top 比公式高 0.2mm
+#   (b) 2mm gap 只 cover 到 lip末端, 没 cover 到 L-cut 底 (= lip末端 - 0.5)
+#       结果: 按键 cut 顶距 L-cut 底只剩 1.30mm 桥 (codex 抓的)
+# 新公式: gap 3.0mm 到 lip末端, 留 2.5mm 桥到 L-cut 底, 用 btn_d/2 正确算 cut 上沿
+BTN_TO_LIP_END_GAP = 3.0   # 按键 cut 顶 ↔ lip末端 Z 距离 (= 桥 2.5mm + L-cut buffer 0.5mm)
+btn_z_back_local = (BACK_DEPTH - LID_LIP) - BTN_TO_LIP_END_GAP - btn_d / 2
+# AIR_GAP_BOT=0.7 时: (37.04 - 8) - 3 - 6.64 = 19.4 back local = -3.535 world
 # 验证:
-#   hole 顶 (world) = 4.005, lip 底 (world) = 6.005, clearance 2mm ✓
-#   thread 顶 (world) = 3.505, lip 底 (world) = 6.005, clearance 2.5mm ✓
-#   flange 顶 (world) = 4.48, seam = 14.005, clearance 9.5mm ✓ (旧约束自动满足)
+#   cut 顶 (world) = -3.535 + 6.64 = 3.105, L-cut 底 (world) = 5.605, 桥 2.50mm ✓
+#   thread 顶 (world) = -3.535 + 5.94 = 2.405, PCB 正面 (world) = 4.375, 间隙 1.97mm ✓
+#   cut 底 (world) = -3.535 - 6.64 = -10.18, back inner 底 = -20.935, 间隙 10.76mm ✓
+
+# 按键 cut 用 D-shape (= 圆下半 + 矩形上半), 非纯圆柱:
+# 原因: 后壳印姿 -Z 朝下, +Y 壁是垂直墙. Φ13.28 圆孔顶部圆弧角 > 45° 需要支撑,
+#   未支撑会塌. D-shape 把上半弧换成 13.28mm 平桥 (FDM PETG 可桥 ~20mm),
+#   不需支撑, 印面更干净. M12 螺纹 (Φ11.88) 仍能装入 (D-shape 内切圆 = Φ13.28).
 for bx in btn_x_positions:
-    btn_cyl = cyl_along_y(btn_d, WALL + 1, bx, case_y / 2 - (WALL + 1), btn_z_back_local)
-    back = back.cut(btn_cyl)
+    btn_cut = d_shape_along_y(btn_d, WALL + 1, bx, case_y / 2 - (WALL + 1), btn_z_back_local)
+    back = back.cut(btn_cut)
 
 # 2 corner bosses with M2 insert pilot holes (仅 +Y 一侧上 2 个)
 # 下半 2 boss 取消：下方在洞洞板范围内放不下 boss（洞洞板 Y bottom = -41.965, 外壳 -Y 内壁 = -45.035）
-# 下半合盖靠 5mm lip 配合 + L 块定位
+# 下半合盖靠 8mm lip 配合 (LID_LIP) + 防翘 ridge/groove (-Y 底部)
 corner_boss_h_back = BACK_DEPTH - WALL - 0.5  # boss 顶距 seam 0.5mm
 for sx in (-1, 1):
     sy = +1  # 只在 +Y 一侧
@@ -603,8 +668,8 @@ cut_x_inner = lip_inner_x_face - LIP_PASS_CLEAR          # 49.63 (lip ±X 壁 cu
 cut_y_inner = lip_inner_y_top - LIP_PASS_CLEAR           # 43.665 (lip +Y 壁 cut 的内边)
 
 # Z range (back local): 覆盖整段 lip Z + 0.5mm 上下 buffer
-lip_z_end_back  = (case_z / 2 - FRONT_DEPTH - LID_LIP) + case_z / 2   # 28.34 (lip末端)
-lip_z_top_back  = (case_z / 2 - FRONT_DEPTH) + case_z / 2             # 36.84 (seam)
+lip_z_end_back  = (case_z / 2 - FRONT_DEPTH - LID_LIP) + case_z / 2   # = case_z - FRONT_DEPTH - LID_LIP (lip末端 back local)
+lip_z_top_back  = (case_z / 2 - FRONT_DEPTH) + case_z / 2             # = case_z - FRONT_DEPTH (seam back local)
 cut_z_bot_back  = lip_z_end_back - 0.5
 cut_z_top_back  = lip_z_top_back + 0.5
 cut_z_dim       = cut_z_top_back - cut_z_bot_back
@@ -772,23 +837,33 @@ back = back.cut(groove_cut)
 
 # ============================================================
 # 4 个外壳挂载通孔 (cable tie / M3 螺丝 通过后壳 -Z 外底面)
-# 位置: 4 个 case 角落, 避开 PCB 立柱 (X=±46.6) + corner boss (Y=+34.5)
+# 位置: 4 个 case 角落
+# 修复 (2026-05-13): codex 抓的 [P1]
+#   旧 cut 长度 = WALL + 1 = 3mm, 只穿底面壁 (back local Z=[-0.5, 2.5]).
+#   +Y mount hole 在 (±49.5, +43.535), 落在 +Y corner block X-Y 投影
+#   ([42.25, 51]×[31.25, 45.035]) 内. corner block Z 范围 [WALL, BACK_DEPTH-0.5]
+#   = [2, 36.54] back local 紧挨 cut top 之上 → 形成 cap, cable tie 穿不过.
+#   修复: cut 长度 = BACK_DEPTH + 1, 贯穿整个后壳高度. -Y mount hole 不在 corner
+#   block 投影内, 多余的 cut 长度只切 air, 无副作用. +Y mount hole 现在贯穿
+#   corner block, 给 cable tie 留出通道. 嵌件 pilot (cx=45.5, cy=34.5) 距
+#   +Y mount hole (49.5, 43.535) 距离 ~9.88mm, pilot R + hole R = 3.75 << 9.88,
+#   嵌件不受影响.
 # Note: 这 4 个 Φ4 通孔轻微破坏防尘 seal, 但案 -Z 底面朝下,
 #       灰尘不易直接进入. kart 实际使用 OK.
 # ============================================================
-mount_hole_offset_x = case_x / 2 - MOUNT_HOLE_OFFSET_FROM_EDGE   # = 48
-mount_hole_offset_y = case_y / 2 - MOUNT_HOLE_OFFSET_FROM_EDGE   # = 42
+mount_hole_offset_x = case_x / 2 - MOUNT_HOLE_OFFSET_FROM_EDGE   # = 49.5 (MOUNT_HOLE_OFFSET=3.5)
+mount_hole_offset_y = case_y / 2 - MOUNT_HOLE_OFFSET_FROM_EDGE   # = 43.535
 
 for sx in (-1, 1):
     for sy in (-1, 1):
         mhx = sx * mount_hole_offset_x
         mhy = sy * mount_hole_offset_y
-        # 通孔: 穿过 back floor (Z=[0, WALL] back local), 朝 -Z 方向 cut
+        # 通孔: 贯穿整个 back shell Z 高度, 让 +Y 角的 corner block 也被开 Φ4 通道
         mount_hole = (
             cq.Workplane("XY")
             .center(mhx, mhy)
             .circle(MOUNT_HOLE_DIA / 2)
-            .extrude(WALL + 1)
+            .extrude(BACK_DEPTH + 1)
             .translate((0, 0, -0.5))
         )
         back = back.cut(mount_hole)
