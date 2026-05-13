@@ -559,13 +559,19 @@ btn_z_back_local = (BACK_DEPTH - LID_LIP) - BTN_TO_LIP_END_GAP - btn_d / 2
 # 按键孔: 圆柱 Φ13.28 (= BTN_PANEL_HOLE_DIA + PRINT_TOLERANCE)
 # 必须是圆: M12 按键法兰盘 Φ13.83 是圆形, 孔的外接圆 ≤ 法兰盘内接圆 (= 13.83),
 #   否则孔的"非圆"部分会露出在法兰盘外, 4 个角各漏 ~2.5mm 缝隙.
-#   D-shape (圆下半 + 矩形上半) 虽然 FDM 顶部更平整, 但顶角距中心 9.39mm > 法兰
-#   半径 6.92mm, 装好后角露出, 防尘 seal 失效. (2026-05-13 用户观察发现)
+# Cut 长度: BTN_BACKSIDE_DEPTH + 1 = 14mm (覆盖整个螺纹+螺帽进 case 的深度).
+#   修复 (2026-05-13): 旧 cut 长度 WALL+1=3mm 只覆盖 +Y 外壁穿透+1mm 进 cavity,
+#   不够长. 按键螺纹 (Φ11.88 长 13mm) 在 Y < 44.035 时 X 边缘 (X=42.25-42.94)
+#   会撞 corner block 的实心塑料 (block X=[42.25, 51], Y=[31.25, 45.035]).
+#   按键根本插不进去. 改 14mm 后 cut 通道穿过 block 边缘 (block 内壁被掏出
+#   Φ13.28 切片 1.39mm X × 11mm Y), 螺纹有通路. 嵌件 pilot Z=[8.5, 13.5] 距
+#   cut Z [-9.475, 3.105] 间隙 5.4mm, 嵌件不受影响.
 # FDM 考量: Φ13.28 横向孔印姿垂直时顶部圆弧有 >45° 悬垂, 但 13mm 桥接 PETG/PLA
 #   常规 sag ≤0.3mm, 螺纹有 0.7mm 余量足够吸收. slicer 自动 bridge OK,
 #   或手动添加 sacrificial support 印完去掉.
+BTN_CUT_LENGTH = BTN_BACKSIDE_DEPTH + 1   # = 14mm
 for bx in btn_x_positions:
-    btn_cyl = cyl_along_y(btn_d, WALL + 1, bx, case_y / 2 - (WALL + 1), btn_z_back_local)
+    btn_cyl = cyl_along_y(btn_d, BTN_CUT_LENGTH, bx, case_y / 2 - BTN_CUT_LENGTH, btn_z_back_local)
     back = back.cut(btn_cyl)
 
 # 2 corner bosses with M2 insert pilot holes (仅 +Y 一侧上 2 个)
