@@ -556,50 +556,11 @@ btn_z_back_local = (BACK_DEPTH - LID_LIP) - BTN_TO_LIP_END_GAP - btn_d / 2
 #   thread 顶 (world) = -3.535 + 5.94 = 2.405, PCB 正面 (world) = 4.375, 间隙 1.97mm ✓
 #   cut 底 (world) = -3.535 - 6.64 = -10.18, back inner 底 = -20.935, 间隙 10.76mm ✓
 
-# 按键孔: 圆柱 Φ13.28 (= BTN_PANEL_HOLE_DIA + PRINT_TOLERANCE)
-# 必须是圆: M12 按键法兰盘 Φ13.83 是圆形, 孔的外接圆 ≤ 法兰盘内接圆 (= 13.83),
-#   否则孔的"非圆"部分会露出在法兰盘外, 4 个角各漏 ~2.5mm 缝隙.
-# Cut 长度: BTN_BACKSIDE_DEPTH + 1 = 14mm (覆盖整个螺纹+螺帽进 case 的深度).
-#   修复 (2026-05-13): 旧 cut 长度 WALL+1=3mm 只覆盖 +Y 外壁穿透+1mm 进 cavity,
-#   不够长. 按键螺纹 (Φ11.88 长 13mm) 在 Y < 44.035 时 X 边缘 (X=42.25-42.94)
-#   会撞 corner block 的实心塑料 (block X=[42.25, 51], Y=[31.25, 45.035]).
-#   按键根本插不进去. 改 14mm 后 cut 通道穿过 block 边缘 (block 内壁被掏出
-#   Φ13.28 切片 1.39mm X × 11mm Y), 螺纹有通路. 嵌件 pilot Z=[8.5, 13.5] 距
-#   cut Z [-9.475, 3.105] 间隙 5.4mm, 嵌件不受影响.
-# FDM 考量: Φ13.28 横向孔印姿垂直时顶部圆弧有 >45° 悬垂, 但 13mm 桥接 PETG/PLA
-#   常规 sag ≤0.3mm, 螺纹有 0.7mm 余量足够吸收. slicer 自动 bridge OK,
-#   或手动添加 sacrificial support 印完去掉.
-BTN_CUT_LENGTH = BTN_BACKSIDE_DEPTH + 1   # = 14mm
-
-# 六角螺帽内腔台阶孔 (hex nut clearance recess)
-# 用户实测 (2026-05-13): M12 按键螺帽六角对角直径 15.67mm
-#   → R_corner = 7.835mm, R_flat = 6.785mm, 对边 13.57mm
-# 螺帽对角伸到 X=±37+7.835 = ±44.835, 比 corner block X 边 ±42.25 多 2.585mm,
-#   塞不进 Φ13.28 按键孔 (R 6.64). 必须开 Φ16.2 内腔台阶孔, 让螺帽从内腔装入
-#   并旋转拧紧.
-# Recess 几何:
-#   Φ = 16.2 (= 对角 15.67 + 0.53mm tolerance, 任意旋转方向都装得下)
-#   Y 深 = 5mm (= 螺帽厚 ~2mm + 3mm 装配/紧固余量)
-#   Y 范围 = [case_y/2 - WALL - 5, case_y/2 - WALL] = [40.035, 45.035]
-# 副作用:
-#   切 corner block 在 X=[42.25, 45.1] × Y=[40.035, 45.035] × Z=[-11.64, 4.57]
-#   = ~232 mm³ 体积 (~5.5% block, OK)
-#   嵌件 pilot Z=[8.5, 13.5], recess Z 上沿 4.57, Z 间隙 3.93mm, 嵌件不受影响
-BTN_NUT_RECESS_OD = 16.2
-BTN_NUT_RECESS_DEPTH = 5.0
-for bx in btn_x_positions:
-    # 主按键孔 (Φ13.28, 14mm 长穿 +Y 壁 + 内腔通道)
-    btn_cyl = cyl_along_y(btn_d, BTN_CUT_LENGTH, bx, case_y / 2 - BTN_CUT_LENGTH, btn_z_back_local)
-    back = back.cut(btn_cyl)
-    # 螺帽台阶孔 (Φ16.5, 5mm 深从内壁起)
-    nut_recess = cyl_along_y(
-        BTN_NUT_RECESS_OD,
-        BTN_NUT_RECESS_DEPTH,
-        bx,
-        case_y / 2 - WALL - BTN_NUT_RECESS_DEPTH,
-        btn_z_back_local,
-    )
-    back = back.cut(nut_recess)
+# ============================================================
+# 顺序很重要: corner block 必须先 union, 然后才能 cut 按键孔.
+# 否则 button cut 先切 back shell, 然后 corner block union 把切掉的部分填回去,
+# 按键孔实际上不存在于 block 区域 (2026-05-13 用户发现).
+# ============================================================
 
 # 2 corner bosses with M2 insert pilot holes (仅 +Y 一侧上 2 个)
 # 下半 2 boss 取消：下方在洞洞板范围内放不下 boss（洞洞板 Y bottom = -41.965, 外壳 -Y 内壁 = -45.035）
@@ -639,6 +600,51 @@ for sx in (-1, 1):
         .cutBlind(-INSERT_DEPTH)
     )
     back = back.union(boss)
+
+# 按键孔: 圆柱 Φ13.28 (= BTN_PANEL_HOLE_DIA + PRINT_TOLERANCE)
+# 必须是圆: M12 按键法兰盘 Φ13.83 是圆形, 孔的外接圆 ≤ 法兰盘内接圆 (= 13.83),
+#   否则孔的"非圆"部分会露出在法兰盘外, 4 个角各漏 ~2.5mm 缝隙.
+# Cut 长度: BTN_BACKSIDE_DEPTH + 1 = 14mm (覆盖整个螺纹+螺帽进 case 的深度).
+#   修复 (2026-05-13): 旧 cut 长度 WALL+1=3mm 只覆盖 +Y 外壁穿透+1mm 进 cavity,
+#   不够长. 按键螺纹 (Φ11.88 长 13mm) 在 Y < 44.035 时 X 边缘 (X=42.25-42.94)
+#   会撞 corner block 的实心塑料 (block X=[42.25, 51], Y=[31.25, 45.035]).
+#   按键根本插不进去. 改 14mm 后 cut 通道穿过 block 边缘 (block 内壁被掏出
+#   Φ13.28 切片 1.39mm X × 11mm Y), 螺纹有通路. 嵌件 pilot Z=[8.5, 13.5] 距
+#   cut Z [-9.475, 3.105] 间隙 5.4mm, 嵌件不受影响.
+# FDM 考量: Φ13.28 横向孔印姿垂直时顶部圆弧有 >45° 悬垂, 但 13mm 桥接 PETG/PLA
+#   常规 sag ≤0.3mm, 螺纹有 0.7mm 余量足够吸收. slicer 自动 bridge OK,
+#   或手动添加 sacrificial support 印完去掉.
+BTN_CUT_LENGTH = BTN_BACKSIDE_DEPTH + 1   # = 14mm
+
+# 六角螺帽内腔台阶孔 (hex nut clearance recess)
+# 用户实测 (2026-05-13): M12 按键螺帽六角对角直径 15.67mm
+#   → R_corner = 7.835mm, R_flat = 6.785mm, 对边 13.57mm
+# 螺帽对角伸到 X=±37+7.835 = ±44.835, 比 corner block X 边 ±42.25 多 2.585mm,
+#   塞不进 Φ13.28 按键孔 (R 6.64). 必须开 Φ16.2 内腔台阶孔, 让螺帽从内腔装入
+#   并旋转拧紧.
+# Recess 几何:
+#   Φ = 16.2 (= 对角 15.67 + 0.53mm tolerance, 任意旋转方向都装得下)
+#   Y 深 = 5mm (= 螺帽厚 ~2mm + 3mm 装配/紧固余量)
+#   Y 范围 = [case_y/2 - WALL - 5, case_y/2 - WALL] = [40.035, 45.035]
+# 副作用:
+#   切 corner block 在 X=[42.25, 45.1] × Y=[40.035, 45.035] × Z=[-11.64, 4.57]
+#   = ~232 mm³ 体积 (~5.5% block, OK)
+#   嵌件 pilot Z=[8.5, 13.5], recess Z 上沿 4.57, Z 间隙 3.93mm, 嵌件不受影响
+BTN_NUT_RECESS_OD = 16.2
+BTN_NUT_RECESS_DEPTH = 5.0
+for bx in btn_x_positions:
+    # 主按键孔 (Φ13.28, 14mm 长穿 +Y 壁 + 内腔通道)
+    btn_cyl = cyl_along_y(btn_d, BTN_CUT_LENGTH, bx, case_y / 2 - BTN_CUT_LENGTH, btn_z_back_local)
+    back = back.cut(btn_cyl)
+    # 螺帽台阶孔 (Φ16.2, 5mm 深从内壁起)
+    nut_recess = cyl_along_y(
+        BTN_NUT_RECESS_OD,
+        BTN_NUT_RECESS_DEPTH,
+        bx,
+        case_y / 2 - WALL - BTN_NUT_RECESS_DEPTH,
+        btn_z_back_local,
+    )
+    back = back.cut(nut_recess)
 
 # ============================================================
 # Corner block lip-passage clearance — cut a notch at each +Y corner block's
