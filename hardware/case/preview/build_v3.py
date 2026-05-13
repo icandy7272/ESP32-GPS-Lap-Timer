@@ -264,39 +264,6 @@ def cyl_along_y(diameter, length, x, y_min, z):
     )
 
 
-def d_shape_along_y(diameter, length, x, y_min, z_center):
-    """FDM-friendly D-shape hole, axis along +Y. Cross-section in X-Z plane:
-        - bottom half (Z < z_center): half-circle of R = diameter/2
-        - top half (Z >= z_center): rectangle 2R × R (= 2R bridge on top)
-
-    Printed in floor-down orientation (Z stacks along print bed normal):
-        - Below center: hole narrows toward bottom (cylinder taper, FDM-OK)
-        - Above center: vertical walls (0° overhang) + horizontal bridge 2R wide
-    Inscribed circle = full diameter (M12 button thread fits identically to a
-    cylinder cut).
-
-    Use this instead of cyl_along_y when a horizontal hole goes through a wall
-    that is vertical in print orientation (e.g. back shell +Y wall).
-    """
-    r = diameter / 2
-    # Full cylinder (provides bottom half-circle naturally)
-    cyl = (
-        cq.Workplane("XY")
-        .circle(r)
-        .extrude(length)
-        .rotate((0, 0, 0), (1, 0, 0), -90)
-        .translate((x, y_min, z_center))
-    )
-    # Rectangular box above z_center extends the cut to a flat top
-    # X range [x-r, x+r], Y range [y_min, y_min+length], Z range [z_center, z_center+r]
-    upper = (
-        cq.Workplane("XY")
-        .box(2 * r, length, r, centered=(False, False, False))
-        .translate((x - r, y_min, z_center))
-    )
-    return cyl.union(upper)
-
-
 def cyl_along_x(diameter, length, x_min, y, z):
     """Cylinder along +X, base at (x_min, y, z), top at (x_min+length, y, z)."""
     return (
@@ -589,13 +556,17 @@ btn_z_back_local = (BACK_DEPTH - LID_LIP) - BTN_TO_LIP_END_GAP - btn_d / 2
 #   thread 顶 (world) = -3.535 + 5.94 = 2.405, PCB 正面 (world) = 4.375, 间隙 1.97mm ✓
 #   cut 底 (world) = -3.535 - 6.64 = -10.18, back inner 底 = -20.935, 间隙 10.76mm ✓
 
-# 按键 cut 用 D-shape (= 圆下半 + 矩形上半), 非纯圆柱:
-# 原因: 后壳印姿 -Z 朝下, +Y 壁是垂直墙. Φ13.28 圆孔顶部圆弧角 > 45° 需要支撑,
-#   未支撑会塌. D-shape 把上半弧换成 13.28mm 平桥 (FDM PETG 可桥 ~20mm),
-#   不需支撑, 印面更干净. M12 螺纹 (Φ11.88) 仍能装入 (D-shape 内切圆 = Φ13.28).
+# 按键孔: 圆柱 Φ13.28 (= BTN_PANEL_HOLE_DIA + PRINT_TOLERANCE)
+# 必须是圆: M12 按键法兰盘 Φ13.83 是圆形, 孔的外接圆 ≤ 法兰盘内接圆 (= 13.83),
+#   否则孔的"非圆"部分会露出在法兰盘外, 4 个角各漏 ~2.5mm 缝隙.
+#   D-shape (圆下半 + 矩形上半) 虽然 FDM 顶部更平整, 但顶角距中心 9.39mm > 法兰
+#   半径 6.92mm, 装好后角露出, 防尘 seal 失效. (2026-05-13 用户观察发现)
+# FDM 考量: Φ13.28 横向孔印姿垂直时顶部圆弧有 >45° 悬垂, 但 13mm 桥接 PETG/PLA
+#   常规 sag ≤0.3mm, 螺纹有 0.7mm 余量足够吸收. slicer 自动 bridge OK,
+#   或手动添加 sacrificial support 印完去掉.
 for bx in btn_x_positions:
-    btn_cut = d_shape_along_y(btn_d, WALL + 1, bx, case_y / 2 - (WALL + 1), btn_z_back_local)
-    back = back.cut(btn_cut)
+    btn_cyl = cyl_along_y(btn_d, WALL + 1, bx, case_y / 2 - (WALL + 1), btn_z_back_local)
+    back = back.cut(btn_cyl)
 
 # 2 corner bosses with M2 insert pilot holes (仅 +Y 一侧上 2 个)
 # 下半 2 boss 取消：下方在洞洞板范围内放不下 boss（洞洞板 Y bottom = -41.965, 外壳 -Y 内壁 = -45.035）
