@@ -686,7 +686,12 @@ cut_y_inner = lip_inner_y_top - LIP_PASS_CLEAR           # 43.665 (lip +Y 壁 cu
 # Z range (back local): 覆盖整段 lip Z + 0.5mm 上下 buffer
 lip_z_end_back  = (case_z / 2 - FRONT_DEPTH - LID_LIP) + case_z / 2   # = case_z - FRONT_DEPTH - LID_LIP (lip末端 back local)
 lip_z_top_back  = (case_z / 2 - FRONT_DEPTH) + case_z / 2             # = case_z - FRONT_DEPTH (seam back local)
-cut_z_bot_back  = lip_z_end_back - 0.5
+# 修复 (2026-05-14): 用户指出 L-cut B 底 (28.54 back local = 5.605 world) 跟
+#   nut recess 顶 (= btn_z + R = 19.4 + 8.1 = 27.5 back local = 4.565 world)
+#   之间留了 1.04mm block 实心条, 形成视觉台子. 把 cut_z_bot_back 下移到
+#   nut recess 顶, 让两个 cut 在 Z 方向无缝衔接, 消除台子.
+#   block 仍保留 Z<27.5 (= world<4.565) 范围实心 (= 完整下半 24mm), 嵌件支撑不受影响.
+cut_z_bot_back  = min(lip_z_end_back - 0.5, btn_z_back_local + BTN_NUT_RECESS_OD / 2)
 cut_z_top_back  = lip_z_top_back + 0.5
 cut_z_dim       = cut_z_top_back - cut_z_bot_back
 
