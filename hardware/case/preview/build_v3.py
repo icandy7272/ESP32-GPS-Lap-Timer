@@ -627,17 +627,16 @@ BTN_CUT_LENGTH = BTN_BACKSIDE_DEPTH + 1   # = 14mm
 #   并旋转拧紧.
 # Recess 几何:
 #   Φ = 16.2 (= 对角 15.67 + 0.53mm tolerance, 任意旋转方向都装得下)
-#   Y 深 = 12mm (= BTN_CUT_LENGTH - WALL, 完全贯穿 corner block + 1mm 余量)
-#     原 5mm (= 螺帽厚 + 紧固余量) 留了一个内部台阶, 用户 (2026-05-13) 指出
-#     没必要保留 — 没有结构理由限制深度, 干脆贯穿到 cut tunnel 末端,
-#     消除内部 Φ16.2→Φ13.28 阶梯, 也给装配更多余量.
-#   Y 范围 = [case_y/2 - WALL - 12, case_y/2 - WALL] = [33.035, 45.035]
+#   Y 深 = block_y_dim = 13.785mm (完全贯穿 corner block Y 范围, 从内壁 Y=45.035
+#     到 block Y 末端 31.25). 用户 (2026-05-14) 指出原 12mm 设定让 block 最深处
+#     1.785mm 实心仍挡视线 — 既然 block 没结构必要保留这段, 干脆扩到 block 全长.
+#   Y 范围 = [case_y/2 - WALL - 13.785, case_y/2 - WALL] = [31.25, 45.035]
 # 副作用:
-#   切 corner block 在 X=[42.25, 45.1] × Y=[33.035, 45.035] × Z=[-11.64, 4.57]
-#   = ~554 mm³ 体积 (~13% block, 合计其它 cuts ~35%, 剩 65% 实心 OK)
+#   切 corner block 在 X=[42.25, 45.1] × Y=[31.25, 45.035] × Z=[-11.64, 4.57]
+#   = ~636 mm³ 体积 (~15% block, 合计其它 cuts ~37%, 剩 63% 实心 OK)
 #   嵌件 pilot Z=[8.5, 13.5], recess Z 上沿 4.57, Z 间隙 3.93mm, 嵌件不受影响.
 BTN_NUT_RECESS_OD = 16.2
-BTN_NUT_RECESS_DEPTH = BTN_CUT_LENGTH - WALL   # = 12mm
+BTN_NUT_RECESS_DEPTH = inner_y / 2 - (corner_boss_y - CORNER_BOSS_DIA / 2)   # = 13.785mm = block Y dim
 for bx in btn_x_positions:
     # 主按键孔 (Φ13.28, 14mm 长穿 +Y 壁 + 内腔通道)
     btn_cyl = cyl_along_y(btn_d, BTN_CUT_LENGTH, bx, case_y / 2 - BTN_CUT_LENGTH, btn_z_back_local)
