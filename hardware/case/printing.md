@@ -90,7 +90,7 @@ python3 build_v3.py
 
 **理由**:
 - 后壳底面是最大平面, 朝下打印稳
-- 4 个 PCB 立柱 (Φ4.5 × 23mm) 朝上, 自下而上打印, 无悬空
+- 4 个 PCB 立柱 (Φ4.0 × 23.81mm) 朝上, 自下而上打印, 无悬空
 - 2 个 M2 嵌件孔 (corner boss) 朝上打印
 - 凹槽 (在 -Y inner wall) 是 horizontal slot, 不需要支撑
 - 凹槽开口朝 +Y (内腔方向), 朝上印, 槽底 (= -Y wall) 是 vertical, OK
@@ -128,7 +128,7 @@ lip 装入后, 凸条 (front -Y lip 外侧) 应该卡在凹槽 (back -Y inner_wa
 
 ### D. PCB 立柱试装
 
-4 个立柱 (Φ4.5 × 23mm) 放洞洞板进去, M2 自攻螺丝 (6mm) 拧入立柱顶 Φ1.8 pilot:
+4 个立柱 (Φ4.0 × 23.81mm) 放洞洞板进去, M2 自攻螺丝 (6mm) 拧入立柱顶 Φ1.8 pilot:
 
 | 现象 | 原因 | 解决 |
 |---|---|---|
@@ -142,9 +142,16 @@ lip 装入后, 凸条 (front -Y lip 外侧) 应该卡在凹槽 (back -Y inner_wa
 
 | 现象 | 解决 |
 |---|---|
-| ✅ 按键螺纹 滑入孔, 螺母从背面拧紧 | ✓ |
+| ✅ 按键螺纹 (Φ11.88) 滑入孔, 螺母 (六角对角 15.67mm) 从背面装入 Φ16.2 台阶孔 (13.785mm 深) 旋转拧紧 | ✓ |
 | ⚠️ 按键 jam, 孔太小 | `BTN_PANEL_HOLE_DIA = 13.0` |
 | ⚠️ 按键松动 | `BTN_PANEL_HOLE_DIA = 12.5` |
+| ⚠️ 螺帽塞不进内腔台阶孔 | 检查实际螺帽对角直径, 改 `BTN_NUT_RECESS_OD = 实测值 + 0.5` |
+| ⚠️ 顶部 Φ13.28 圆弧 sag 太严重 (>0.5mm) | slicer 加 sacrificial bridge support, 或 PETG 温度降到 235°C 减少下垂 |
+
+**内腔台阶孔说明** (2026-05-13 加): M12 按键背面有六角螺帽 (实测 13.88mm 对边, 15.67mm 对角),
+不能塞进 Φ13.28 按键孔. 后壳 +Y 内壁背后开了 Φ16.2 圆柱台阶孔, Y 深 13.785mm 贯穿
+corner block 全长. 装配顺序: (1) 按键从外面塞入 Φ13.28 圆孔, 法兰盘贴 +Y 外壁;
+(2) 从内腔伸进螺帽到台阶孔, 拧上螺纹拧紧.
 
 ## 5. 装配顺序
 
@@ -159,12 +166,12 @@ lip 装入后, 凸条 (front -Y lip 外侧) 应该卡在凹槽 (back -Y inner_wa
 8. 上盖: 2 颗 M2 内六角螺丝 (从前壳 +Z 沉头 → 穿过 lip → 嵌件)
 9. 校验: TFT 排针 卡进洞洞板母座 (轻按压前壳让 TFT 跟洞洞板 connect)
 10. kart 安装: 4 个 Φ4mm 通孔 (case 后壳底面 4 角) 穿 cable tie 或 M3 螺丝
-              位置: (±49, ±43) 相对 case 中心, 跟 PCB 立柱有 0.82mm 间隙余量
+              位置: (±49, ±43.035) 相对 case 中心, 跟 PCB 立柱 (Φ4.0) 有 0.47mm 间隙余量
 ```
 
 ## 5b. 挂载到 kart
 
-后壳底面 (= -Z 外表面) 有 **4 个 Φ4mm 通孔** at 4 corners, 位置 `(±49, ±43)`:
+后壳底面 (= -Z 外表面) 有 **4 个 Φ4mm 通孔** at 4 corners, 位置 `(±49, ±43.035)`:
 
 - **Cable tie 安装**: 通孔过 cable tie (5mm 内宽适配), 绑到方向盘后部 / 转向柱
 - **螺丝固定**: M3 螺丝 (Φ3 螺纹) 通过 Φ4 孔 (留 0.5mm 间隙), 拧入 kart 支架
@@ -205,7 +212,7 @@ lip 装入后, 凸条 (front -Y lip 外侧) 应该卡在凹槽 (back -Y inner_wa
 
 | 现象 | 优化项 | 怎么改 |
 |---|---|---|
-| 立柱倾斜 > 1° | 加粗 PCB post | 改 `PCB_POST_DIA = 5.5` (需 mount hole Z 范围裁剪) |
+| 立柱倾斜 > 1° | 加粗 PCB post | 改 `PCB_POST_DIA = 5.0` (需重新核对 -Y mount hole 间隙) |
 | 立柱根部断裂 | 加底部 R fillet | cadquery edge select 选 post-floor 边, fillet R0.5 |
 | Case 外观 sharp corner 不舒服 | 外角 R2 fillet | 在 front/back 外壳上加 R2 outer corner fillet |
 | TFT 玻璃顶撞前壳内表面 | 增加 AIR_GAP_TOP | 改 `AIR_GAP_TOP = 1.5` |
@@ -218,7 +225,7 @@ lip 装入后, 凸条 (front -Y lip 外侧) 应该卡在凹槽 (back -Y inner_wa
 
 | 特征 | 旧 | 新 | 收益 |
 |---|---|---|---|
-| 4 PCB 立柱 (Φ4.5 × 23mm, aspect 5:1) | 独立柱体 + 2.15mm 侧 gap | 矩形 6.65×4.5 延伸到 ±X 内壁 | warp 风险 → ~0, pilot 周壁 X 向 2.25/4.4mm |
+| 4 PCB 立柱 (Φ4.0 × 23.81mm, aspect 6:1) | 独立柱体 + 2.15mm 侧 gap | 矩形 6.4×4.0 延伸到 ±X 内壁 | warp 风险 → ~0, pilot 周壁 X 向 2.2/4.2mm, M2 自攻孔周壁 1.1mm |
 | 2 corner M2 嵌件柱 (6.5×6.5 × 34mm, aspect 5.3:1) | 独立方柱 + 0.5mm/7.3mm gap | 角块 7×13.785 同时 touch +X 和 +Y 壁 | warp 风险 → ~0, 嵌件压入有更多塑料缓冲 |
 | **GPS 天线 RF 窗口** (28×16.335mm 跨 seam) | back+front shell +Y 外壁 2mm, RF 衰减 ~2-3dB | 内凹 1mm, RF 衰减 ~1-2dB | **GPS 灵敏度 +1-2dB**, 跨 back+front shell +Y 外壁 (= 按键所在那一面, kart 安装时 +Y 朝天). 28×16.335mm 覆盖 GPS X 全段 + 大部分 antenna patch Z 范围 |
 
