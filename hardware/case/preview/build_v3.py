@@ -118,20 +118,23 @@ TFT_BOSS_FLOOR = 1.0       # M3 self-tap 底孔顶部留 1mm 实心防穿透
 
 # PCB 立柱 (M2 self-tap 固定洞洞板)
 PCB_MOUNT_HOLE_EDGE_DIST = 3.4   # 洞洞板 4 角 现有孔中心到板边距离 (实测)
-PCB_POST_DIA = 4.5         # 立柱外径. 当前 aspect 5:1 (Φ4.5 × 23mm), FDM 可能轻微 warp
-                           # 如果 prototype 立柱歪 > 1°, 改 5.5mm 增加刚度
+PCB_POST_DIA = 4.0         # 立柱外径. 修复 (2026-05-13): 4.5 → 4.0
+                           # 配合 MOUNT_HOLE_OFFSET 3.5→4, -Y mount hole 移到 cavity 边缘,
+                           # 与 -Y PCB post 间隙从 0.22mm 提升到 0.47mm (FDM 安全).
+                           # M2 pilot Φ1.8 周墙: (4.0 - 1.8)/2 = 1.1mm = 3 perimeter, 仍稳.
 PCB_POST_PILOT_DIA = 1.8   # M2 self-tap 底孔 (= 0.83 × M2 螺纹外径 2.0)
 PCB_POST_FLOOR = 1.0       # M2 self-tap 底孔顶部留 1mm 实心
 
 # 外壳挂载 (cable tie / M3 螺丝 通孔, 后壳 -Z 外底面)
 MOUNT_HOLE_DIA = 4.0       # Φ4mm 通孔: 容纳 5mm 内宽 cable tie 或 M3 螺丝
-MOUNT_HOLE_OFFSET_FROM_EDGE = 3.5  # 通孔中心距 case 外缘 3.5mm
-                                   # 修复 (2026-05-13): 4 → 3.5
-                                   #   旧 4mm 让 -Y mount hole Y=-43.035, hole +Y 边 -41.035
-                                   #   距 -Y PCB post -Y 边 -40.815 仅 0.22mm (codex 抓的, 旧注释
-                                   #   说 0.82mm 是算错). 改 3.5 后 hole +Y 边 -41.535,
-                                   #   间隙 0.72mm (= 2 perimeter @ 0.4mm 喷嘴, FDM 临界但可接受).
-                                   #   外侧壁仍有 3.5 - 2 = 1.5mm 厚 (3-4 perimeter).
+MOUNT_HOLE_OFFSET_FROM_EDGE = 4.0  # 通孔中心距 case 外缘 4mm
+                                   # 修复 (2026-05-13): 3.5 → 4
+                                   #   旧 3.5 让 mount hole 角越过内壁 0.5mm (= 部分在外壁
+                                   #   材料里), 从外看洞内有 L 形墙边. 改 4 让洞 X/Y 都正好
+                                   #   切到内壁 (X 边 ±51 = inner_x/2, Y 边 ±45.035 = inner_y/2),
+                                   #   洞完全在 cavity 投影里, 视觉干净.
+                                   #   配合 PCB_POST_DIA 4.5→4.0, -Y mount hole vs PCB post
+                                   #   间隙 0.47mm (FDM OK, 上次 3.5 是 0.72mm 但有 wall 遮挡).
 
 # Stack 高度: 分项推导 (= 玻璃顶到电池底 ≈ 40.17mm)
 # 早期端到端粗测 = 39mm, 跟分项推导差 1.17mm = 粗测误差, 用分项推导更准
